@@ -283,15 +283,42 @@
                     <div class="card" style="padding: 18px; background: var(--bg-surface-elevated);">
                         <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 12px;">Training Configuration & Hyperparameters</h3>
 
-                        <div style="display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap;">
-                            <div class="param-group">
-                                <label>Train / Test Validation Split</label>
-                                <select id="train-split-select" class="control-select">
-                                    <option value="0.8">80% Train / 20% Test (Recommended)</option>
-                                    <option value="0.7">70% Train / 30% Test</option>
-                                    <option value="0.85">85% Train / 15% Test</option>
-                                    <option value="0.9">90% Train / 10% Test</option>
-                                </select>
+                        <!-- Train / Test Split Configuration -->
+                        <div style="background: var(--bg-surface); padding: 14px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+                                <label style="font-weight: 700; font-size: 13.5px; color: var(--text-primary);">
+                                    Train / Test Split Configuration
+                                </label>
+                                <div style="display: flex; gap: 8px; align-items: center;">
+                                    <span style="font-size: 13px; font-weight: 700; color: var(--accent-cyan);" id="split-display-train">80% Train</span>
+                                    <span style="color: var(--text-muted); font-size: 12px;">/</span>
+                                    <span style="font-size: 13px; font-weight: 700; color: var(--accent-purple);" id="split-display-test">20% Test</span>
+                                </div>
+                            </div>
+
+                            <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 10px;">
+                                <input type="range" id="train-ratio-slider" min="50" max="95" value="80" step="1" style="flex: 1; accent-color: var(--accent-cyan); cursor: pointer;">
+                            </div>
+
+                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
+                                <div class="param-group" style="flex: 1; min-width: 140px;">
+                                    <label style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
+                                    <input type="number" id="train-pct-input" class="control-input" value="80" min="50" max="95" step="1">
+                                </div>
+                                <div class="param-group" style="flex: 1; min-width: 140px;">
+                                    <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
+                                    <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
+                                </div>
+                                <div style="display: flex; gap: 6px; align-items: flex-end; padding-top: 18px; flex-wrap: wrap;">
+                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="80">80/20 (Default)</button>
+                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="70">70/30</button>
+                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="85">85/15</button>
+                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="90">90/10</button>
+                                </div>
+                            </div>
+
+                            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-top: 8px; background: rgba(6, 182, 212, 0.05); padding: 8px 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-cyan);">
+                                💡 <strong>Automatic Two-Phase Clinical Retraining:</strong> The algorithm first fits on your selected training split (<span id="info-train-pct">80%</span>) and reports out-of-sample accuracy on the held-out test split (<span id="info-test-pct">20%</span>). Once validation metrics and calibration curves are reported, the model is automatically retrained on <strong>100% of the entire cohort</strong> so that deployed inference maximizes all available patient evidence.
                             </div>
                         </div>
 
@@ -406,7 +433,8 @@
 
                     <!-- Results Dashboard -->
                     <div id="results-dashboard" class="results-dashboard" style="display: none;">
-                        <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation Metrics</h3>
+                        <div id="retrain-status-banner"></div>
+                        <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation &amp; Accuracy Metrics</h3>
                         <div id="metrics-summary-row" class="metrics-summary-row"></div>
                         <div id="eval-detail-container"></div>
                     </div>

@@ -60,7 +60,14 @@ Context-aware imputation strategies dynamically selectable based on variable sca
 - **Gaussian Naive Bayes:**
   - Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
 
-### 5. Dual Inference Modes
+### 5. Configurable Train/Test Split & Two-Phase 100% Retraining Protocol
+- **Configurable Validation Partition (Default: 80% Train / 20% Test):**
+  - Clinicians and researchers can dynamically configure the training percentage (50% to 95%) via an interactive slider, numeric percentage inputs, or quick presets (`80/20`, `70/30`, `85/15`, `90/10`).
+- **Two-Phase Clinical Retraining Pipeline:**
+  - **Phase 1 (Validation Benchmark):** The algorithm trains on the chosen training partition (default 80%) and benchmarks true out-of-sample performance on the held-out test partition (default 20%), reporting Test Accuracy, Macro F1, Precision, Recall, ROC-AUC, and Confusion Matrix.
+  - **Phase 2 (100% Production Retraining):** Once validation accuracy has been recorded and displayed, the system automatically retrains the final model on **100% of all cohort data** ($N_{total}$) so that deployed single-patient and batch inference incorporates every piece of patient evidence available.
+
+### 6. Dual Inference Modes
 - **Single Patient Predictor:**
   - Dynamically generated clinical form tailored to the features (sliders, rank selectors, categorical dropdowns).
   - Outputs predicted class/value, confidence score, and probability distribution bar meters.
