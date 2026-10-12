@@ -45,6 +45,10 @@ Context-aware imputation strategies dynamically selectable based on variable sca
 - **Nominal:** *Mode / Most Frequent Category*, *New Category ("Missing" / "Unknown")*, or *Drop Rows*.
 
 ### 4. Deep Learning & Machine Learning Algorithms
+- **Ensemble Super Learner (Meta-Ensemble):**
+  - Clinical consensus ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge Regression, and k-NN.
+  - Supports **Soft Voting** (calibrated class probability blending), **Performance-Weighted Blending** (inversely weighted by validation error), and **Hard Majority Voting**.
+  - Provides clinician transparency with real-time constituent model weights and prediction breakdowns.
 - **Deep Neural Network (MLP / TensorFlow.js):**
   - Configurable hidden layers (e.g., 64, 32 units), Dropout regularization, ReLU / Tanh / Sigmoid activations, Adam optimizer, with live epoch-by-epoch loss tracking.
 - **Random Forest:**

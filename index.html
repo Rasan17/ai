@@ -267,6 +267,16 @@
                                 Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
                             </div>
                         </div>
+
+                        <div class="model-card" data-model-id="ensemble">
+                            <div class="model-card-header">
+                                <span class="model-card-title">Ensemble Super Learner</span>
+                                <span class="pill pill-target" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(6, 182, 212, 0.2)); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.4);">Meta-Ensemble</span>
+                            </div>
+                            <div class="model-card-desc">
+                                Clinical meta-ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge, and k-NN via soft probability blending or performance-weighted voting.
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Hyperparameters Box -->
@@ -346,6 +356,38 @@
                             <div class="param-group">
                                 <label>k (Number of Neighbors)</label>
                                 <input type="number" id="knn-k-input" class="control-input" value="5" min="1" max="25">
+                            </div>
+                        </div>
+
+                        <!-- Ensemble Hyperparams -->
+                        <div id="ensemble-params-box" class="hyperparam-box" style="display: none;">
+                            <div class="param-group" style="grid-column: 1 / -1;">
+                                <label>Ensemble Combination Strategy</label>
+                                <select id="ensemble-voting-select" class="control-select">
+                                    <option value="soft">Soft Voting (Calibrated Probability Blending - Recommended)</option>
+                                    <option value="weighted">Performance-Weighted (Auto-weights by validation score)</option>
+                                    <option value="hard">Hard Majority Voting (Discrete class vote count)</option>
+                                </select>
+                            </div>
+                            <div class="param-group" style="grid-column: 1 / -1;">
+                                <label>Constituent Base Models to Include</label>
+                                <div style="display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 13px;">
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" id="ens-include-nn" checked> Deep Neural Network (MLP)
+                                    </label>
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" id="ens-include-rf" checked> Random Forest
+                                    </label>
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" id="ens-include-glm" checked> Logistic / Ridge Regression
+                                    </label>
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" id="ens-include-knn"> k-Nearest Neighbors
+                                    </label>
+                                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+                                        <input type="checkbox" id="ens-include-nb"> Gaussian Naive Bayes
+                                    </label>
+                                </div>
                             </div>
                         </div>
 
@@ -478,7 +520,7 @@
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
     <script src="data-engine.js"></script>
-    <script src="models.js"></script>
-    <script src="app.js"></script>
+    <script src="models.js?v=2"></script>
+    <script src="app.js?v=2"></script>
 </body>
 </html>

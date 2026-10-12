@@ -699,10 +699,231 @@
     }
 
     // ==========================================
-    // 6. MODEL MANAGER & EVALUATION METRICS
+    // 6. ENSEMBLE SUPER LEARNER (VOTING & BLENDING)
+    // ==========================================
+    class EnsembleModel {
+        constructor(isClassification, numClasses = 2, config = {}) {
+            this.isClassification = isClassification;
+            this.numClasses = numClasses;
+            this.voting = config.voting || 'soft'; // 'soft', 'weighted', 'hard'
+            this.selectedBaseIds = config.baseModels && config.baseModels.length > 0 
+                ? config.baseModels 
+                : ['nn', 'rf', 'glm'];
+            this.models = [];
+            this.weights = [];
+            this.baseMetrics = [];
+            this.userHyperparams = config;
+        }
+
+        async fit(trainX, trainY, testX = null, testY = null, onProgress = null) {
+            this.models = [];
+            this.weights = [];
+            this.baseMetrics = [];
+
+            const totalBases = this.selectedBaseIds.length;
+
+            for (let idx = 0; idx < totalBases; idx++) {
+                const mId = this.selectedBaseIds[idx];
+                if (!this.isClassification && mId === 'nb') {
+                    continue; // Naive Bayes is classification only
+                }
+
+                if (onProgress) {
+                    onProgress(idx + 1, totalBases, {
+                        stage: `Training Ensemble Base Model ${idx + 1}/${totalBases}: ${mId.toUpperCase()}...`,
+                        baseId: mId
+                    });
+                }
+
+                let subModel = null;
+                if (mId === 'nn') {
+                    const nnParams = {
+                        epochs: this.userHyperparams.nnEpochs || 35,
+                        learningRate: this.userHyperparams.nnLr || 0.005,
+                        hiddenLayers: [48, 24],
+                        dropoutRate: 0.1,
+                        activation: 'relu'
+                    };
+                    subModel = new DeepNeuralNetwork(this.isClassification, this.numClasses, nnParams);
+                    await subModel.fit(trainX, trainY, testX, testY, (ep, tot, logs) => {
+                        if (onProgress) {
+                            onProgress(idx + 1, totalBases, {
+                                stage: `Base ${idx + 1}/${totalBases} (NN Epoch ${ep}/${tot} - Loss: ${logs.loss.toFixed(4)})`,
+                                loss: logs.loss,
+                                val_loss: logs.val_loss
+                            });
+                        }
+                    });
+                } else if (mId === 'rf') {
+                    const trees = this.userHyperparams.rfTrees || 25;
+                    const depth = this.userHyperparams.rfDepth || 6;
+                    subModel = new RandomForest(this.isClassification, trees, depth);
+                    subModel.fit(trainX, trainY);
+                } else if (mId === 'glm') {
+                    subModel = new GeneralizedLinearModel(this.isClassification, this.numClasses, 0.05, 120);
+                    subModel.fit(trainX, trainY);
+                } else if (mId === 'knn') {
+                    subModel = new KNNModel(this.isClassification, this.userHyperparams.knnK || 5);
+                    subModel.fit(trainX, trainY);
+                } else if (mId === 'nb' && this.isClassification) {
+                    subModel = new GaussianNaiveBayes();
+                    subModel.fit(trainX, trainY);
+                }
+
+                if (subModel) {
+                    this.models.push({ id: mId, model: subModel });
+                }
+            }
+
+            // Determine weights
+            const valX = (testX && testX.length > 0) ? testX : trainX.slice(0, Math.min(trainX.length, 50));
+            const valY = (testY && testY.length > 0) ? testY : trainY.slice(0, Math.min(trainY.length, 50));
+
+            let rawWeights = [];
+
+            if (this.voting === 'weighted' && valX.length > 0) {
+                for (let item of this.models) {
+                    const preds = item.model.predict(valX);
+                    if (this.isClassification) {
+                        let correct = 0;
+                        for (let i = 0; i < valY.length; i++) {
+                            if (preds[i] === valY[i]) correct++;
+                        }
+                        const acc = correct / valY.length;
+                        const w = Math.max(0.1, acc);
+                        rawWeights.push(w);
+                        this.baseMetrics.push({ id: item.id, accuracy: acc, weight: w });
+                    } else {
+                        let sumSq = 0;
+                        for (let i = 0; i < valY.length; i++) {
+                            sumSq += Math.pow(valY[i] - preds[i], 2);
+                        }
+                        const mse = sumSq / valY.length;
+                        const w = 1.0 / (mse + 0.001);
+                        rawWeights.push(w);
+                        this.baseMetrics.push({ id: item.id, mse, weight: w });
+                    }
+                }
+            } else {
+                rawWeights = new Array(this.models.length).fill(1.0);
+                this.models.forEach(item => {
+                    this.baseMetrics.push({ id: item.id, weight: 1.0 });
+                });
+            }
+
+            const totalW = rawWeights.reduce((a, b) => a + b, 0) || 1.0;
+            this.weights = rawWeights.map(w => w / totalW);
+            this.baseMetrics.forEach((m, i) => {
+                m.normalizedWeight = Number(this.weights[i].toFixed(3));
+            });
+        }
+
+        predictSingle(x) {
+            if (!this.models || this.models.length === 0) {
+                throw new Error("Ensemble model is not trained yet.");
+            }
+
+            if (this.isClassification) {
+                if (this.voting === 'hard') {
+                    const votes = new Array(this.numClasses).fill(0);
+                    this.models.forEach((item, i) => {
+                        const res = item.model.predictSingle(x);
+                        const predClass = res.pred;
+                        if (predClass >= 0 && predClass < this.numClasses) {
+                            votes[predClass] += this.weights[i];
+                        }
+                    });
+
+                    let bestClass = 0;
+                    let maxVotes = -1;
+                    votes.forEach((v, c) => {
+                        if (v > maxVotes) {
+                            maxVotes = v;
+                            bestClass = c;
+                        }
+                    });
+
+                    const totalVotes = votes.reduce((a, b) => a + b, 0) || 1;
+                    const probMap = {};
+                    votes.forEach((v, c) => {
+                        probMap[c] = Number((v / totalVotes).toFixed(4));
+                    });
+
+                    return {
+                        pred: bestClass,
+                        probabilities: probMap,
+                        confidence: Number((maxVotes / totalVotes).toFixed(4)),
+                        ensembleDetails: this.baseMetrics
+                    };
+                } else {
+                    // Soft voting (weighted probability average)
+                    const combinedProbs = new Array(this.numClasses).fill(0);
+
+                    this.models.forEach((item, i) => {
+                        const res = item.model.predictSingle(x);
+                        const w = this.weights[i];
+
+                        if (res.probabilities) {
+                            for (let c = 0; c < this.numClasses; c++) {
+                                const p = res.probabilities[c] !== undefined ? res.probabilities[c] : (res.pred === c ? 1 : 0);
+                                combinedProbs[c] += w * p;
+                            }
+                        } else {
+                            combinedProbs[res.pred] += w;
+                        }
+                    });
+
+                    let bestClass = 0;
+                    let maxP = -1;
+                    const probMap = {};
+
+                    combinedProbs.forEach((p, c) => {
+                        const clampedP = Number(Math.max(0, Math.min(1, p)).toFixed(4));
+                        probMap[c] = clampedP;
+                        if (clampedP > maxP) {
+                            maxP = clampedP;
+                            bestClass = c;
+                        }
+                    });
+
+                    return {
+                        pred: bestClass,
+                        probabilities: probMap,
+                        confidence: Number(maxP.toFixed(4)),
+                        ensembleDetails: this.baseMetrics
+                    };
+                }
+            } else {
+                // Regression: weighted average of continuous outputs
+                let weightedSum = 0;
+                const subPredictions = [];
+
+                this.models.forEach((item, i) => {
+                    const res = item.model.predictSingle(x);
+                    weightedSum += this.weights[i] * res.pred;
+                    subPredictions.push({ id: item.id, pred: res.pred, weight: this.weights[i] });
+                });
+
+                return {
+                    pred: Number(weightedSum.toFixed(4)),
+                    confidence: 1.0,
+                    subPredictions,
+                    ensembleDetails: this.baseMetrics
+                };
+            }
+        }
+
+        predict(X) {
+            return X.map(x => this.predictSingle(x).pred);
+        }
+    }
+
+    // ==========================================
+    // 7. MODEL MANAGER & EVALUATION METRICS
     // ==========================================
     const ModelEngine = {
         SUPPORTED_MODELS: [
+            { id: 'ensemble', name: 'Ensemble Meta-Learner (Voting & Blending)', type: 'both', desc: 'Clinical ensemble combining Deep Neural Networks, Random Forests, Logistic Regression, and k-NN with soft probability blending.' },
             { id: 'nn', name: 'Deep Neural Network (MLP / TF.js)', type: 'both', desc: 'Multi-layer perceptron with backpropagation, dense hidden layers, dropout & Adam optimizer.' },
             { id: 'rf', name: 'Random Forest (Ensemble Trees)', type: 'both', desc: 'Ensemble of bootstrap decision trees with out-of-bag diversity and feature importance ranking.' },
             { id: 'glm', name: 'Logistic / Ridge Regression', type: 'both', desc: 'L2-regularized linear/softmax model providing interpretable odds ratios and coefficients.' },
@@ -714,7 +935,9 @@
          * Create an instance of a model based on user selection
          */
         createModel(modelId, isClassification, numClasses = 2, userHyperparams = {}) {
-            if (modelId === 'nn') {
+            if (modelId === 'ensemble') {
+                return new EnsembleModel(isClassification, numClasses, userHyperparams);
+            } else if (modelId === 'nn') {
                 return new DeepNeuralNetwork(isClassification, numClasses, userHyperparams);
             } else if (modelId === 'rf') {
                 const trees = userHyperparams.numTrees || 30;

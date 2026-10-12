@@ -538,11 +538,13 @@
         const isRF = AppState.selectedModelId === 'rf';
         const isGLM = AppState.selectedModelId === 'glm';
         const isKNN = AppState.selectedModelId === 'knn';
+        const isEnsemble = AppState.selectedModelId === 'ensemble';
 
         document.getElementById('nn-params-box').style.display = isNN ? 'grid' : 'none';
         document.getElementById('rf-params-box').style.display = isRF ? 'grid' : 'none';
         document.getElementById('glm-params-box').style.display = isGLM ? 'grid' : 'none';
         document.getElementById('knn-params-box').style.display = isKNN ? 'grid' : 'none';
+        document.getElementById('ensemble-params-box').style.display = isEnsemble ? 'grid' : 'none';
     }
 
     async function startModelTraining() {
@@ -583,6 +585,21 @@
                 hyperparams.epochs = parseInt(document.getElementById('glm-epochs-input').value, 10) || 150;
             } else if (AppState.selectedModelId === 'knn') {
                 hyperparams.k = parseInt(document.getElementById('knn-k-input').value, 10) || 5;
+            } else if (AppState.selectedModelId === 'ensemble') {
+                const selectedBases = [];
+                if (document.getElementById('ens-include-nn').checked) selectedBases.push('nn');
+                if (document.getElementById('ens-include-rf').checked) selectedBases.push('rf');
+                if (document.getElementById('ens-include-glm').checked) selectedBases.push('glm');
+                if (document.getElementById('ens-include-knn').checked) selectedBases.push('knn');
+                if (document.getElementById('ens-include-nb').checked && prep.isClassification) selectedBases.push('nb');
+                if (selectedBases.length === 0) selectedBases.push('rf', 'glm');
+
+                hyperparams.voting = document.getElementById('ensemble-voting-select').value || 'soft';
+                hyperparams.baseModels = selectedBases;
+                hyperparams.nnEpochs = 35;
+                hyperparams.rfTrees = 25;
+                hyperparams.rfDepth = 6;
+                hyperparams.knnK = 5;
             }
 
             const model = ModelEngine.createModel(
@@ -592,7 +609,7 @@
                 hyperparams
             );
 
-            // Chart setup for NN training progress
+            // Chart setup for NN / Ensemble training progress
             setupTrainingLossChart();
 
             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 Training ${AppState.selectedModelId.toUpperCase()} model...</span>`;
@@ -602,6 +619,13 @@
                 await model.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
                     DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Epoch ${epoch}/${total} &mdash; Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Val Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                     updateLossChart(epoch, logs.loss, logs.val_loss);
+                });
+            } else if (AppState.selectedModelId === 'ensemble') {
+                await model.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Training Ensemble Base Model ${curr}/${total}...`}</span>`;
+                    if (info.loss !== undefined) {
+                        updateLossChart(curr, info.loss, info.val_loss);
+                    }
                 });
             } else {
                 model.fit(split.trainX, split.trainY);
@@ -854,6 +878,16 @@
 
         DOM.singleResultBanner.style.display = 'flex';
 
+        let ensembleDetailsHtml = '';
+        if (result.ensembleDetails && result.ensembleDetails.length > 0) {
+            const weightsStr = result.ensembleDetails.map(d => `${d.id.toUpperCase()}: ${Math.round((d.normalizedWeight !== undefined ? d.normalizedWeight : d.weight) * 100)}%`).join(' &bull; ');
+            ensembleDetailsHtml = `
+                <div style="font-size: 11px; color: var(--accent-cyan); margin-top: 5px; font-weight: 600;">
+                    Ensemble Blend: ${weightsStr}
+                </div>
+            `;
+        }
+
         if (prep.isClassification) {
             const predictedLabel = prep.targetIdxToClass[result.pred] || result.pred;
             const confidencePercent = result.confidence ? (result.confidence * 100).toFixed(1) : '90.0';
@@ -879,6 +913,7 @@
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
                         Model: <strong>${AppState.selectedModelId.toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>
                     </div>
+                    ${ensembleDetailsHtml}
                 </div>
                 <div class="banner-confidence">
                     <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Confidence</span>
@@ -899,6 +934,7 @@
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
                         Model: <strong>${AppState.selectedModelId.toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>
                     </div>
+                    ${ensembleDetailsHtml}
                 </div>
             `;
         }
