@@ -2,7 +2,9 @@
 
 An interactive, in-browser client-side Machine Learning and Deep Neural Network predictive modeling suite for **Clinical Medicine and Healthcare Research**, running 100% in the web browser with zero server dependencies and complete patient data privacy.
 
-Conceived, designed and developed by **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)**, Neurosurgery Research Listserv, United Kingdom.
+Conceived, designed and directed by **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)** ([g_narenthiran@hotmail.com](mailto:g_narenthiran@hotmail.com)), Neurosurgery Research Listserv, United Kingdom (Implemented with Antigravity AI pair programming).
+
+**&copy; 2026 Dr G Narenthiran. All rights reserved.**
 
 > ⚠️ **Clinical & Research Disclaimer:** The Universal Medical ML/NeuralNet Predictor is designed as an interactive scientific computing and educational tool for clinical medical research across healthcare disciplines. It must not be utilized as the sole determinant for treatment or clinical interventions without independent medical evaluation and validation.
 
@@ -88,7 +90,10 @@ Because the application is built entirely with client-side web technologies, no 
 
 ---
 
-## 👨‍⚕️ Author & Attribution
+## 👨‍⚕️ Author & Copyright Attribution
 
-- **Conception, Design & Development:** **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)**
-- **Affiliation:** Neurosurgery Research Listserv, United Kingdom.
+- **Conception, Design & Direction:** **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)**
+- **Email:** [g_narenthiran@hotmail.com](mailto:g_narenthiran@hotmail.com)
+- **Affiliation:** Neurosurgery Research Listserv, United Kingdom
+- **Implementation:** Implemented with Antigravity AI pair programming
+- **Copyright:** &copy; 2026 Dr G Narenthiran. All rights reserved.
