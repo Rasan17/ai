@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
+    <meta name="description" content="Universal in-browser client-side Machine Learning and Deep Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
+    <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="app-wrapper">
+
+        <!-- ===================================================================
+             APP HEADER & ATTRIBUTION
+             =================================================================== -->
+        <header class="app-header">
+            <div class="brand-section">
+                <div class="brand-icon">🩺</div>
+                <div class="brand-details">
+                    <h1>Universal Medical ML/NeuralNet Predictor</h1>
+                    <div class="subtitle">Universal Clinical Machine Learning & Deep Neural Network Inference Suite</div>
+                    <div class="attribution">
+                        Conceived, designed and developed by <strong>Dr G Narenthiran</strong> MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN), Neurosurgery Research Listserv, UK
+                    </div>
+                </div>
+            </div>
+
+            <div class="header-actions">
+                <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3);">
+                    ● 100% Client-Side & Private
+                </span>
+                <button id="theme-toggle" class="btn btn-secondary btn-sm" aria-label="Toggle Theme">
+                    ☀️ Light
+                </button>
+            </div>
+        </header>
+
+        <!-- ===================================================================
+             STEPPER NAVIGATION
+             =================================================================== -->
+        <nav class="stepper-nav" aria-label="Workflow Navigation">
+            <button class="step-tab active" data-step="1">
+                <span class="badge">1</span>
+                <span>Data Ingestion</span>
+            </button>
+            <button class="step-tab" data-step="2">
+                <span class="badge">2</span>
+                <span>Variables & Types</span>
+            </button>
+            <button class="step-tab" data-step="3">
+                <span class="badge">3</span>
+                <span>Data Imputation</span>
+            </button>
+            <button class="step-tab" data-step="4">
+                <span class="badge">4</span>
+                <span>Model Training</span>
+            </button>
+            <button class="step-tab" data-step="5">
+                <span class="badge">5</span>
+                <span>Single Prediction</span>
+            </button>
+            <button class="step-tab" data-step="6">
+                <span class="badge">6</span>
+                <span>Batch Prediction</span>
+            </button>
+        </nav>
+
+        <!-- ===================================================================
+             STEP 1: DATA INGESTION & OVERVIEW
+             =================================================================== -->
+        <main>
+            <section class="step-content active" data-step="1" id="step-1-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>📁 Upload Clinical Dataset (.csv)</h2>
+                            <p>Upload your clinical, laboratory, imaging, or physiological dataset or explore with pre-loaded medical cohorts.</p>
+                        </div>
+                        <div class="dataset-pills">
+                            <span style="font-size: 12px; color: var(--text-muted); font-weight: 600;">Sample Medical Cohorts:</span>
+                            <button id="sample-cardio-btn" class="dataset-pill">
+                                🫀 Cardiometabolic Risk (Binary)
+                            </button>
+                            <button id="sample-cohort-btn" class="dataset-pill">
+                                🧠 Neurosurgical / Shunt Response (Binary)
+                            </button>
+                            <button id="sample-regression-btn" class="dataset-pill">
+                                📈 Functional Recovery Score (Continuous)
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="upload-dropzone" class="upload-dropzone">
+                        <input type="file" id="csv-file-input" accept=".csv" style="display: none;">
+                        <div class="upload-icon-circle">📂</div>
+                        <div>
+                            <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">
+                                Drag & drop your clinical .csv file here, or click to browse
+                            </h3>
+                            <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 4px;">
+                                Client-side execution &mdash; confidential patient health data never leaves your browser.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Dataset summary stats -->
+                    <div id="data-stats-grid" class="stats-grid"></div>
+
+                    <!-- Preview Table -->
+                    <div class="card" style="padding: 16px; background: var(--bg-surface-subtle);">
+                        <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 10px;">Dataset Preview (Initial Records)</h3>
+                        <div id="data-preview-container" class="table-container">
+                            <p style="padding: 20px; color: var(--text-muted); text-align: center;">No dataset loaded yet. Upload a CSV file or click a sample cohort above.</p>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end;">
+                        <button id="to-step-2-btn" class="btn btn-primary" disabled>
+                            Configure Variables & Roles &rarr;
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STEP 2: VARIABLE ROLES & TYPES CONFIGURATION
+                 =================================================================== -->
+            <section class="step-content" data-step="2" id="step-2-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>🏷️ Variable Role & Measurement Scale Configuration</h2>
+                            <p>Specify the analytical role (Meta, Feature, Target) and clinical measurement scale (Continuous, Ordinal, Nominal) for each column.</p>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <span class="pill pill-meta">Meta / ID</span>
+                            <span class="pill pill-feature">Feature (Input)</span>
+                            <span class="pill pill-target">Target (Outcome)</span>
+                        </div>
+                    </div>
+
+                    <div id="var-config-grid" class="var-config-grid">
+                        <!-- Populated dynamically by app.js -->
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                        <button id="to-step-3-btn" class="btn btn-primary">
+                            Proceed to Data Imputation &rarr;
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STEP 3: MISSING DATA IMPUTATION
+                 =================================================================== -->
+            <section class="step-content" data-step="3" id="step-3-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>🧹 Clinical Missing Data Detection & Imputation</h2>
+                            <p>Choose tailored mathematical imputation strategies based on whether variables are continuous, ordinal, or nominal.</p>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Variable Name</th>
+                                    <th>Role</th>
+                                    <th>Scale Type</th>
+                                    <th>Missing Cells</th>
+                                    <th>Imputation Strategy</th>
+                                    <th>Custom Value</th>
+                                </tr>
+                            </thead>
+                            <tbody id="impute-table-body">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="impute-action-bar">
+                        <div style="font-size: 12.5px; color: var(--text-secondary);">
+                            💡 Continuous: Median, Mean, KNN, Constant &bull; Ordinal: Mode, Median &bull; Nominal: Mode, "Missing" category
+                        </div>
+                        <button id="apply-imputation-btn" class="btn btn-emerald">
+                            ⚡ Apply Imputation & Validate Dataset
+                        </button>
+                    </div>
+
+                    <div id="impute-audit-box"></div>
+
+                    <div style="display: flex; justify-content: flex-end; gap: 12px;">
+                        <button id="to-step-4-btn" class="btn btn-primary" disabled>
+                            Proceed to Model Training &rarr;
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STEP 4: MODEL TRAINING & EVALUATION
+                 =================================================================== -->
+            <section class="step-content" data-step="4" id="step-4-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>🧠 Machine Learning & Deep Neural Network Models</h2>
+                            <p>Select from deep neural networks and classic machine learning algorithms tailored for clinical medicine prediction.</p>
+                        </div>
+                    </div>
+
+                    <!-- Model Cards Grid -->
+                    <div class="model-cards-grid">
+                        <div class="model-card selected" data-model-id="nn">
+                            <div class="model-card-header">
+                                <span class="model-card-title">Deep Neural Network (MLP)</span>
+                                <span class="pill pill-target">Deep Learning</span>
+                            </div>
+                            <div class="model-card-desc">
+                                Multi-Layer Perceptron (MLP) with dense hidden layers, dropout regularization, Adam optimizer and live epoch loss tracking.
+                            </div>
+                        </div>
+
+                        <div class="model-card" data-model-id="rf">
+                            <div class="model-card-header">
+                                <span class="model-card-title">Random Forest</span>
+                                <span class="pill pill-feature">Ensemble</span>
+                            </div>
+                            <div class="model-card-desc">
+                                Ensemble of bootstrap decision trees with Gini/variance reduction splits and feature importance quantification.
+                            </div>
+                        </div>
+
+                        <div class="model-card" data-model-id="glm">
+                            <div class="model-card-header">
+                                <span class="model-card-title">Logistic / Ridge Regression</span>
+                                <span class="pill pill-continuous">Generalized Linear</span>
+                            </div>
+                            <div class="model-card-desc">
+                                L2-regularized linear/softmax regression providing interpretable odds ratios and regression coefficients.
+                            </div>
+                        </div>
+
+                        <div class="model-card" data-model-id="knn">
+                            <div class="model-card-header">
+                                <span class="model-card-title">k-Nearest Neighbors (k-NN)</span>
+                                <span class="pill pill-ordinal">Instance-Based</span>
+                            </div>
+                            <div class="model-card-desc">
+                                Non-parametric local distance classification using Euclidean metric in standardized feature space.
+                            </div>
+                        </div>
+
+                        <div class="model-card" data-model-id="nb">
+                            <div class="model-card-header">
+                                <span class="model-card-title">Gaussian Naive Bayes</span>
+                                <span class="pill pill-nominal">Probabilistic</span>
+                            </div>
+                            <div class="model-card-desc">
+                                Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hyperparameters Box -->
+                    <div class="card" style="padding: 18px; background: var(--bg-surface-elevated);">
+                        <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 12px;">Training Configuration & Hyperparameters</h3>
+
+                        <div style="display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap;">
+                            <div class="param-group">
+                                <label>Train / Test Validation Split</label>
+                                <select id="train-split-select" class="control-select">
+                                    <option value="0.8">80% Train / 20% Test (Recommended)</option>
+                                    <option value="0.7">70% Train / 30% Test</option>
+                                    <option value="0.85">85% Train / 15% Test</option>
+                                    <option value="0.9">90% Train / 10% Test</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Neural Net Hyperparams -->
+                        <div id="nn-params-box" class="hyperparam-box">
+                            <div class="param-group">
+                                <label>Epochs</label>
+                                <input type="number" id="nn-epochs-input" class="control-input" value="50" min="10" max="300">
+                            </div>
+                            <div class="param-group">
+                                <label>Learning Rate</label>
+                                <input type="number" id="nn-lr-input" class="control-input" value="0.005" step="0.001">
+                            </div>
+                            <div class="param-group">
+                                <label>Hidden Layer 1 Units</label>
+                                <input type="number" id="nn-h1-input" class="control-input" value="64" min="8" max="256">
+                            </div>
+                            <div class="param-group">
+                                <label>Hidden Layer 2 Units</label>
+                                <input type="number" id="nn-h2-input" class="control-input" value="32" min="4" max="128">
+                            </div>
+                            <div class="param-group">
+                                <label>Dropout Rate</label>
+                                <input type="number" id="nn-dropout-input" class="control-input" value="0.1" step="0.05" min="0" max="0.5">
+                            </div>
+                            <div class="param-group">
+                                <label>Activation Function</label>
+                                <select id="nn-act-select" class="control-select">
+                                    <option value="relu">ReLU</option>
+                                    <option value="tanh">Tanh</option>
+                                    <option value="sigmoid">Sigmoid</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Random Forest Hyperparams -->
+                        <div id="rf-params-box" class="hyperparam-box" style="display: none;">
+                            <div class="param-group">
+                                <label>Number of Trees (Estimators)</label>
+                                <input type="number" id="rf-trees-input" class="control-input" value="30" min="5" max="100">
+                            </div>
+                            <div class="param-group">
+                                <label>Maximum Tree Depth</label>
+                                <input type="number" id="rf-depth-input" class="control-input" value="6" min="2" max="15">
+                            </div>
+                        </div>
+
+                        <!-- Logistic / Ridge Hyperparams -->
+                        <div id="glm-params-box" class="hyperparam-box" style="display: none;">
+                            <div class="param-group">
+                                <label>Learning Rate</label>
+                                <input type="number" id="glm-lr-input" class="control-input" value="0.05" step="0.01">
+                            </div>
+                            <div class="param-group">
+                                <label>Iterations / Epochs</label>
+                                <input type="number" id="glm-epochs-input" class="control-input" value="150" min="20" max="500">
+                            </div>
+                        </div>
+
+                        <!-- k-NN Hyperparams -->
+                        <div id="knn-params-box" class="hyperparam-box" style="display: none;">
+                            <div class="param-group">
+                                <label>k (Number of Neighbors)</label>
+                                <input type="number" id="knn-k-input" class="control-input" value="5" min="1" max="25">
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
+                            <div id="train-status" style="font-size: 13px; font-weight: 600;"></div>
+                            <button id="train-model-btn" class="btn btn-primary">
+                                🚀 Train Selected Model
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Training Progress Chart -->
+                    <div class="chart-container-box">
+                        <canvas id="train-loss-chart"></canvas>
+                    </div>
+
+                    <!-- Results Dashboard -->
+                    <div id="results-dashboard" class="results-dashboard" style="display: none;">
+                        <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation Metrics</h3>
+                        <div id="metrics-summary-row" class="metrics-summary-row"></div>
+                        <div id="eval-detail-container"></div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px;">
+                        <button id="to-step-5-btn" class="btn btn-primary" disabled>
+                            Single Case Predictor &rarr;
+                        </button>
+                        <button id="to-step-6-btn" class="btn btn-emerald" disabled>
+                            Batch Predictor &rarr;
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STEP 5: SINGLE PREDICTION
+                 =================================================================== -->
+            <section class="step-content" data-step="5" id="step-5-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>🔮 Single Patient Case Predictor</h2>
+                            <p>Input patient parameters to obtain real-time inference and class probability distributions from your trained clinical model.</p>
+                        </div>
+                    </div>
+
+                    <div id="predict-form-grid" class="predict-form-grid">
+                        <!-- Populated dynamically with inputs matching feature types -->
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                        <button id="run-single-predict-btn" class="btn btn-primary">
+                            ⚡ Compute Target Outcome
+                        </button>
+                    </div>
+
+                    <!-- Prediction Result Banner -->
+                    <div id="single-result-banner" class="prediction-banner" style="display: none;"></div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STEP 6: BATCH PREDICTION FACILITY
+                 =================================================================== -->
+            <section class="step-content" data-step="6" id="step-6-content">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2>📊 Batch Prediction & Export Facility</h2>
+                            <p>Upload a .csv file containing multiple records to compute predictions across all rows simultaneously.</p>
+                        </div>
+                        <button id="sample-batch-btn" class="dataset-pill">
+                            📂 Load Sample Batch Cases (10 Patients)
+                        </button>
+                    </div>
+
+                    <div id="batch-dropzone" class="upload-dropzone">
+                        <input type="file" id="batch-file-input" accept=".csv" style="display: none;">
+                        <div class="upload-icon-circle">📑</div>
+                        <div>
+                            <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">
+                                Upload Batch .csv File
+                            </h3>
+                            <p style="font-size: 12.5px; color: var(--text-muted); margin-top: 4px;">
+                                File should contain the required predictor variables. Missing values will be imputed automatically.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: flex-end;">
+                        <button id="run-batch-predict-btn" class="btn btn-primary" disabled>
+                            🚀 Execute Batch Prediction
+                        </button>
+                    </div>
+
+                    <!-- Batch Results Card -->
+                    <div id="batch-results-card" class="card" style="display: none; background: var(--bg-surface-elevated); padding: 18px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                            <h3 style="font-size: 15px; font-weight: 700; color: var(--text-primary);">
+                                Batch Prediction Preview
+                            </h3>
+                            <button id="download-batch-csv-btn" class="btn btn-emerald btn-sm" disabled>
+                                💾 Download Enriched Predictions (.CSV)
+                            </button>
+                        </div>
+
+                        <div id="batch-table-container" class="table-container"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- ===================================================================
+             APP FOOTER & CLINICAL DISCLAIMER
+             =================================================================== -->
+        <footer class="app-footer">
+            <div>
+                Software conceived, designed and developed by <strong>Dr G Narenthiran</strong> MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN),
+                Neurosurgery Research Listserv, United Kingdom.
+            </div>
+            <div class="disclaimer">
+                ⚠️ <strong>Clinical & Research Disclaimer:</strong> The Universal Medical ML/NeuralNet Predictor is designed as an interactive scientific computing and educational tool for clinical medical research across healthcare disciplines. It must not be utilized as the sole determinant for treatment or clinical interventions without independent medical validation.
+            </div>
+        </footer>
+
+    </div>
+
+    <!-- Scripts: Vendor & Core Engines -->
+    <script src="chart.umd.min.js"></script>
+    <script src="tf.min.js"></script>
+    <script src="data-engine.js"></script>
+    <script src="models.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
