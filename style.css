@@ -657,6 +657,34 @@ body {
     font-size: 12.5px;
     color: var(--text-secondary);
     line-height: 1.4;
+/* Protocol Selection Cards */
+.protocol-card {
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    background: var(--bg-surface-subtle);
+    padding: 14px 16px;
+    border-radius: var(--radius-md);
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    transition: var(--transition);
+}
+
+.protocol-card:hover {
+    border-color: var(--border-hover);
+    transform: translateY(-1px);
+}
+
+.protocol-card.selected-a {
+    border: 2px solid var(--accent-cyan) !important;
+    background: rgba(6, 182, 212, 0.08) !important;
+    box-shadow: 0 4px 12px rgba(6, 182, 212, 0.12);
+}
+
+.protocol-card.selected-b {
+    border: 2px solid var(--accent-purple) !important;
+    background: rgba(168, 85, 247, 0.08) !important;
+    box-shadow: 0 4px 12px rgba(168, 85, 247, 0.12);
 }
 
 /* Hyperparameters Panel */

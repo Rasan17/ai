@@ -25,7 +25,12 @@
         evalResults: null,
         charts: {},
         batchData: null,
-        batchPredictions: null
+        batchPredictions: null,
+        // Validation Protocol (Option A vs Option B)
+        validationMode: 'split', // 'split' (Option A) or 'separate' (Option B)
+        separateTestRawRows: null,
+        separateTestFileName: '',
+        separateTestData: null
     };
 
     // DOM Elements
@@ -63,6 +68,25 @@
         DOM.toStep5Btn = document.getElementById('to-step-5-btn');
         DOM.toStep6Btn = document.getElementById('to-step-6-btn');
         
+        // Option A vs Option B Protocol Elements
+        DOM.valModeA = document.getElementById('val-mode-a');
+        DOM.valModeB = document.getElementById('val-mode-b');
+        DOM.cardModeA = document.getElementById('protocol-mode-a-label');
+        DOM.cardModeB = document.getElementById('protocol-mode-b-label');
+        DOM.optionAContainer = document.getElementById('option-a-container');
+        DOM.optionBContainer = document.getElementById('option-b-container');
+        DOM.retrainYes = document.getElementById('retrain-yes');
+        DOM.retrainNo = document.getElementById('retrain-no');
+        DOM.infoTrainPct = document.getElementById('info-train-pct');
+        DOM.infoTestPct = document.getElementById('info-test-pct');
+        DOM.infoTestPct2 = document.getElementById('info-test-pct-2');
+        DOM.optBTrainSummary = document.getElementById('opt-b-train-summary');
+        DOM.optBTestBadge = document.getElementById('opt-b-test-badge');
+        DOM.optBTestSummary = document.getElementById('opt-b-test-summary');
+        DOM.testDropzone = document.getElementById('test-dropzone');
+        DOM.testFileInput = document.getElementById('test-csv-file-input');
+        DOM.loadSampleTestBtn = document.getElementById('load-sample-test-btn');
+
         DOM.predictFormGrid = document.getElementById('predict-form-grid');
         DOM.runSinglePredictBtn = document.getElementById('run-single-predict-btn');
         DOM.singleResultBanner = document.getElementById('single-result-banner');
@@ -135,7 +159,73 @@
             });
         });
 
-        // Train / Test Split interactive synchronization
+        // Protocol Mode Toggle (Option A vs Option B)
+        function setValidationMode(mode) {
+            AppState.validationMode = mode;
+            if (mode === 'split') {
+                if (DOM.valModeA) DOM.valModeA.checked = true;
+                if (DOM.cardModeA) {
+                    DOM.cardModeA.classList.add('selected-a');
+                    DOM.cardModeA.style.borderColor = 'var(--accent-cyan)';
+                    DOM.cardModeA.style.background = 'rgba(6, 182, 212, 0.08)';
+                }
+                if (DOM.cardModeB) {
+                    DOM.cardModeB.classList.remove('selected-b');
+                    DOM.cardModeB.style.borderColor = 'var(--border-color)';
+                    DOM.cardModeB.style.background = 'var(--bg-surface-subtle)';
+                }
+                if (DOM.optionAContainer) DOM.optionAContainer.style.display = 'block';
+                if (DOM.optionBContainer) DOM.optionBContainer.style.display = 'none';
+            } else {
+                if (DOM.valModeB) DOM.valModeB.checked = true;
+                if (DOM.cardModeB) {
+                    DOM.cardModeB.classList.add('selected-b');
+                    DOM.cardModeB.style.borderColor = 'var(--accent-purple)';
+                    DOM.cardModeB.style.background = 'rgba(168, 85, 247, 0.08)';
+                }
+                if (DOM.cardModeA) {
+                    DOM.cardModeA.classList.remove('selected-a');
+                    DOM.cardModeA.style.borderColor = 'var(--border-color)';
+                    DOM.cardModeA.style.background = 'var(--bg-surface-subtle)';
+                }
+                if (DOM.optionAContainer) DOM.optionAContainer.style.display = 'none';
+                if (DOM.optionBContainer) DOM.optionBContainer.style.display = 'block';
+                refreshOptionBSummaries();
+            }
+        }
+
+        if (DOM.valModeA) DOM.valModeA.addEventListener('change', () => setValidationMode('split'));
+        if (DOM.valModeB) DOM.valModeB.addEventListener('change', () => setValidationMode('separate'));
+        if (DOM.cardModeA) DOM.cardModeA.addEventListener('click', () => setValidationMode('split'));
+        if (DOM.cardModeB) DOM.cardModeB.addEventListener('click', () => setValidationMode('separate'));
+
+        // Option B Testing Cohort Upload
+        if (DOM.testDropzone && DOM.testFileInput) {
+            DOM.testDropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                DOM.testDropzone.classList.add('drag-active');
+            });
+            DOM.testDropzone.addEventListener('dragleave', () => DOM.testDropzone.classList.remove('drag-active'));
+            DOM.testDropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                DOM.testDropzone.classList.remove('drag-active');
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    handleTestFileUpload(e.dataTransfer.files[0]);
+                }
+            });
+            DOM.testDropzone.addEventListener('click', () => DOM.testFileInput.click());
+            DOM.testFileInput.addEventListener('change', (e) => {
+                if (e.target.files && e.target.files[0]) {
+                    handleTestFileUpload(e.target.files[0]);
+                }
+            });
+        }
+
+        if (DOM.loadSampleTestBtn) {
+            DOM.loadSampleTestBtn.addEventListener('click', loadSampleTestingCohort);
+        }
+
+        // Train / Test Split interactive synchronization (Option A)
         const slider = document.getElementById('train-ratio-slider');
         const trainInput = document.getElementById('train-pct-input');
         const testInput = document.getElementById('test-pct-input');
@@ -202,6 +292,7 @@
         const dispTest = document.getElementById('split-display-test');
         const infoTrain = document.getElementById('info-train-pct');
         const infoTest = document.getElementById('info-test-pct');
+        const infoTest2 = document.getElementById('info-test-pct-2');
 
         if (slider) slider.value = train;
         if (trainInput) trainInput.value = train;
@@ -210,6 +301,127 @@
         if (dispTest) dispTest.innerText = `${test}% Test`;
         if (infoTrain) infoTrain.innerText = `${train}%`;
         if (infoTest) infoTest.innerText = `${test}%`;
+        if (infoTest2) infoTest2.innerText = `${test}%`;
+    }
+
+    // Option B File & Sample Handlers
+    function handleTestFileUpload(file) {
+        if (!file.name.endsWith('.csv') && file.type !== 'text/csv') {
+            alert("Please upload a valid .csv file for the testing cohort.");
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            processTestingCSVContent(e.target.result, file.name);
+        };
+        reader.readAsText(file);
+    }
+
+    function processTestingCSVContent(csvText, fileName) {
+        try {
+            const parsed = DataEngine.parseCSV(csvText);
+            const rows = parsed && parsed.rows ? parsed.rows : null;
+            if (!rows || rows.length === 0) {
+                alert("The uploaded testing CSV appears to be empty or unparseable.");
+                return;
+            }
+            AppState.separateTestRawRows = rows;
+            AppState.separateTestFileName = fileName;
+            refreshOptionBSummaries();
+        } catch (err) {
+            alert("Failed to parse testing CSV: " + err.message);
+        }
+    }
+
+    async function loadSampleTestingCohort() {
+        try {
+            let filename = 'medical_batch_unseen_cases.csv';
+            let label = 'Neurosurgical External Validation Cohort';
+            if (AppState.fileName && AppState.fileName.includes('recovery')) {
+                filename = 'medical_recovery_test_cohort.csv';
+                label = 'Functional Recovery Test Cohort';
+            } else if (AppState.fileName && (AppState.fileName.includes('universal') || AppState.fileName.includes('cardio'))) {
+                filename = 'universal_medical_test_cohort.csv';
+                label = 'Cardiometabolic Risk Test Cohort';
+            }
+
+            const resp = await fetch(filename);
+            if (!resp.ok) throw new Error("Could not load " + filename);
+            const text = await resp.text();
+            processTestingCSVContent(text, `${label} (${filename})`);
+        } catch (err) {
+            console.error("Error loading sample test cohort:", err);
+            alert("Could not load sample test cohort: " + err.message);
+        }
+    }
+
+    function refreshOptionBSummaries() {
+        if (!DOM.optBTrainSummary) return;
+
+        // Dataset (i) Summary
+        if (AppState.imputedData && AppState.columnConfigs) {
+            const targetCol = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
+            const targetCfg = targetCol ? AppState.columnConfigs[targetCol] : null;
+            const isClf = targetCfg ? (targetCfg.type === 'binary' || targetCfg.type === 'multiclass') : true;
+            DOM.optBTrainSummary.innerHTML = `
+                <div><strong>Source:</strong> ${AppState.fileName || 'Active Dataset'}</div>
+                <div><strong>Training Cases:</strong> ${AppState.imputedData.imputedRows.length} patients (100% used for model parameter fitting)</div>
+                <div><strong>Target:</strong> <span style="color: var(--accent-cyan); font-weight: 700;">${targetCol || 'Unspecified'}</span> (${isClf ? 'Classification' : 'Continuous Regression'})</div>
+            `;
+        } else {
+            DOM.optBTrainSummary.innerHTML = `
+                <span style="color: var(--text-muted);">Please complete Steps 1-3 first to finalize the training cohort.</span>
+            `;
+        }
+
+        // Dataset (ii) Summary
+        if (AppState.separateTestRawRows) {
+            const testValidCount = AppState.separateTestRawRows.length;
+            let targetStatus = "Checking schema...";
+            if (AppState.columnConfigs) {
+                const targetCol = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
+                if (targetCol) {
+                    const hasTarget = AppState.separateTestRawRows[0] && (targetCol in AppState.separateTestRawRows[0]);
+                    targetStatus = hasTarget 
+                        ? `<span style="color: var(--accent-emerald); font-weight: 600;">✓ Target '${targetCol}' found</span>`
+                        : `<span style="color: var(--accent-amber); font-weight: 600;">⚠️ Target '${targetCol}' not in header!</span>`;
+                }
+            }
+
+            if (DOM.optBTestBadge) {
+                DOM.optBTestBadge.className = 'pill pill-target';
+                DOM.optBTestBadge.style.background = 'rgba(168, 85, 247, 0.15)';
+                DOM.optBTestBadge.style.color = 'var(--accent-purple)';
+                DOM.optBTestBadge.style.borderColor = 'rgba(168, 85, 247, 0.4)';
+                DOM.optBTestBadge.innerText = `✓ Ready (${testValidCount} cases)`;
+            }
+
+            if (DOM.optBTestSummary) {
+                DOM.optBTestSummary.innerHTML = `
+                    <div style="background: var(--bg-surface); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 4px;">
+                        <div><strong>Testing File:</strong> ${AppState.separateTestFileName || 'Testing Cohort CSV'}</div>
+                        <div><strong>Total Test Cases:</strong> ${testValidCount} external patients</div>
+                        <div><strong>Target Verification:</strong> ${targetStatus}</div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
+                            🔒 Test data will be transformed strictly using training metadata with zero data leakage.
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            if (DOM.optBTestBadge) {
+                DOM.optBTestBadge.className = 'pill pill-meta';
+                DOM.optBTestBadge.style.background = '';
+                DOM.optBTestBadge.style.color = '';
+                DOM.optBTestBadge.style.borderColor = '';
+                DOM.optBTestBadge.innerText = 'Pending Upload';
+            }
+            if (DOM.optBTestSummary) {
+                DOM.optBTestSummary.innerHTML = `
+                    <span style="color: var(--text-muted); font-size: 11.5px;">No separate testing dataset provided yet. Upload a CSV above or click 'Load Built-In Validation Cohort'.</span>
+                `;
+            }
+        }
     }
 
     function toggleTheme() {
@@ -252,6 +464,7 @@
 
         if (stepNum === 2) renderVariableConfigGrid();
         if (stepNum === 3) renderImputationTable();
+        if (stepNum === 4) refreshOptionBSummaries();
         if (stepNum === 5) renderSinglePredictionForm();
     }
 
@@ -614,18 +827,12 @@
             DOM.trainModelBtn.disabled = true;
             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan); display: inline-flex; align-items: center; gap: 6px;">⚙️ Preparing data partitions and hyperparameter configurations...</span>`;
 
-            // Prepare features and target
+            // Prepare features and target from training cohort
             const prep = DataEngine.prepareFeaturesAndTarget(AppState.imputedData.imputedRows, AppState.columnConfigs);
             AppState.prepMeta = prep;
 
-            // Train / Test split percentage (default 80% train / 20% test)
-            const trainPctInput = document.getElementById('train-pct-input');
-            const trainPct = trainPctInput ? parseFloat(trainPctInput.value) : 80;
-            const trainRatio = Math.min(0.95, Math.max(0.50, (trainPct || 80) / 100));
-            const testPct = Math.round((1 - trainRatio) * 100);
-
-            const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification);
-            AppState.trainTestData = split;
+            // Determine active validation protocol (Option A vs Option B)
+            const isOptionA = DOM.valModeA ? DOM.valModeA.checked : (AppState.validationMode !== 'separate');
 
             // Hyperparameters for Fine-Tuning
             const hyperparams = {};
@@ -689,94 +896,196 @@
                 hyperparams.capacity = capEl ? capEl.value : 'balanced';
             }
 
-            // -------------------------------------------------------------
-            // PHASE 1: SPLIT TRAINING & VALIDATION ACCURACY BENCHMARK
-            // -------------------------------------------------------------
-            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 Phase 1/2: Training on ${Math.round(trainRatio * 100)}% partition (${split.trainX.length} cases) to evaluate ${testPct}% test accuracy...</span>`;
+            if (isOptionA) {
+                // =============================================================
+                // OPTION A: INTERNAL TRAIN / TEST SPLIT WITH RETRAINING CHOICE
+                // =============================================================
+                const trainPctInput = document.getElementById('train-pct-input');
+                const trainPct = trainPctInput ? parseFloat(trainPctInput.value) : 80;
+                const trainRatio = Math.min(0.95, Math.max(0.50, (trainPct || 80) / 100));
+                const testPct = Math.round((1 - trainRatio) * 100);
 
-            // Chart setup for NN / Ensemble training progress
-            setupTrainingLossChart();
+                const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification);
+                AppState.trainTestData = split;
 
-            const valModel = ModelEngine.createModel(
-                AppState.selectedModelId,
-                prep.isClassification,
-                prep.targetClasses.length || 2,
-                hyperparams
-            );
+                const shouldRetrain = DOM.retrainYes ? DOM.retrainYes.checked : true;
 
-            // Fit validation model on train split
-            if (AppState.selectedModelId === 'nn') {
-                await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 1 (${Math.round(trainRatio * 100)}% Train): Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
-                    updateLossChart(epoch, logs.loss, logs.val_loss);
-                });
-            } else if (AppState.selectedModelId === 'ensemble') {
-                await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 1 (${Math.round(trainRatio * 100)}% Train): Base ${curr}/${total}...`}</span>`;
-                    if (info.loss !== undefined) {
-                        updateLossChart(curr, info.loss, info.val_loss);
-                    }
-                });
-            } else {
-                valModel.fit(split.trainX, split.trainY);
-            }
+                // Phase 1: Train validation model on train partition
+                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 Option A Phase 1: Training on ${Math.round(trainRatio * 100)}% partition (${split.trainX.length} cases) to evaluate ${testPct}% test accuracy...</span>`;
 
-            // Benchmark out-of-sample accuracy on held-out test split
-            const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
-            evalRes.trainRatio = trainRatio;
-            evalRes.trainPct = Math.round(trainRatio * 100);
-            evalRes.testPct = testPct;
-            evalRes.trainCount = split.trainX.length;
-            evalRes.testCount = split.testX.length;
-            evalRes.totalCount = prep.X.length;
-            AppState.evalResults = evalRes;
-
-            const accuracySummary = evalRes.isClassification
-                ? `Test Accuracy: ${(evalRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${evalRes.rocAuc !== null ? evalRes.rocAuc.toFixed(3) : 'N/A'})`
-                : `Test R²: ${evalRes.r2.toFixed(3)} (RMSE: ${evalRes.rmse.toFixed(3)})`;
-
-            // -------------------------------------------------------------
-            // PHASE 2: RETRAIN FINAL MODEL WITH 100% OF DATA
-            // -------------------------------------------------------------
-            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber); font-weight: 600;">✓ Phase 1 Complete [${accuracySummary}]. Now Phase 2: Retraining final model with 100% of data (N=${prep.X.length} patients)...</span>`;
-
-            // Yield briefly to UI thread
-            await new Promise(r => setTimeout(r, 60));
-
-            const fullModel = ModelEngine.createModel(
-                AppState.selectedModelId,
-                prep.isClassification,
-                prep.targetClasses.length || 2,
-                hyperparams
-            );
-
-            if (AppState.selectedModelId === 'nn') {
                 setupTrainingLossChart();
-                await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 2 (100% Retraining): Epoch ${epoch}/${total} &mdash; Full Cohort Loss: ${logs.loss.toFixed(4)}</span>`;
-                    updateLossChart(epoch, logs.loss);
-                });
-            } else if (AppState.selectedModelId === 'ensemble') {
-                await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 2 (100% Retraining): Base Model ${curr}/${total}...`}</span>`;
-                });
+
+                const valModel = ModelEngine.createModel(
+                    AppState.selectedModelId,
+                    prep.isClassification,
+                    prep.targetClasses.length || 2,
+                    hyperparams
+                );
+
+                if (AppState.selectedModelId === 'nn') {
+                    await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 1 (${Math.round(trainRatio * 100)}% Train): Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                        updateLossChart(epoch, logs.loss, logs.val_loss);
+                    });
+                } else if (AppState.selectedModelId === 'ensemble') {
+                    await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 1 (${Math.round(trainRatio * 100)}% Train): Base ${curr}/${total}...`}</span>`;
+                        if (info.loss !== undefined) {
+                            updateLossChart(curr, info.loss, info.val_loss);
+                        }
+                    });
+                } else {
+                    valModel.fit(split.trainX, split.trainY);
+                }
+
+                // Benchmark accuracy on held-out test split
+                const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
+                evalRes.protocol = 'option-a';
+                evalRes.retrainOn100 = shouldRetrain;
+                evalRes.trainRatio = trainRatio;
+                evalRes.trainPct = Math.round(trainRatio * 100);
+                evalRes.testPct = testPct;
+                evalRes.trainCount = split.trainX.length;
+                evalRes.testCount = split.testX.length;
+                evalRes.totalCount = prep.X.length;
+                AppState.evalResults = evalRes;
+
+                const accuracySummary = evalRes.isClassification
+                    ? `Test Accuracy: ${(evalRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${evalRes.rocAuc !== null ? evalRes.rocAuc.toFixed(3) : 'N/A'})`
+                    : `Test R²: ${evalRes.r2.toFixed(3)} (RMSE: ${evalRes.rmse.toFixed(3)})`;
+
+                if (shouldRetrain) {
+                    // User chose YES: Retrain model with 100% of data
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber); font-weight: 600;">✓ Phase 1 Complete [${accuracySummary}]. Now Phase 2: Retraining final model with 100% of data (N=${prep.X.length} patients)...</span>`;
+
+                    await new Promise(r => setTimeout(r, 60));
+
+                    const fullModel = ModelEngine.createModel(
+                        AppState.selectedModelId,
+                        prep.isClassification,
+                        prep.targetClasses.length || 2,
+                        hyperparams
+                    );
+
+                    if (AppState.selectedModelId === 'nn') {
+                        setupTrainingLossChart();
+                        await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 2 (100% Retraining): Epoch ${epoch}/${total} &mdash; Full Cohort Loss: ${logs.loss.toFixed(4)}</span>`;
+                            updateLossChart(epoch, logs.loss);
+                        });
+                    } else if (AppState.selectedModelId === 'ensemble') {
+                        await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 2 (100% Retraining): Base Model ${curr}/${total}...`}</span>`;
+                        });
+                    } else {
+                        fullModel.fit(prep.X, prep.y);
+                    }
+
+                    AppState.trainedModel = fullModel;
+
+                    DOM.trainStatus.innerHTML = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span style="color: var(--accent-emerald); font-weight: 700;">
+                                ✓ Accuracy Evaluated on ${testPct}% Test Set &amp; Model Fully Retrained on 100% of Cohort Data!
+                            </span>
+                            <span style="font-size: 11.5px; color: var(--text-secondary);">
+                                Reported Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>100% Cohort (N = ${prep.X.length} patients)</strong>
+                            </span>
+                        </div>
+                    `;
+                } else {
+                    // User chose NO: Keep model trained strictly on the train partition
+                    AppState.trainedModel = valModel;
+
+                    DOM.trainStatus.innerHTML = `
+                        <div style="display: flex; flex-direction: column; gap: 3px;">
+                            <span style="color: var(--accent-cyan); font-weight: 700;">
+                                ✓ Accuracy Evaluated on ${testPct}% Test Set &bull; Single-Phase Model Deployed
+                            </span>
+                            <span style="font-size: 11.5px; color: var(--text-secondary);">
+                                Reported Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>Maintained strictly on ${evalRes.trainPct}% training split (${split.trainX.length} cases; 100% retraining declined)</strong>
+                            </span>
+                        </div>
+                    `;
+                }
             } else {
-                fullModel.fit(prep.X, prep.y);
+                // =============================================================
+                // OPTION B: SEPARATE TRAINING (i) AND TESTING (ii) DATASETS
+                // =============================================================
+                if (!AppState.separateTestRawRows || AppState.separateTestRawRows.length === 0) {
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber);">⚠️ Option B requires a separate testing cohort (Dataset ii). Please upload a test CSV or click 'Load Built-In Validation Cohort'.</span>`;
+                    DOM.trainModelBtn.disabled = false;
+                    alert("Option B requires a separate testing cohort (Dataset ii). Please upload a test CSV or load the built-in validation cohort in the Option B card.");
+                    return;
+                }
+
+                // Transform separate test data using training metadata (strict zero leakage)
+                const testPrep = DataEngine.prepareTestingDataset(AppState.separateTestRawRows, prep);
+                AppState.separateTestData = testPrep;
+
+                if (!testPrep.totalEvaluated || testPrep.totalEvaluated === 0) {
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">Testing cohort evaluation failed: 0 valid test cases found.</span>`;
+                    DOM.trainModelBtn.disabled = false;
+                    alert(`Could not extract any valid test cases with matching predictors and target. Missing target cases: ${testPrep.missingTargetCount}, unknown classes: ${testPrep.unknownClassCount}. Please check the testing CSV.`);
+                    return;
+                }
+
+                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 Option B Protocol: Fitting model on 100% of Training Dataset (i) (${prep.X.length} patients) &amp; evaluating on separate Dataset (ii) (${testPrep.totalEvaluated} external patients)...</span>`;
+
+                setupTrainingLossChart();
+
+                const model = ModelEngine.createModel(
+                    AppState.selectedModelId,
+                    prep.isClassification,
+                    prep.targetClasses.length || 2,
+                    hyperparams
+                );
+
+                if (AppState.selectedModelId === 'nn') {
+                    await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (epoch, total, logs) => {
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">Training on Dataset (i): Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| External Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                        updateLossChart(epoch, logs.loss, logs.val_loss);
+                    });
+                } else if (AppState.selectedModelId === 'ensemble') {
+                    await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (curr, total, info) => {
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">${info.stage || `Training on Dataset (i): Base ${curr}/${total}...`}</span>`;
+                        if (info.loss !== undefined) {
+                            updateLossChart(curr, info.loss, info.val_loss);
+                        }
+                    });
+                } else {
+                    model.fit(prep.X, prep.y);
+                }
+
+                // Evaluate model on independent Dataset (ii)
+                const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses);
+                evalRes.protocol = 'option-b';
+                evalRes.retrainOn100 = false;
+                evalRes.trainCount = prep.X.length;
+                evalRes.testCount = testPrep.totalEvaluated;
+                evalRes.totalCount = prep.X.length + testPrep.totalEvaluated;
+                evalRes.testProvided = testPrep.totalProvided;
+                evalRes.missingTargetCount = testPrep.missingTargetCount;
+                evalRes.unknownClassCount = testPrep.unknownClassCount;
+                AppState.evalResults = evalRes;
+                AppState.trainedModel = model;
+
+                const accuracySummary = evalRes.isClassification
+                    ? `External Test Accuracy: ${(evalRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${evalRes.rocAuc !== null ? evalRes.rocAuc.toFixed(3) : 'N/A'})`
+                    : `External Test R²: ${evalRes.r2.toFixed(3)} (RMSE: ${evalRes.rmse.toFixed(3)})`;
+
+                DOM.trainStatus.innerHTML = `
+                    <div style="display: flex; flex-direction: column; gap: 3px;">
+                        <span style="color: var(--accent-purple); font-weight: 700;">
+                            ✓ Option B Complete: Evaluated on Separate Testing Dataset (ii) (${testPrep.totalEvaluated} external cases)!
+                        </span>
+                        <span style="font-size: 11.5px; color: var(--text-secondary);">
+                            External Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>Fitted on 100% of Training Dataset (i) (N = ${prep.X.length} patients)</strong>
+                        </span>
+                    </div>
+                `;
             }
 
-            // Assign fully retrained model for real-time single and batch prediction
-            AppState.trainedModel = fullModel;
-
-            DOM.trainStatus.innerHTML = `
-                <div style="display: flex; flex-direction: column; gap: 3px;">
-                    <span style="color: var(--accent-emerald); font-weight: 700;">
-                        ✓ Accuracy Evaluated on ${testPct}% Test Set &amp; Model Fully Retrained on 100% of Cohort Data!
-                    </span>
-                    <span style="font-size: 11.5px; color: var(--text-secondary);">
-                        Reported Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>100% Cohort (N = ${prep.X.length} patients)</strong>
-                    </span>
-                </div>
-            `;
             DOM.trainModelBtn.disabled = false;
             DOM.toStep5Btn.disabled = false;
             DOM.toStep6Btn.disabled = false;
@@ -859,35 +1168,74 @@
         const prep = AppState.prepMeta;
         DOM.resultsDashboard.style.display = 'flex';
 
+        const isOptionB = evalRes.protocol === 'option-b';
         const trainPct = evalRes.trainPct || 80;
         const testPct = evalRes.testPct || 20;
         const trainCount = evalRes.trainCount || Math.round(evalRes.totalCount * 0.8);
         const testCount = evalRes.testCount || (evalRes.totalCount - trainCount);
         const totalCount = evalRes.totalCount || evalRes.totalSamples;
 
-        // Two-Phase Retraining Notice Banner
+        // Protocol Status Banner
         if (DOM.retrainStatusBanner) {
-            DOM.retrainStatusBanner.innerHTML = `
-                <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.28); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-                    <div>
-                        <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-emerald); display: flex; align-items: center; gap: 6px;">
-                            <span>✓</span> Validation Evaluated on Held-Out ${testPct}% Test Set &bull; Deployed Model Retrained on 100% of Data
+            if (isOptionB) {
+                DOM.retrainStatusBanner.innerHTML = `
+                    <div style="background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-purple); display: flex; align-items: center; gap: 6px;">
+                                <span>🛡️</span> Option B: Independent External Validation Cohort
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
+                                Model was trained strictly on 100% of <strong>Dataset (i) (${trainCount} patients)</strong> and rigorously evaluated on independent external <strong>Dataset (ii) (${testCount} test cases)</strong> with zero data leakage.
+                            </div>
                         </div>
-                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
-                            Metrics below reflect out-of-sample accuracy on the held-out <strong>${testPct}% test split (${testCount} cases)</strong> after training on <strong>${trainPct}% (${trainCount} cases)</strong>. The active deployed model was then retrained on <strong>100% of all data (${totalCount} cases)</strong> for maximum diagnostic accuracy.
-                        </div>
+                        <span class="pill" style="background: rgba(168, 85, 247, 0.18); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.4); font-size: 12px; font-weight: 700;">
+                            External Cohort Validated
+                        </span>
                     </div>
-                    <span class="pill pill-target" style="background: rgba(16, 185, 129, 0.18); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4); font-size: 12px; font-weight: 700;">
-                        100% Retrained Model Active
-                    </span>
-                </div>
-            `;
+                `;
+            } else if (evalRes.retrainOn100) {
+                DOM.retrainStatusBanner.innerHTML = `
+                    <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.28); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-emerald); display: flex; align-items: center; gap: 6px;">
+                                <span>✓</span> Option A: Two-Phase Retraining Protocol &bull; 100% Retrained Model Active
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
+                                Out-of-sample accuracy was benchmarked on the held-out <strong>${testPct}% test split (${testCount} cases)</strong> after training on <strong>${trainPct}% (${trainCount} cases)</strong>. The deployed model was then retrained on <strong>100% of the entire cohort (${totalCount} cases)</strong> to maximize diagnostic accuracy.
+                            </div>
+                        </div>
+                        <span class="pill pill-target" style="background: rgba(16, 185, 129, 0.18); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4); font-size: 12px; font-weight: 700;">
+                            100% Retrained Model Active
+                        </span>
+                    </div>
+                `;
+            } else {
+                DOM.retrainStatusBanner.innerHTML = `
+                    <div style="background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.28); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+                        <div>
+                            <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
+                                <span>ℹ️</span> Option A: Single-Phase Protocol &bull; Split-Trained Model Active
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
+                                Accuracy was evaluated on the held-out <strong>${testPct}% test split (${testCount} cases)</strong>. As requested, the deployed model is maintained strictly on the <strong>${trainPct}% training split (${trainCount} cases)</strong> without retraining on 100% of the data.
+                            </div>
+                        </div>
+                        <span class="pill" style="background: rgba(6, 182, 212, 0.18); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.4); font-size: 12px; font-weight: 700;">
+                            ${trainPct}% Split Model Active
+                        </span>
+                    </div>
+                `;
+            }
         }
+
+        const testAccLabel = isOptionB ? 'External Test Accuracy (Dataset ii)' : `Test Accuracy (${testPct}% Split)`;
+        const testR2Label = isOptionB ? 'External Test R² (Dataset ii)' : `Test R² Score (${testPct}% Split)`;
+        const cohortDesc = isOptionB ? `External Testing Cohort (Dataset ii: ${testCount} Patients)` : `Held-out ${testPct}% Test Cohort: ${testCount} Patients`;
 
         if (evalRes.isClassification) {
             DOM.metricsSummaryRow.innerHTML = `
                 <div class="metric-pill-card">
-                    <span class="m-title">Test Accuracy (${testPct}% Split)</span>
+                    <span class="m-title">${testAccLabel}</span>
                     <span class="m-val">${(evalRes.accuracy * 100).toFixed(1)}%</span>
                 </div>
                 <div class="metric-pill-card">
@@ -915,7 +1263,7 @@
             const classes = prep.targetClasses;
             let cmHtml = `
                 <div style="display: flex; flex-direction: column; gap: 16px;">
-                    <h3 style="font-size: 15px; color: var(--text-primary);">Confusion Matrix (Held-out ${testPct}% Test Cohort: ${testCount} Patients)</h3>
+                    <h3 style="font-size: 15px; color: var(--text-primary);">Confusion Matrix (${cohortDesc})</h3>
                     <div class="table-container" style="max-width: 500px;">
                         <table class="cm-table">
                             <thead>
@@ -945,7 +1293,7 @@
             // Regression Metrics
             DOM.metricsSummaryRow.innerHTML = `
                 <div class="metric-pill-card">
-                    <span class="m-title">Test R² Score (${testPct}% Split)</span>
+                    <span class="m-title">${testR2Label}</span>
                     <span class="m-val">${evalRes.r2.toFixed(3)}</span>
                 </div>
                 <div class="metric-pill-card">
@@ -963,7 +1311,7 @@
             `;
             DOM.evaluationDetailContainer.innerHTML = `
                 <p style="font-size: 13px; color: var(--text-secondary);">
-                    Model validated on held-out ${testPct}% test split (${testCount} patients) with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. The active model was then retrained on 100% of data (${totalCount} patients).
+                    Model validated on ${cohortDesc} with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
                 </p>
             `;
         }

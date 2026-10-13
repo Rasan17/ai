@@ -695,6 +695,58 @@
                 trainIndices,
                 testIndices
             };
+        },
+
+        /**
+         * Transforms a separate test dataset using training metadata,
+         * extracting X_test and y_test strictly without data leakage.
+         */
+        prepareTestingDataset(testRows, prepMeta) {
+            const { targetCol, isClassification, targetClassToIdx } = prepMeta;
+            const X_test = [];
+            const y_test = [];
+            const validRows = [];
+            let missingTargetCount = 0;
+            let unknownClassCount = 0;
+
+            testRows.forEach(row => {
+                const rawTarget = row[targetCol];
+                if (this.isMissing(rawTarget)) {
+                    missingTargetCount++;
+                    return;
+                }
+
+                let targetVal;
+                if (isClassification) {
+                    const strTarget = String(rawTarget).trim();
+                    if (targetClassToIdx[strTarget] === undefined) {
+                        unknownClassCount++;
+                        return;
+                    }
+                    targetVal = targetClassToIdx[strTarget];
+                } else {
+                    targetVal = Number(rawTarget);
+                    if (isNaN(targetVal)) {
+                        missingTargetCount++;
+                        return;
+                    }
+                }
+
+                const xRow = this.transformSingleRow(row, prepMeta);
+                X_test.push(xRow);
+                y_test.push(targetVal);
+                validRows.push(row);
+            });
+
+            return {
+                X: X_test,
+                y: y_test,
+                validRows,
+                totalEvaluated: X_test.length,
+                totalProvided: testRows.length,
+                missingTargetCount,
+                unknownClassCount
+            };
         }
     };
 

@@ -81,12 +81,21 @@ Every model includes fine-tuning controls specifically designed to maximize pred
     - Variance Smoothing ($\epsilon = 10^{-9}, 10^{-4}, 10^{-2}, 0.1$) for numerical stability with sparse or noisy biomarkers.
     - Class Prior Calculation: *Empirical* (cohort frequency), *Balanced / Uniform* (equal $1/K$ priors to correct for class imbalance), or *Laplace-Smoothed*.
 
-### 5. Configurable Train/Test Split & Two-Phase 100% Retraining Protocol
-- **Configurable Validation Partition (Default: 80% Train / 20% Test):**
-  - Clinicians and researchers can dynamically configure the training percentage (50% to 95%) via an interactive slider, numeric percentage inputs, or quick presets (`80/20`, `70/30`, `85/15`, `90/10`).
-- **Two-Phase Clinical Retraining Pipeline:**
-  - **Phase 1 (Validation Benchmark):** The algorithm trains on the chosen training partition (default 80%) and benchmarks true out-of-sample performance on the held-out test partition (default 20%), reporting Test Accuracy, Macro F1, Precision, Recall, ROC-AUC, and Confusion Matrix.
-  - **Phase 2 (100% Production Retraining):** Once validation accuracy has been recorded and displayed, the system automatically retrains the final model on **100% of all cohort data** ($N_{total}$) so that deployed single-patient and batch inference incorporates every piece of patient evidence available.
+### 5. Training & Testing Validation Protocols: Option A vs Option B
+
+The platform provides two rigorous clinical evaluation paradigms selectable in Step 4:
+
+- **Option A: Internal Train / Test Split (with Retraining Choice)**
+  - **Configurable Split Ratio (Default: 80% Train / 20% Test):**
+    - Clinicians and researchers can dynamically configure the training partition ratio (50% to 95%) via an interactive slider, numeric inputs, or quick presets (`80/20`, `70/30`, `85/15`, `90/10`).
+  - **Post-Testing Retraining Decision:**
+    - **Yes &mdash; Two-Phase Retraining Protocol (Recommended):** The algorithm first benchmarks out-of-sample performance on the held-out test partition (e.g., 20%), reporting Test Accuracy, Macro F1, Precision, Recall, ROC-AUC, and Confusion Matrix. Once evaluated, it automatically retrains the final deployed model on **100% of all cohort data** ($N_{total}$) so real-time and batch predictions leverage all available clinical evidence.
+    - **No &mdash; Single-Phase Protocol:** Benchmarks accuracy on the held-out test split, but keeps the deployed model strictly trained on the initial training partition only (e.g., 80%), without retraining on the remaining data.
+
+- **Option B: Separate Training &amp; Testing Datasets (Independent External Validation)**
+  - **Dataset (i) &bull; Training Cohort:** Model parameters are fitted strictly on 100% of the primary training cohort.
+  - **Dataset (ii) &bull; Testing Cohort:** Model accuracy is evaluated on an independent external validation dataset provided via dedicated CSV upload or built-in validation cohorts.
+  - **Strict Zero Data Leakage:** Categorical standardizations and continuous imputation/scaling statistics calculated on Dataset (i) are applied to Dataset (ii) without data leakage. Missing targets and unknown category levels are audited safely.
 
 ### 6. Dual Inference Modes
 - **Single Patient Predictor:**

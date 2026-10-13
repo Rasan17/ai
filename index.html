@@ -283,42 +283,149 @@
                     <div class="card" style="padding: 18px; background: var(--bg-surface-elevated);">
                         <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 12px;">Training Configuration & Hyperparameters</h3>
 
-                        <!-- Train / Test Split Configuration -->
-                        <div style="background: var(--bg-surface); padding: 14px 16px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 16px;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
-                                <label style="font-weight: 700; font-size: 13.5px; color: var(--text-primary);">
-                                    Train / Test Split Configuration
+                        <!-- Training & Testing Protocol Configuration -->
+                        <div style="background: var(--bg-surface); padding: 18px 20px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 20px;">
+                            <div style="margin-bottom: 14px;">
+                                <h4 style="font-size: 14.5px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                    <span>🧪</span> Training &amp; Testing Validation Protocol
+                                </h4>
+                                <p style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+                                    Choose how training and evaluation datasets are provided and configure your retraining protocol.
+                                </p>
+                            </div>
+
+                            <!-- Mode Selector Cards (Option A vs Option B) -->
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-bottom: 18px;">
+                                <!-- Option A Card -->
+                                <label id="protocol-mode-a-label" class="protocol-card selected" style="cursor: pointer; border: 2px solid var(--accent-cyan); background: rgba(6, 182, 212, 0.08); padding: 14px 16px; border-radius: var(--radius-md); display: flex; gap: 12px; align-items: flex-start; transition: var(--transition);">
+                                    <input type="radio" name="validation-mode" id="val-mode-a" value="split" checked style="margin-top: 3px; accent-color: var(--accent-cyan); cursor: pointer;">
+                                    <div>
+                                        <div style="font-size: 13.5px; font-weight: 700; color: var(--text-primary);">
+                                            Option A: Internal Train / Test Split
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.45;">
+                                            Use part of the loaded dataset to train the model, and hold out the remainder to test accuracy. Optionally retrain on 100% afterward.
+                                        </div>
+                                    </div>
                                 </label>
-                                <div style="display: flex; gap: 8px; align-items: center;">
-                                    <span style="font-size: 13px; font-weight: 700; color: var(--accent-cyan);" id="split-display-train">80% Train</span>
-                                    <span style="color: var(--text-muted); font-size: 12px;">/</span>
-                                    <span style="font-size: 13px; font-weight: 700; color: var(--accent-purple);" id="split-display-test">20% Test</span>
+
+                                <!-- Option B Card -->
+                                <label id="protocol-mode-b-label" class="protocol-card" style="cursor: pointer; border: 1px solid var(--border-color); background: var(--bg-surface-subtle); padding: 14px 16px; border-radius: var(--radius-md); display: flex; gap: 12px; align-items: flex-start; transition: var(--transition);">
+                                    <input type="radio" name="validation-mode" id="val-mode-b" value="separate" style="margin-top: 3px; accent-color: var(--accent-purple); cursor: pointer;">
+                                    <div>
+                                        <div style="font-size: 13.5px; font-weight: 700; color: var(--text-primary);">
+                                            Option B: Separate Training &amp; Testing Datasets
+                                        </div>
+                                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.45;">
+                                            Provide separate, independent datasets: (i) Training Cohort for fitting, and (ii) Testing Cohort for rigorous external validation.
+                                        </div>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <!-- Option A Container -->
+                            <div id="option-a-container" style="display: block;">
+                                <!-- Split percentage slider -->
+                                <div style="background: var(--bg-surface-elevated); padding: 14px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-bottom: 14px;">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
+                                        <label style="font-weight: 700; font-size: 13px; color: var(--text-primary);">
+                                            Cohort Partitioning Ratio
+                                        </label>
+                                        <div style="display: flex; gap: 8px; align-items: center;">
+                                            <span style="font-size: 13px; font-weight: 700; color: var(--accent-cyan);" id="split-display-train">80% Train</span>
+                                            <span style="color: var(--text-muted); font-size: 12px;">/</span>
+                                            <span style="font-size: 13px; font-weight: 700; color: var(--accent-purple);" id="split-display-test">20% Test</span>
+                                        </div>
+                                    </div>
+
+                                    <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 10px;">
+                                        <input type="range" id="train-ratio-slider" min="50" max="95" value="80" step="1" style="flex: 1; accent-color: var(--accent-cyan); cursor: pointer;">
+                                    </div>
+
+                                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                        <div class="param-group" style="flex: 1; min-width: 130px;">
+                                            <label style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
+                                            <input type="number" id="train-pct-input" class="control-input" value="80" min="50" max="95" step="1">
+                                        </div>
+                                        <div class="param-group" style="flex: 1; min-width: 130px;">
+                                            <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
+                                            <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
+                                        </div>
+                                        <div style="display: flex; gap: 6px; align-items: flex-end; padding-top: 18px; flex-wrap: wrap;">
+                                            <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="80">80/20 (Default)</button>
+                                            <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="70">70/30</button>
+                                            <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="85">85/15</button>
+                                            <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="90">90/10</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Post-Testing Retraining Decision -->
+                                <div style="background: var(--bg-surface-elevated); padding: 14px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                                    <label style="font-weight: 700; font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 8px;">
+                                        After calculating test accuracy, retrain the model with 100% of the training data?
+                                    </label>
+
+                                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 12.5px; line-height: 1.45;">
+                                            <input type="radio" name="opt-a-retrain" id="retrain-yes" value="yes" checked style="margin-top: 3px; accent-color: var(--accent-emerald); cursor: pointer;">
+                                            <span>
+                                                <strong style="color: var(--accent-emerald);">Yes &mdash; Two-Phase Retraining Protocol (Recommended):</strong> First evaluate and report accuracy/ROC/F1 on your <span id="info-test-pct">20%</span> held-out test split, then automatically retrain the deployed model on <strong>100% of the entire cohort</strong> so live inference leverages all available clinical evidence.
+                                            </span>
+                                        </label>
+                                        <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 12.5px; line-height: 1.45;">
+                                            <input type="radio" name="opt-a-retrain" id="retrain-no" value="no" style="margin-top: 3px; accent-color: var(--accent-cyan); cursor: pointer;">
+                                            <span>
+                                                <strong style="color: var(--text-primary);">No &mdash; Single-Phase Protocol:</strong> Evaluate accuracy on the <span id="info-test-pct-2">20%</span> held-out test split, but keep the deployed model strictly trained on the <span id="info-train-pct">80%</span> partition only (do not retrain on the remaining data).
+                                            </span>
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 10px;">
-                                <input type="range" id="train-ratio-slider" min="50" max="95" value="80" step="1" style="flex: 1; accent-color: var(--accent-cyan); cursor: pointer;">
-                            </div>
+                            <!-- Option B Container -->
+                            <div id="option-b-container" style="display: none;">
+                                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px;">
+                                    <!-- Dataset (i): Training Cohort Status -->
+                                    <div style="background: var(--bg-surface-elevated); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; justify-content: space-between;">
+                                        <div>
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                                <span style="font-size: 11.5px; text-transform: uppercase; font-weight: 700; color: var(--accent-cyan);">Dataset (i) &bull; Training Cohort</span>
+                                                <span class="pill pill-continuous" style="font-size: 10px;">100% Training</span>
+                                            </div>
+                                            <div id="opt-b-train-summary" style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5;">
+                                                Loading training cohort details...
+                                            </div>
+                                        </div>
+                                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 10px; border-top: 1px dashed var(--border-subtle); pt: 8px;">
+                                            💡 Model parameters will be fitted strictly on 100% of this training dataset.
+                                        </div>
+                                    </div>
 
-                            <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 8px;">
-                                <div class="param-group" style="flex: 1; min-width: 140px;">
-                                    <label style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
-                                    <input type="number" id="train-pct-input" class="control-input" value="80" min="50" max="95" step="1">
-                                </div>
-                                <div class="param-group" style="flex: 1; min-width: 140px;">
-                                    <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
-                                    <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
-                                </div>
-                                <div style="display: flex; gap: 6px; align-items: flex-end; padding-top: 18px; flex-wrap: wrap;">
-                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="80">80/20 (Default)</button>
-                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="70">70/30</button>
-                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="85">85/15</button>
-                                    <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="90">90/10</button>
-                                </div>
-                            </div>
+                                    <!-- Dataset (ii): Separate Testing Cohort Upload & Status -->
+                                    <div style="background: var(--bg-surface-elevated); padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                            <span style="font-size: 11.5px; text-transform: uppercase; font-weight: 700; color: var(--accent-purple);">Dataset (ii) &bull; Testing Cohort</span>
+                                            <span id="opt-b-test-badge" class="pill pill-meta" style="font-size: 10px;">Pending Upload</span>
+                                        </div>
 
-                            <div style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-top: 8px; background: rgba(6, 182, 212, 0.05); padding: 8px 12px; border-radius: var(--radius-sm); border-left: 3px solid var(--accent-cyan);">
-                                💡 <strong>Automatic Two-Phase Clinical Retraining:</strong> The algorithm first fits on your selected training split (<span id="info-train-pct">80%</span>) and reports out-of-sample accuracy on the held-out test split (<span id="info-test-pct">20%</span>). Once validation metrics and calibration curves are reported, the model is automatically retrained on <strong>100% of the entire cohort</strong> so that deployed inference maximizes all available patient evidence.
+                                        <div id="test-dropzone" style="border: 2px dashed var(--border-color); border-radius: var(--radius-sm); padding: 14px 10px; text-align: center; cursor: pointer; background: var(--bg-surface); transition: var(--transition);">
+                                            <input type="file" id="test-csv-file-input" accept=".csv" style="display: none;">
+                                            <div style="font-size: 20px; margin-bottom: 4px;">📂</div>
+                                            <div style="font-size: 12.5px; font-weight: 700; color: var(--text-primary);">Click or drag separate Testing CSV here</div>
+                                            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">Must include feature predictors and target outcome</div>
+                                        </div>
+
+                                        <div style="margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                            <span style="font-size: 11px; color: var(--text-muted);">Quick Sample Test:</span>
+                                            <button type="button" id="load-sample-test-btn" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
+                                                Load Built-In Validation Cohort
+                                            </button>
+                                        </div>
+
+                                        <div id="opt-b-test-summary" style="font-size: 12px; color: var(--text-secondary); margin-top: 10px; line-height: 1.45;"></div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
