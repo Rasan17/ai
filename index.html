@@ -333,22 +333,53 @@
                                 <input type="number" id="nn-lr-input" class="control-input" value="0.005" step="0.001">
                             </div>
                             <div class="param-group">
+                                <label>Optimizer</label>
+                                <select id="nn-optimizer-select" class="control-select">
+                                    <option value="adam" selected>Adam (Adaptive Moments - Recommended)</option>
+                                    <option value="rmsprop">RMSprop (Adaptive Rate)</option>
+                                    <option value="sgd">SGD (Stochastic Gradient Descent)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Batch Size</label>
+                                <select id="nn-batch-select" class="control-select">
+                                    <option value="8">8 (Fine Mini-Batch)</option>
+                                    <option value="16" selected>16 (Standard Mini-Batch)</option>
+                                    <option value="32">32 (Smooth Mini-Batch)</option>
+                                    <option value="64">64 (Large Mini-Batch)</option>
+                                    <option value="999999">Full Batch (Entire Cohort)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
                                 <label>Hidden Layer 1 Units</label>
                                 <input type="number" id="nn-h1-input" class="control-input" value="64" min="8" max="256">
                             </div>
                             <div class="param-group">
                                 <label>Hidden Layer 2 Units</label>
-                                <input type="number" id="nn-h2-input" class="control-input" value="32" min="4" max="128">
+                                <input type="number" id="nn-h2-input" class="control-input" value="32" min="0" max="128">
                             </div>
                             <div class="param-group">
-                                <label>Dropout Rate</label>
+                                <label>Hidden Layer 3 Units (Optional)</label>
+                                <input type="number" id="nn-h3-input" class="control-input" value="0" min="0" max="64" placeholder="0 = Disabled">
+                            </div>
+                            <div class="param-group">
+                                <label>Dropout Regularization</label>
                                 <input type="number" id="nn-dropout-input" class="control-input" value="0.1" step="0.05" min="0" max="0.5">
+                            </div>
+                            <div class="param-group">
+                                <label>L2 Weight Decay (λ Penalty)</label>
+                                <select id="nn-l2-select" class="control-select">
+                                    <option value="0">None (λ = 0)</option>
+                                    <option value="0.0001" selected>Light (λ = 0.0001)</option>
+                                    <option value="0.001">Moderate (λ = 0.001)</option>
+                                    <option value="0.01">Strong (λ = 0.01)</option>
+                                </select>
                             </div>
                             <div class="param-group">
                                 <label>Activation Function</label>
                                 <select id="nn-act-select" class="control-select">
-                                    <option value="relu">ReLU</option>
-                                    <option value="tanh">Tanh</option>
+                                    <option value="relu" selected>ReLU (Rectified Linear)</option>
+                                    <option value="tanh">Tanh (Hyperbolic Tangent)</option>
                                     <option value="sigmoid">Sigmoid</option>
                                 </select>
                             </div>
@@ -364,6 +395,25 @@
                                 <label>Maximum Tree Depth</label>
                                 <input type="number" id="rf-depth-input" class="control-input" value="6" min="2" max="15">
                             </div>
+                            <div class="param-group">
+                                <label>Min Samples to Split (Regularization)</label>
+                                <select id="rf-minsplit-select" class="control-select">
+                                    <option value="2" selected>2 (Deep Splits)</option>
+                                    <option value="4">4 (Mild Pruning)</option>
+                                    <option value="8">8 (Moderate Regularization)</option>
+                                    <option value="16">16 (Conservative - Resists Outliers)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Feature Subsampling (Max Features)</label>
+                                <select id="rf-maxfeatures-select" class="control-select">
+                                    <option value="sqrt" selected>√p (Square Root - Recommended)</option>
+                                    <option value="0.5">50% of Features</option>
+                                    <option value="0.75">75% of Features</option>
+                                    <option value="log2">log₂(p) Features</option>
+                                    <option value="all">100% of Features (Bagging Mode)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <!-- Logistic / Ridge Hyperparams -->
@@ -376,6 +426,24 @@
                                 <label>Iterations / Epochs</label>
                                 <input type="number" id="glm-epochs-input" class="control-input" value="150" min="20" max="500">
                             </div>
+                            <div class="param-group">
+                                <label>L2 Ridge Penalty (λ Regularization)</label>
+                                <select id="glm-lambda-select" class="control-select">
+                                    <option value="0">None (Pure Logistic / OLS)</option>
+                                    <option value="0.001">Light (λ = 0.001)</option>
+                                    <option value="0.01" selected>Standard Ridge (λ = 0.01)</option>
+                                    <option value="0.05">Moderate Shrinkage (λ = 0.05)</option>
+                                    <option value="0.1">High Regularization (λ = 0.1)</option>
+                                    <option value="0.5">Aggressive Regularization (λ = 0.5)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Optimization Solver</label>
+                                <select id="glm-solver-select" class="control-select">
+                                    <option value="momentum" selected>Momentum GD (Accelerated Convergence)</option>
+                                    <option value="gd">Standard Batch Gradient Descent</option>
+                                </select>
+                            </div>
                         </div>
 
                         <!-- k-NN Hyperparams -->
@@ -384,16 +452,68 @@
                                 <label>k (Number of Neighbors)</label>
                                 <input type="number" id="knn-k-input" class="control-input" value="5" min="1" max="25">
                             </div>
+                            <div class="param-group">
+                                <label>Distance Metric</label>
+                                <select id="knn-metric-select" class="control-select">
+                                    <option value="euclidean" selected>Euclidean (L₂ Distance)</option>
+                                    <option value="manhattan">Manhattan (L₁ Cityblock - Robust to Outliers)</option>
+                                    <option value="chebyshev">Chebyshev (L∞ Maximum Metric)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Neighbor Weighting Scheme</label>
+                                <select id="knn-weighting-select" class="control-select">
+                                    <option value="uniform" selected>Uniform (All k neighbors vote equally)</option>
+                                    <option value="distance">Distance-Weighted (1/dist - Closer cases vote more heavily)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Gaussian Naive Bayes Hyperparams -->
+                        <div id="nb-params-box" class="hyperparam-box" style="display: none;">
+                            <div class="param-group">
+                                <label>Variance Smoothing (ε Stability)</label>
+                                <select id="nb-smoothing-select" class="control-select">
+                                    <option value="0.000000001">1e-9 (Standard Minimum Epsilon)</option>
+                                    <option value="0.0001" selected>1e-4 (Balanced Clinical Smoothing)</option>
+                                    <option value="0.01">1e-2 (Moderate Noise Tolerance)</option>
+                                    <option value="0.1">0.1 (High Variance Smoothing)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Class Prior Calculation</label>
+                                <select id="nb-priors-select" class="control-select">
+                                    <option value="empirical" selected>Empirical (Cohort Class Frequency)</option>
+                                    <option value="uniform">Balanced / Uniform (Equal Priors 1/K - Adjusts for Class Imbalance)</option>
+                                    <option value="laplace">Laplace-Smoothed Priors (Additive Smoothing)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <!-- Ensemble Hyperparams -->
                         <div id="ensemble-params-box" class="hyperparam-box" style="display: none;">
-                            <div class="param-group" style="grid-column: 1 / -1;">
+                            <div class="param-group">
                                 <label>Ensemble Combination Strategy</label>
                                 <select id="ensemble-voting-select" class="control-select">
                                     <option value="soft">Soft Voting (Calibrated Probability Blending - Recommended)</option>
-                                    <option value="weighted">Performance-Weighted (Auto-weights by validation score)</option>
+                                    <option value="weighted" selected>Performance-Weighted (Auto-weights by validation score)</option>
                                     <option value="hard">Hard Majority Voting (Discrete class vote count)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Validation Weighting Power (γ)</label>
+                                <select id="ens-power-select" class="control-select">
+                                    <option value="1">Linear (w ∝ Score)</option>
+                                    <option value="2" selected>Quadratic (w ∝ Score² - Sharply boosts best models)</option>
+                                    <option value="3">Cubic (w ∝ Score³ - High selectivity)</option>
+                                </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Base Models Capacity Preset</label>
+                                <select id="ens-capacity-select" class="control-select">
+                                    <option value="balanced" selected>Balanced (Optimal Clinical Accuracy & Speed)</option>
+                                    <option value="fast">Fast (Lower trees & epochs for rapid execution)</option>
+                                    <option value="deep">High-Capacity (More trees, deeper MLP representation)</option>
                                 </select>
                             </div>
                             <div class="param-group" style="grid-column: 1 / -1;">

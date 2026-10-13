@@ -44,21 +44,42 @@ Context-aware imputation strategies dynamically selectable based on variable sca
 - **Ordinal:** *Mode / Most Frequent Rank*, *Median Rank*, *Constant Rank*, or *Drop Rows*.
 - **Nominal:** *Mode / Most Frequent Category*, *New Category ("Missing" / "Unknown")*, or *Drop Rows*.
 
-### 4. Deep Learning & Machine Learning Algorithms
+### 4. Deep Learning & Machine Learning Algorithms with Advanced Fine-Tuning
+Every model includes fine-tuning controls specifically designed to maximize predictive accuracy, adapt to patient cohort characteristics, and prevent overfitting:
+
 - **Ensemble Super Learner (Meta-Ensemble):**
   - Clinical consensus ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge Regression, and k-NN.
-  - Supports **Soft Voting** (calibrated class probability blending), **Performance-Weighted Blending** (inversely weighted by validation error), and **Hard Majority Voting**.
-  - Provides clinician transparency with real-time constituent model weights and prediction breakdowns.
+  - **Fine-Tuning Controls:**
+    - Combination Strategy: *Soft Voting* (probability blending), *Performance-Weighted* (dynamic validation weighting), or *Hard Majority Voting*.
+    - Validation Weighting Power ($\gamma$): Linear, Quadratic ($\gamma=2$ sharply boosts best models), or Cubic.
+    - Capacity Presets: *Balanced*, *Fast*, or *High-Capacity Deep Ensemble*.
+    - Dynamic constituent model inclusion checkboxes.
 - **Deep Neural Network (MLP / TensorFlow.js):**
-  - Configurable hidden layers (e.g., 64, 32 units), Dropout regularization, ReLU / Tanh / Sigmoid activations, Adam optimizer, with live epoch-by-epoch loss tracking.
+  - **Fine-Tuning Controls:**
+    - Optimizer selection: *Adam* (Adaptive Moments), *RMSprop*, or *SGD* (Stochastic Gradient Descent).
+    - Batch Size: *8* (Fine mini-batch), *16*, *32*, *64*, or *Full Batch* (entire cohort).
+    - Architecture: Hidden Layer 1, Hidden Layer 2, and optional Hidden Layer 3 units.
+    - Regularization: Dropout rate ($0$ to $0.5$) and L2 Weight Decay ($\lambda = 0, 0.0001, 0.001, 0.01$) to prevent overfitting on clinical cohorts.
+    - Activation: *ReLU*, *Tanh*, or *Sigmoid*.
 - **Random Forest:**
-  - Bootstrap ensemble of decision trees with Gini impurity / variance reduction splits and feature importance rankings.
+  - **Fine-Tuning Controls:**
+    - Number of Estimator Trees ($5$ to $100$) and Maximum Tree Depth ($2$ to $15$).
+    - Minimum Samples to Split ($2, 4, 8, 16$) for leaf node regularization against clinical outliers.
+    - Feature Subsampling Ratio ($\sqrt{p}$, $50\%$, $75\%$, $\log_2(p)$, or $100\%$ bagging mode).
 - **Logistic / Ridge Regression:**
-  - L2-regularized linear/softmax regression providing interpretable odds ratios and regression coefficients.
+  - **Fine-Tuning Controls:**
+    - Learning rate and iterations ($20$ to $500$).
+    - L2 Ridge Penalty ($\lambda = 0, 0.001, 0.01, 0.05, 0.1, 0.5$) for coefficient shrinkage.
+    - Optimization Solver: *Momentum GD* (accelerated gradient descent) or *Standard GD*.
 - **k-Nearest Neighbors (k-NN):**
-  - Non-parametric distance-based instance classifier and regressor in standardized feature space.
+  - **Fine-Tuning Controls:**
+    - Number of Neighbors ($k = 1$ to $25$).
+    - Distance Metric: *Euclidean ($L_2$)*, *Manhattan ($L_1$ Cityblock - robust to outliers)*, or *Chebyshev ($L_\infty$)*.
+    - Neighbor Weighting: *Uniform* or *Distance-Weighted ($1/\text{dist}$)* to give closer patient cases higher influence.
 - **Gaussian Naive Bayes:**
-  - Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
+  - **Fine-Tuning Controls:**
+    - Variance Smoothing ($\epsilon = 10^{-9}, 10^{-4}, 10^{-2}, 0.1$) for numerical stability with sparse or noisy biomarkers.
+    - Class Prior Calculation: *Empirical* (cohort frequency), *Balanced / Uniform* (equal $1/K$ priors to correct for class imbalance), or *Laplace-Smoothed*.
 
 ### 5. Configurable Train/Test Split & Two-Phase 100% Retraining Protocol
 - **Configurable Validation Partition (Default: 80% Train / 20% Test):**

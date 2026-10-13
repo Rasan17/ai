@@ -586,13 +586,22 @@
         const isRF = AppState.selectedModelId === 'rf';
         const isGLM = AppState.selectedModelId === 'glm';
         const isKNN = AppState.selectedModelId === 'knn';
+        const isNB = AppState.selectedModelId === 'nb';
         const isEnsemble = AppState.selectedModelId === 'ensemble';
 
-        document.getElementById('nn-params-box').style.display = isNN ? 'grid' : 'none';
-        document.getElementById('rf-params-box').style.display = isRF ? 'grid' : 'none';
-        document.getElementById('glm-params-box').style.display = isGLM ? 'grid' : 'none';
-        document.getElementById('knn-params-box').style.display = isKNN ? 'grid' : 'none';
-        document.getElementById('ensemble-params-box').style.display = isEnsemble ? 'grid' : 'none';
+        const nnBox = document.getElementById('nn-params-box');
+        const rfBox = document.getElementById('rf-params-box');
+        const glmBox = document.getElementById('glm-params-box');
+        const knnBox = document.getElementById('knn-params-box');
+        const nbBox = document.getElementById('nb-params-box');
+        const ensembleBox = document.getElementById('ensemble-params-box');
+
+        if (nnBox) nnBox.style.display = isNN ? 'grid' : 'none';
+        if (rfBox) rfBox.style.display = isRF ? 'grid' : 'none';
+        if (glmBox) glmBox.style.display = isGLM ? 'grid' : 'none';
+        if (knnBox) knnBox.style.display = isKNN ? 'grid' : 'none';
+        if (nbBox) nbBox.style.display = isNB ? 'grid' : 'none';
+        if (ensembleBox) ensembleBox.style.display = isEnsemble ? 'grid' : 'none';
     }
 
     async function startModelTraining() {
@@ -618,25 +627,49 @@
             const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification);
             AppState.trainTestData = split;
 
-            // Hyperparameters
+            // Hyperparameters for Fine-Tuning
             const hyperparams = {};
             if (AppState.selectedModelId === 'nn') {
                 hyperparams.epochs = parseInt(document.getElementById('nn-epochs-input').value, 10) || 50;
                 hyperparams.learningRate = parseFloat(document.getElementById('nn-lr-input').value) || 0.005;
-                hyperparams.hiddenLayers = [
-                    parseInt(document.getElementById('nn-h1-input').value, 10) || 64,
-                    parseInt(document.getElementById('nn-h2-input').value, 10) || 32
-                ];
+                const h1 = parseInt(document.getElementById('nn-h1-input').value, 10) || 64;
+                const h2 = parseInt(document.getElementById('nn-h2-input').value, 10) || 32;
+                const h3El = document.getElementById('nn-h3-input');
+                const h3 = h3El ? (parseInt(h3El.value, 10) || 0) : 0;
+                hyperparams.hiddenLayers = h3 > 0 ? [h1, h2, h3] : [h1, h2];
                 hyperparams.dropoutRate = parseFloat(document.getElementById('nn-dropout-input').value) || 0.1;
                 hyperparams.activation = document.getElementById('nn-act-select').value || 'relu';
+                const optEl = document.getElementById('nn-optimizer-select');
+                hyperparams.optimizer = optEl ? optEl.value : 'adam';
+                const batchEl = document.getElementById('nn-batch-select');
+                hyperparams.batchSize = batchEl ? (parseInt(batchEl.value, 10) || 16) : 16;
+                const l2El = document.getElementById('nn-l2-select');
+                hyperparams.l2Reg = l2El ? parseFloat(l2El.value) : 0.0001;
             } else if (AppState.selectedModelId === 'rf') {
                 hyperparams.numTrees = parseInt(document.getElementById('rf-trees-input').value, 10) || 30;
                 hyperparams.maxDepth = parseInt(document.getElementById('rf-depth-input').value, 10) || 6;
+                const minSplitEl = document.getElementById('rf-minsplit-select');
+                hyperparams.minSamplesSplit = minSplitEl ? (parseInt(minSplitEl.value, 10) || 2) : 2;
+                const maxFeatEl = document.getElementById('rf-maxfeatures-select');
+                hyperparams.featureRatio = maxFeatEl ? maxFeatEl.value : 'sqrt';
             } else if (AppState.selectedModelId === 'glm') {
                 hyperparams.lr = parseFloat(document.getElementById('glm-lr-input').value) || 0.05;
                 hyperparams.epochs = parseInt(document.getElementById('glm-epochs-input').value, 10) || 150;
+                const lambdaEl = document.getElementById('glm-lambda-select');
+                hyperparams.lambdaL2 = lambdaEl ? parseFloat(lambdaEl.value) : 0.01;
+                const solverEl = document.getElementById('glm-solver-select');
+                hyperparams.solver = solverEl ? solverEl.value : 'momentum';
             } else if (AppState.selectedModelId === 'knn') {
                 hyperparams.k = parseInt(document.getElementById('knn-k-input').value, 10) || 5;
+                const metricEl = document.getElementById('knn-metric-select');
+                hyperparams.metric = metricEl ? metricEl.value : 'euclidean';
+                const weightEl = document.getElementById('knn-weighting-select');
+                hyperparams.weighting = weightEl ? weightEl.value : 'uniform';
+            } else if (AppState.selectedModelId === 'nb') {
+                const smoothEl = document.getElementById('nb-smoothing-select');
+                hyperparams.varSmoothing = smoothEl ? parseFloat(smoothEl.value) : 1e-4;
+                const priorsEl = document.getElementById('nb-priors-select');
+                hyperparams.priorMode = priorsEl ? priorsEl.value : 'empirical';
             } else if (AppState.selectedModelId === 'ensemble') {
                 const selectedBases = [];
                 if (document.getElementById('ens-include-nn').checked) selectedBases.push('nn');
@@ -648,10 +681,12 @@
 
                 hyperparams.voting = document.getElementById('ensemble-voting-select').value || 'soft';
                 hyperparams.baseModels = selectedBases;
-                hyperparams.nnEpochs = 35;
-                hyperparams.rfTrees = 25;
-                hyperparams.rfDepth = 6;
-                hyperparams.knnK = 5;
+
+                const powerEl = document.getElementById('ens-power-select');
+                hyperparams.power = powerEl ? parseFloat(powerEl.value) : 2;
+
+                const capEl = document.getElementById('ens-capacity-select');
+                hyperparams.capacity = capEl ? capEl.value : 'balanced';
             }
 
             // -------------------------------------------------------------
