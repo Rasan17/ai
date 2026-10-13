@@ -318,6 +318,7 @@
             const chk = card.querySelector('.model-select-checkbox');
 
             card.addEventListener('click', (e) => {
+                if (e.target.closest('.model-seed-box')) return;
                 if (e.target === chk) return; // checkbox change will handle it
                 toggleModelSelection(mId);
             });
@@ -433,28 +434,8 @@
         // Train Model
         DOM.trainModelBtn.addEventListener('click', startModelTraining);
 
-        // Reproducibility Seed Dice Roll Listeners
-        const seedRollButtons = [
-            { btnId: 'btn-roll-split-seed', inputId: 'split-seed-input', name: 'Split Seed' },
-            { btnId: 'btn-roll-nn-seed', inputId: 'nn-seed-input', name: 'Neural Net Seed' },
-            { btnId: 'btn-roll-rf-seed', inputId: 'rf-seed-input', name: 'Random Forest Seed' },
-            { btnId: 'btn-roll-glm-seed', inputId: 'glm-seed-input', name: 'GLM Seed' },
-            { btnId: 'btn-roll-knn-seed', inputId: 'knn-seed-input', name: 'k-NN Seed' },
-            { btnId: 'btn-roll-nb-seed', inputId: 'nb-seed-input', name: 'Naive Bayes Seed' },
-            { btnId: 'btn-roll-ensemble-seed', inputId: 'ensemble-seed-input', name: 'Ensemble Master Seed' }
-        ];
-        seedRollButtons.forEach(item => {
-            const btn = document.getElementById(item.btnId);
-            const input = document.getElementById(item.inputId);
-            if (btn && input) {
-                btn.addEventListener('click', () => {
-                    const newSeed = Math.floor(Math.random() * 90000) + 10000;
-                    input.value = newSeed;
-                    input.focus();
-                    showSeedToast(`Generated ${item.name}: ${newSeed}`);
-                });
-            }
-        });
+        // Reproducibility Seed Management (Default 42 vs Custom Seed)
+        setupSeedManagement();
 
         // Single Prediction
         DOM.runSinglePredictBtn.addEventListener('click', runSinglePrediction);
@@ -1025,6 +1006,152 @@
         }
     }
 
+    // =========================================================================
+    // REPRODUCIBILITY SEED MANAGEMENT (DEFAULT 42 VS CUSTOM SEED)
+    // =========================================================================
+    function setupSeedManagement() {
+        const ALL_MODELS = ['nn', 'rf', 'glm', 'knn', 'nb', 'ensemble'];
+
+        // Helper to update a model's seed mode (default 42 vs custom)
+        function setModelSeedMode(mId, mode) {
+            const cardDefaultRadio = document.querySelector(`input[name="seed-mode-${mId}"][value="default"]`);
+            const cardCustomRadio = document.querySelector(`input[name="seed-mode-${mId}"][value="custom"]`);
+            const hpDefaultRadio = document.querySelector(`input[name="hp-seed-mode-${mId}"][value="default"]`);
+            const hpCustomRadio = document.querySelector(`input[name="hp-seed-mode-${mId}"][value="custom"]`);
+            const cardCustomRow = document.getElementById(`custom-seed-row-${mId}`);
+            const hpCustomWrap = document.getElementById(`hp-seed-wrap-${mId}`);
+            const cardInput = document.getElementById(`${mId}-card-seed-input`);
+            const hpInput = document.getElementById(`${mId}-seed-input`);
+
+            if (mode === 'default') {
+                if (cardDefaultRadio) cardDefaultRadio.checked = true;
+                if (hpDefaultRadio) hpDefaultRadio.checked = true;
+                if (cardCustomRow) cardCustomRow.style.display = 'none';
+                if (hpCustomWrap) hpCustomWrap.style.display = 'none';
+                if (cardInput) cardInput.value = 42;
+                if (hpInput) hpInput.value = 42;
+            } else {
+                if (cardCustomRadio) cardCustomRadio.checked = true;
+                if (hpCustomRadio) hpCustomRadio.checked = true;
+                if (cardCustomRow) cardCustomRow.style.display = 'flex';
+                if (hpCustomWrap) hpCustomWrap.style.display = 'flex';
+                if (cardInput && (!cardInput.value || cardInput.value === '42')) cardInput.focus();
+                else if (hpInput) hpInput.focus();
+            }
+        }
+
+        // Attach listeners for Card Seed Radios and Hyperparam Box Seed Radios
+        ALL_MODELS.forEach(mId => {
+            const cardRadios = document.querySelectorAll(`input[name="seed-mode-${mId}"]`);
+            cardRadios.forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    setModelSeedMode(mId, e.target.value);
+                });
+            });
+
+            const hpRadios = document.querySelectorAll(`input[name="hp-seed-mode-${mId}"]`);
+            hpRadios.forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    setModelSeedMode(mId, e.target.value);
+                });
+            });
+
+            // Two-way sync for custom seed inputs
+            const cardInput = document.getElementById(`${mId}-card-seed-input`);
+            const hpInput = document.getElementById(`${mId}-seed-input`);
+
+            if (cardInput && hpInput) {
+                cardInput.addEventListener('input', (e) => {
+                    hpInput.value = e.target.value;
+                });
+                hpInput.addEventListener('input', (e) => {
+                    cardInput.value = e.target.value;
+                });
+            }
+
+            // Dice roll buttons for Card
+            const cardDice = document.querySelector(`.card-btn-roll-seed[data-model="${mId}"]`);
+            if (cardDice) {
+                cardDice.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const newSeed = Math.floor(Math.random() * 90000) + 10000;
+                    if (cardInput) cardInput.value = newSeed;
+                    if (hpInput) hpInput.value = newSeed;
+                    showSeedToast(`Generated ${MODEL_INFO[mId]?.name || mId} Seed: ${newSeed}`);
+                });
+            }
+
+            // Dice roll buttons for Hyperparam Box
+            const hpDice = document.getElementById(`btn-roll-${mId}-seed`);
+            if (hpDice) {
+                hpDice.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const newSeed = Math.floor(Math.random() * 90000) + 10000;
+                    if (cardInput) cardInput.value = newSeed;
+                    if (hpInput) hpInput.value = newSeed;
+                    showSeedToast(`Generated ${MODEL_INFO[mId]?.name || mId} Seed: ${newSeed}`);
+                });
+            }
+        });
+
+        // Split Seed (Option A) Controls
+        const splitRadios = document.querySelectorAll('input[name="split-seed-mode"]');
+        const splitCustomWrap = document.getElementById('split-seed-custom-wrap');
+        const splitInput = document.getElementById('split-seed-input');
+        const splitDice = document.getElementById('btn-roll-split-seed');
+
+        splitRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                if (e.target.value === 'default') {
+                    if (splitCustomWrap) splitCustomWrap.style.display = 'none';
+                    if (splitInput) splitInput.value = 42;
+                } else {
+                    if (splitCustomWrap) splitCustomWrap.style.display = 'flex';
+                    if (splitInput) splitInput.focus();
+                }
+            });
+        });
+
+        if (splitDice && splitInput) {
+            splitDice.addEventListener('click', () => {
+                const newSeed = Math.floor(Math.random() * 90000) + 10000;
+                splitInput.value = newSeed;
+                splitInput.focus();
+                showSeedToast(`Generated Split Seed: ${newSeed}`);
+            });
+        }
+
+        // Quick Global Seed Action Buttons
+        const btnAllDefault = document.getElementById('btn-all-default-seed');
+        if (btnAllDefault) {
+            btnAllDefault.addEventListener('click', () => {
+                ALL_MODELS.forEach(mId => setModelSeedMode(mId, 'default'));
+                const defSplitRadio = document.getElementById('split-seed-mode-default');
+                if (defSplitRadio) {
+                    defSplitRadio.checked = true;
+                    if (splitCustomWrap) splitCustomWrap.style.display = 'none';
+                    if (splitInput) splitInput.value = 42;
+                }
+                showSeedToast('All models set to Default Seed (42)');
+            });
+        }
+
+        const btnAllRandom = document.getElementById('btn-all-random-seed');
+        if (btnAllRandom) {
+            btnAllRandom.addEventListener('click', () => {
+                ALL_MODELS.forEach(mId => {
+                    setModelSeedMode(mId, 'custom');
+                    const randSeed = Math.floor(Math.random() * 90000) + 10000;
+                    const cInp = document.getElementById(`${mId}-card-seed-input`);
+                    const hInp = document.getElementById(`${mId}-seed-input`);
+                    if (cInp) cInp.value = randSeed;
+                    if (hInp) hInp.value = randSeed;
+                });
+                showSeedToast('All models assigned individual random seeds 🎲');
+            });
+        }
+    }
+
     function getHyperparamsForModel(modelId, prep) {
         const hp = {};
         if (modelId === 'nn') {
@@ -1085,16 +1212,21 @@
             hp.capacity = capEl ? capEl.value : 'balanced';
         }
 
-        // Extract Reproducibility Seed for this model (or auto-generate and populate for user reference)
-        const seedInput = document.getElementById(`${modelId}-seed-input`);
-        let seedVal = null;
-        if (seedInput && seedInput.value !== '' && !isNaN(parseInt(seedInput.value, 10))) {
-            seedVal = parseInt(seedInput.value, 10);
-        } else {
-            // Auto-generate high-entropy integer seed
-            seedVal = Math.floor(Math.random() * 90000) + 10000;
-            if (seedInput) {
-                seedInput.value = seedVal;
+        // Extract Reproducibility Seed for this model (Default 42 vs Custom Seed)
+        const cardModeRadio = document.querySelector(`input[name="seed-mode-${modelId}"]:checked`);
+        const hpModeRadio = document.querySelector(`input[name="hp-seed-mode-${modelId}"]:checked`);
+        const isDefault = (cardModeRadio ? cardModeRadio.value === 'default' : true) &&
+                          (hpModeRadio ? hpModeRadio.value === 'default' : true);
+
+        let seedVal = 42;
+        if (!isDefault) {
+            const cardInput = document.getElementById(`${modelId}-card-seed-input`);
+            const hpInput = document.getElementById(`${modelId}-seed-input`);
+            const inputVal = (cardInput && cardInput.value !== '') ? cardInput.value : (hpInput ? hpInput.value : '');
+            if (inputVal !== '' && !isNaN(parseInt(inputVal, 10))) {
+                seedVal = parseInt(inputVal, 10);
+            } else {
+                seedVal = 42;
             }
         }
         hp.seed = seedVal;
@@ -1141,14 +1273,17 @@
                 const trainRatio = Math.min(0.95, Math.max(0.50, (trainPct || 80) / 100));
                 const testPct = Math.round((1 - trainRatio) * 100);
 
-                // Option A Reproducibility Seed for train/test split
-                const splitSeedInput = document.getElementById('split-seed-input');
-                let splitSeed = null;
-                if (splitSeedInput && splitSeedInput.value !== '' && !isNaN(parseInt(splitSeedInput.value, 10))) {
-                    splitSeed = parseInt(splitSeedInput.value, 10);
-                } else {
-                    splitSeed = Math.floor(Math.random() * 90000) + 10000;
-                    if (splitSeedInput) splitSeedInput.value = splitSeed;
+                // Option A Reproducibility Seed for train/test split (Default 42 vs Custom Seed)
+                const splitModeRadio = document.querySelector('input[name="split-seed-mode"]:checked');
+                const isSplitDefault = splitModeRadio ? splitModeRadio.value === 'default' : true;
+                let splitSeed = 42;
+                if (!isSplitDefault) {
+                    const splitSeedInput = document.getElementById('split-seed-input');
+                    if (splitSeedInput && splitSeedInput.value !== '' && !isNaN(parseInt(splitSeedInput.value, 10))) {
+                        splitSeed = parseInt(splitSeedInput.value, 10);
+                    } else {
+                        splitSeed = 42;
+                    }
                 }
 
                 const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification, splitSeed);

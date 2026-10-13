@@ -1045,6 +1045,94 @@ body {
     line-height: 1.35;
 }
 
+/* Model Card Seed Box & Toggle Styles */
+.model-seed-box {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-color);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    cursor: default;
+}
+
+.model-seed-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.model-seed-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.seed-mode-selector {
+    display: inline-flex;
+    gap: 4px;
+    background: var(--bg-surface-subtle);
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+}
+
+.seed-mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    padding: 3px 8px;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    transition: var(--transition-fast);
+}
+
+.seed-mode-pill:hover {
+    color: var(--text-primary);
+}
+
+.seed-mode-pill:has(input:checked),
+.seed-mode-pill.active {
+    background: rgba(6, 182, 212, 0.16);
+    color: var(--accent-cyan);
+    font-weight: 700;
+}
+
+.seed-mode-pill input[type="radio"] {
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+    margin: 0;
+    width: 13px;
+    height: 13px;
+}
+
+.custom-seed-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.custom-seed-row .seed-input-wrap .control-input {
+    font-size: 12px;
+    padding: 5px 8px;
+    height: 32px;
+}
+
+.custom-seed-row .btn-roll-seed {
+    padding: 5px 8px;
+    height: 32px;
+    font-size: 12px;
+}
+
 .seed-pill {
     display: inline-flex;
     align-items: center;

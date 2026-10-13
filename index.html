@@ -238,6 +238,12 @@
                                 <button type="button" id="btn-clear-model-selection" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
                                     Reset Selection
                                 </button>
+                                <button type="button" id="btn-all-default-seed" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;" title="Set all models to default seed 42">
+                                    🌱 All Default Seeds (42)
+                                </button>
+                                <button type="button" id="btn-all-random-seed" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;" title="Assign distinct random seeds to all models">
+                                    🎲 Randomize All
+                                </button>
                             </div>
                         </div>
 
@@ -282,6 +288,29 @@
                             <div class="model-card-desc">
                                 Multi-Layer Perceptron (MLP) with dense hidden layers, dropout regularization, Adam optimizer and live epoch loss tracking.
                             </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="nn" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-nn" value="default" class="seed-mode-radio" data-model="nn" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-nn" value="custom" class="seed-mode-radio" data-model="nn">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-nn" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="nn-card-seed-input" class="control-input card-seed-input" data-model="nn" placeholder="Custom seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="nn" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Custom integer seed for exact reproducibility.</span>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="model-card" data-model-id="rf">
@@ -294,6 +323,29 @@
                             </div>
                             <div class="model-card-desc">
                                 Ensemble of bootstrap decision trees with Gini/variance reduction splits and feature importance quantification.
+                            </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="rf" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-rf" value="default" class="seed-mode-radio" data-model="rf" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-rf" value="custom" class="seed-mode-radio" data-model="rf">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-rf" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="rf-card-seed-input" class="control-input card-seed-input" data-model="rf" placeholder="Custom seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="rf" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Custom bootstrap and feature split seed.</span>
+                                </div>
                             </div>
                         </div>
 
@@ -308,6 +360,29 @@
                             <div class="model-card-desc">
                                 L2-regularized linear/softmax regression providing interpretable odds ratios and regression coefficients.
                             </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="glm" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-glm" value="default" class="seed-mode-radio" data-model="glm" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-glm" value="custom" class="seed-mode-radio" data-model="glm">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-glm" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="glm-card-seed-input" class="control-input card-seed-input" data-model="glm" placeholder="Custom seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="glm" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Custom seed for parameter initialization.</span>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="model-card" data-model-id="knn">
@@ -320,6 +395,29 @@
                             </div>
                             <div class="model-card-desc">
                                 Non-parametric local distance classification using Euclidean metric in standardized feature space.
+                            </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="knn" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-knn" value="default" class="seed-mode-radio" data-model="knn" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-knn" value="custom" class="seed-mode-radio" data-model="knn">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-knn" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="knn-card-seed-input" class="control-input card-seed-input" data-model="knn" placeholder="Custom seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="knn" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Custom seed for equidistant ranking tie-breaks.</span>
+                                </div>
                             </div>
                         </div>
 
@@ -334,6 +432,29 @@
                             <div class="model-card-desc">
                                 Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
                             </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="nb" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-nb" value="default" class="seed-mode-radio" data-model="nb" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-nb" value="custom" class="seed-mode-radio" data-model="nb">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-nb" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="nb-card-seed-input" class="control-input card-seed-input" data-model="nb" placeholder="Custom seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="nb" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Reference seed recorded for provenance.</span>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="model-card" data-model-id="ensemble">
@@ -346,6 +467,29 @@
                             </div>
                             <div class="model-card-desc">
                                 Clinical meta-ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge, and k-NN via soft probability blending or performance-weighted voting.
+                            </div>
+                            <!-- Model Seed Control -->
+                            <div class="model-seed-box" data-model="ensemble" onclick="event.stopPropagation()">
+                                <div class="model-seed-header">
+                                    <span class="model-seed-title">🌱 Master Seed:</span>
+                                    <div class="seed-mode-selector">
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-ensemble" value="default" class="seed-mode-radio" data-model="ensemble" checked>
+                                            <span>Default (42)</span>
+                                        </label>
+                                        <label class="seed-mode-pill">
+                                            <input type="radio" name="seed-mode-ensemble" value="custom" class="seed-mode-radio" data-model="ensemble">
+                                            <span>Custom</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="custom-seed-row" id="custom-seed-row-ensemble" style="display: none;">
+                                    <div class="seed-input-wrap">
+                                        <input type="number" id="ensemble-card-seed-input" class="control-input card-seed-input" data-model="ensemble" placeholder="Custom master seed" value="42">
+                                        <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="ensemble" title="Generate random seed">🎲</button>
+                                    </div>
+                                    <span class="seed-hint">Propagates deterministic seeds to constituent models.</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -435,13 +579,23 @@
                                             <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
                                             <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
                                         </div>
-                                        <div class="param-group" style="flex: 1; min-width: 160px;">
+                                        <div class="param-group" style="flex: 1; min-width: 170px;">
                                             <label style="font-size: 11px; text-transform: uppercase;">Split Seed (Reproducibility)</label>
-                                            <div class="seed-input-wrap">
-                                                <input type="number" id="split-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                            <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                                <label class="seed-mode-pill" style="font-size: 10px; padding: 2px 6px;">
+                                                    <input type="radio" name="split-seed-mode" value="default" id="split-seed-mode-default" checked>
+                                                    <span>Default (42)</span>
+                                                </label>
+                                                <label class="seed-mode-pill" style="font-size: 10px; padding: 2px 6px;">
+                                                    <input type="radio" name="split-seed-mode" value="custom" id="split-seed-mode-custom">
+                                                    <span>Custom</span>
+                                                </label>
+                                            </div>
+                                            <div class="seed-input-wrap" id="split-seed-custom-wrap" style="display: none;">
+                                                <input type="number" id="split-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                                 <button type="button" class="btn-roll-seed" id="btn-roll-split-seed" title="Generate random split seed">🎲</button>
                                             </div>
-                                            <div class="seed-hint">Leave blank to auto-generate.</div>
+                                            <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                                         </div>
                                         <div style="display: flex; gap: 6px; align-items: flex-end; padding-top: 18px; flex-wrap: wrap;">
                                             <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="80">80/20 (Default)</button>
@@ -584,11 +738,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Random Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="nn-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-nn" value="default" class="hp-seed-mode-radio" data-model="nn" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-nn" value="custom" class="hp-seed-mode-radio" data-model="nn">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-nn" style="display: none;">
+                                    <input type="number" id="nn-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-nn-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Leave blank to auto-generate. Exact seed will be output for reference.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                         </div>
 
@@ -623,11 +787,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Random Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="rf-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-rf" value="default" class="hp-seed-mode-radio" data-model="rf" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-rf" value="custom" class="hp-seed-mode-radio" data-model="rf">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-rf" style="display: none;">
+                                    <input type="number" id="rf-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-rf-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Controls bootstrap resampling and feature subsampling.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                         </div>
 
@@ -661,11 +835,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Random Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="glm-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-glm" value="default" class="hp-seed-mode-radio" data-model="glm" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-glm" value="custom" class="hp-seed-mode-radio" data-model="glm">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-glm" style="display: none;">
+                                    <input type="number" id="glm-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-glm-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Controls parameter initialization and stochastic updates.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                         </div>
 
@@ -692,11 +876,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Random Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="knn-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-knn" value="default" class="hp-seed-mode-radio" data-model="knn" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-knn" value="custom" class="hp-seed-mode-radio" data-model="knn">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-knn" style="display: none;">
+                                    <input type="number" id="knn-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-knn-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Used for tie-breaking equidistant neighbor rankings.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                         </div>
 
@@ -721,11 +915,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Random Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="nb-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-nb" value="default" class="hp-seed-mode-radio" data-model="nb" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-nb" value="custom" class="hp-seed-mode-radio" data-model="nb">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-nb" style="display: none;">
+                                    <input type="number" id="nb-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-nb-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Reference seed recorded for analysis provenance.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                         </div>
 
@@ -757,11 +961,21 @@
                             </div>
                             <div class="param-group">
                                 <label>Master Seed (Reproducibility)</label>
-                                <div class="seed-input-wrap">
-                                    <input type="number" id="ensemble-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-ensemble" value="default" class="hp-seed-mode-radio" data-model="ensemble" checked>
+                                        <span>Default (42)</span>
+                                    </label>
+                                    <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
+                                        <input type="radio" name="hp-seed-mode-ensemble" value="custom" class="hp-seed-mode-radio" data-model="ensemble">
+                                        <span>Custom Seed</span>
+                                    </label>
+                                </div>
+                                <div class="seed-input-wrap" id="hp-seed-wrap-ensemble" style="display: none;">
+                                    <input type="number" id="ensemble-seed-input" class="control-input" placeholder="e.g. 42" value="42">
                                     <button type="button" class="btn-roll-seed" id="btn-roll-ensemble-seed" title="Generate random seed">🎲</button>
                                 </div>
-                                <div class="seed-hint">Propagates deterministic derived seeds to all base models.</div>
+                                <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                             <div class="param-group" style="grid-column: 1 / -1;">
                                 <label>Constituent Base Models to Include</label>
