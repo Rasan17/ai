@@ -1708,6 +1708,9 @@
                             <div style="background: var(--bg-surface-subtle); padding: 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); margin-top: 10px;">
                                 <div>MAE: <strong>${rEval.mae.toFixed(3)}</strong> &bull; MSE: <strong>${rEval.mse.toFixed(3)}</strong></div>
                                 <div style="margin-top: 4px;">Residual Variance: <strong>${(rEval.mse / (rEval.r2 || 1)).toFixed(3)}</strong></div>
+                                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color); font-size: 11px; color: var(--text-muted); line-height: 1.45;">
+                                    💡 <em>Continuous Numeric Target (${prep.targetCol}):</em> Confusion matrices (2-by-2 tables) are specifically for <strong>Classification</strong> outcomes (discrete binary/multi-class categories). To obtain a 2-by-2 Confusion Matrix, change your Target scale to <strong>Nominal</strong> or <strong>Ordinal</strong> in <strong>Step 2</strong>.
+                                </div>
                             </div>
                         `;
                     }
