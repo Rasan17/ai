@@ -216,11 +216,67 @@
                         </div>
                     </div>
 
+                    <!-- Model Testing Scope Selector (One Model, Multiple Models, All Models) -->
+                    <div style="background: var(--bg-surface-elevated); padding: 14px 18px; border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px;">
+                            <div>
+                                <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+                                    <span>🎯</span> Model Testing Scope &amp; Tournament Selection
+                                </h4>
+                                <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                                    Choose whether to train and benchmark a single algorithm, a custom subset of models, or all available models simultaneously.
+                                </p>
+                            </div>
+                            <!-- Quick action presets -->
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                                <button type="button" id="btn-select-all-models" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
+                                    ⚡ Select All Models
+                                </button>
+                                <button type="button" id="btn-select-top-models" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
+                                    ✨ DL + Ensemble + RF
+                                </button>
+                                <button type="button" id="btn-clear-model-selection" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
+                                    Reset Selection
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Scope Radio Pills -->
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;">
+                            <label id="scope-single-label" class="scope-pill active-single">
+                                <input type="radio" name="model-scope" id="scope-single" value="single" checked style="accent-color: var(--accent-cyan); cursor: pointer;">
+                                <div>
+                                    <div style="font-size: 13px; font-weight: 700; color: var(--text-primary);">Test One Model</div>
+                                    <div style="font-size: 11px; color: var(--text-secondary);">Focus on a single algorithm</div>
+                                </div>
+                            </label>
+
+                            <label id="scope-multi-label" class="scope-pill">
+                                <input type="radio" name="model-scope" id="scope-multi" value="multi" style="accent-color: var(--accent-purple); cursor: pointer;">
+                                <div>
+                                    <div style="font-size: 13px; font-weight: 700; color: var(--text-primary);">Test More Than One Model</div>
+                                    <div style="font-size: 11px; color: var(--text-secondary);">Select custom algorithms to test</div>
+                                </div>
+                            </label>
+
+                            <label id="scope-all-label" class="scope-pill">
+                                <input type="radio" name="model-scope" id="scope-all" value="all" style="accent-color: var(--accent-emerald); cursor: pointer;">
+                                <div>
+                                    <div style="font-size: 13px; font-weight: 700; color: var(--text-primary);">Test All Models</div>
+                                    <div style="font-size: 11px; color: var(--text-secondary);">Benchmark all 6 models in tournament</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
                     <!-- Model Cards Grid -->
                     <div class="model-cards-grid">
                         <div class="model-card selected" data-model-id="nn">
                             <div class="model-card-header">
-                                <span class="model-card-title">Deep Neural Network (MLP)</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="nn" checked style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">Deep Neural Network (MLP)</span>
+                                </div>
                                 <span class="pill pill-target">Deep Learning</span>
                             </div>
                             <div class="model-card-desc">
@@ -230,7 +286,10 @@
 
                         <div class="model-card" data-model-id="rf">
                             <div class="model-card-header">
-                                <span class="model-card-title">Random Forest</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="rf" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">Random Forest</span>
+                                </div>
                                 <span class="pill pill-feature">Ensemble</span>
                             </div>
                             <div class="model-card-desc">
@@ -240,7 +299,10 @@
 
                         <div class="model-card" data-model-id="glm">
                             <div class="model-card-header">
-                                <span class="model-card-title">Logistic / Ridge Regression</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="glm" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">Logistic / Ridge Regression</span>
+                                </div>
                                 <span class="pill pill-continuous">Generalized Linear</span>
                             </div>
                             <div class="model-card-desc">
@@ -250,7 +312,10 @@
 
                         <div class="model-card" data-model-id="knn">
                             <div class="model-card-header">
-                                <span class="model-card-title">k-Nearest Neighbors (k-NN)</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="knn" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">k-Nearest Neighbors (k-NN)</span>
+                                </div>
                                 <span class="pill pill-ordinal">Instance-Based</span>
                             </div>
                             <div class="model-card-desc">
@@ -260,7 +325,10 @@
 
                         <div class="model-card" data-model-id="nb">
                             <div class="model-card-header">
-                                <span class="model-card-title">Gaussian Naive Bayes</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="nb" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">Gaussian Naive Bayes</span>
+                                </div>
                                 <span class="pill pill-nominal">Probabilistic</span>
                             </div>
                             <div class="model-card-desc">
@@ -270,7 +338,10 @@
 
                         <div class="model-card" data-model-id="ensemble">
                             <div class="model-card-header">
-                                <span class="model-card-title">Ensemble Super Learner</span>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" class="model-select-checkbox" data-model-id="ensemble" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
+                                    <span class="model-card-title">Ensemble Super Learner</span>
+                                </div>
                                 <span class="pill pill-target" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(6, 182, 212, 0.2)); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.4);">Meta-Ensemble</span>
                             </div>
                             <div class="model-card-desc">
@@ -281,7 +352,20 @@
 
                     <!-- Hyperparameters Box -->
                     <div class="card" style="padding: 18px; background: var(--bg-surface-elevated);">
-                        <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 12px;">Training Configuration & Hyperparameters</h3>
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px;">
+                            <h3 style="font-size: 14px; font-weight: 700;">Training Configuration &amp; Fine-Tuning Hyperparameters</h3>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 11.5px; color: var(--text-muted);">Tune Parameters for:</span>
+                                <select id="active-hyperparam-select" class="control-select" style="font-size: 12px; padding: 4px 10px;">
+                                    <option value="nn" selected>Deep Neural Network (MLP)</option>
+                                    <option value="rf">Random Forest</option>
+                                    <option value="glm">Logistic / Ridge Regression</option>
+                                    <option value="knn">k-Nearest Neighbors (k-NN)</option>
+                                    <option value="nb">Gaussian Naive Bayes</option>
+                                    <option value="ensemble">Ensemble Super Learner</option>
+                                </select>
+                            </div>
+                        </div>
 
                         <!-- Training & Testing Protocol Configuration -->
                         <div style="background: var(--bg-surface); padding: 18px 20px; border-radius: var(--radius-md); border: 1px solid var(--border-subtle); margin-bottom: 20px;">
@@ -661,9 +745,17 @@
                     <!-- Results Dashboard -->
                     <div id="results-dashboard" class="results-dashboard" style="display: none;">
                         <div id="retrain-status-banner"></div>
-                        <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation &amp; Accuracy Metrics</h3>
+
+                        <!-- Multi-Model Benchmark Leaderboard Comparison -->
+                        <div id="multi-model-leaderboard-container" style="display: none;"></div>
+
+                        <!-- Single Model Summary Title & Metrics Row -->
+                        <h3 id="dashboard-single-heading" style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation &amp; Accuracy Metrics</h3>
                         <div id="metrics-summary-row" class="metrics-summary-row"></div>
                         <div id="eval-detail-container"></div>
+
+                        <!-- Multi-Model Confusion Matrix & Accuracy Comparison Grid -->
+                        <div id="multi-model-cm-container" style="display: none;"></div>
                     </div>
 
                     <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 10px;">

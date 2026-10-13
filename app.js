@@ -30,8 +30,25 @@
         validationMode: 'split', // 'split' (Option A) or 'separate' (Option B)
         separateTestRawRows: null,
         separateTestFileName: '',
-        separateTestData: null
+        separateTestData: null,
+        // Model Testing Scope (One Model, Multiple Models, All Models)
+        modelScope: 'single', // 'single', 'multi', 'all'
+        selectedModelIds: ['nn'],
+        activeHyperparamModelId: 'nn',
+        allTestedResults: null,
+        deployedModelId: 'nn'
     };
+
+    // Model Metadata & Lookup
+    const MODEL_INFO = {
+        nn: { name: 'Deep Neural Network (MLP)', short: 'Neural Network', tag: 'Deep Learning', pillClass: 'pill-target', icon: '🧠' },
+        rf: { name: 'Random Forest', short: 'Random Forest', tag: 'Ensemble Trees', pillClass: 'pill-feature', icon: '🌲' },
+        glm: { name: 'Logistic / Ridge Regression', short: 'GLM / Regression', tag: 'Generalized Linear', pillClass: 'pill-continuous', icon: '📈' },
+        knn: { name: 'k-Nearest Neighbors (k-NN)', short: 'k-NN', tag: 'Instance-Based', pillClass: 'pill-ordinal', icon: '🎯' },
+        nb: { name: 'Gaussian Naive Bayes', short: 'Naive Bayes', tag: 'Probabilistic', pillClass: 'pill-nominal', icon: '🎲' },
+        ensemble: { name: 'Ensemble Super Learner', short: 'Ensemble Meta-Learner', tag: 'Meta-Ensemble', pillClass: 'pill-target', icon: '⚡' }
+    };
+    const ALL_MODEL_IDS = ['nn', 'rf', 'glm', 'knn', 'nb', 'ensemble'];
 
     // DOM Elements
     const DOM = {};
@@ -57,7 +74,20 @@
         DOM.imputeAuditBox = document.getElementById('impute-audit-box');
         DOM.toStep4Btn = document.getElementById('to-step-4-btn');
         
+        // Model Selection & Scope Elements
         DOM.modelCards = document.querySelectorAll('.model-card');
+        DOM.modelSelectCheckboxes = document.querySelectorAll('.model-select-checkbox');
+        DOM.scopeSingle = document.getElementById('scope-single');
+        DOM.scopeMulti = document.getElementById('scope-multi');
+        DOM.scopeAll = document.getElementById('scope-all');
+        DOM.scopeSingleLabel = document.getElementById('scope-single-label');
+        DOM.scopeMultiLabel = document.getElementById('scope-multi-label');
+        DOM.scopeAllLabel = document.getElementById('scope-all-label');
+        DOM.btnSelectAllModels = document.getElementById('btn-select-all-models');
+        DOM.btnSelectTopModels = document.getElementById('btn-select-top-models');
+        DOM.btnClearModelSelection = document.getElementById('btn-clear-model-selection');
+        DOM.activeHyperparamSelect = document.getElementById('active-hyperparam-select');
+
         DOM.trainModelBtn = document.getElementById('train-model-btn');
         DOM.trainStatus = document.getElementById('train-status');
         DOM.trainLossChartCanvas = document.getElementById('train-loss-chart');
@@ -65,6 +95,10 @@
         DOM.metricsSummaryRow = document.getElementById('metrics-summary-row');
         DOM.evaluationDetailContainer = document.getElementById('eval-detail-container');
         DOM.retrainStatusBanner = document.getElementById('retrain-status-banner');
+        DOM.multiModelLeaderboardContainer = document.getElementById('multi-model-leaderboard-container');
+        DOM.multiModelCmContainer = document.getElementById('multi-model-cm-container');
+        DOM.dashboardSingleHeading = document.getElementById('dashboard-single-heading');
+
         DOM.toStep5Btn = document.getElementById('to-step-5-btn');
         DOM.toStep6Btn = document.getElementById('to-step-6-btn');
         
@@ -149,15 +183,160 @@
         // Imputation execution
         DOM.applyImputationBtn.addEventListener('click', executeImputation);
 
-        // Model Selection
-        DOM.modelCards.forEach(card => {
-            card.addEventListener('click', () => {
-                DOM.modelCards.forEach(c => c.classList.remove('selected'));
-                card.classList.add('selected');
-                AppState.selectedModelId = card.dataset.modelId;
-                updateHyperparamsVisibility();
+        // =========================================================================
+        // MODEL TESTING SCOPE & SELECTION (Single, Multi, All Models)
+        // =========================================================================
+        function setModelScope(scope) {
+            AppState.modelScope = scope;
+            if (DOM.scopeSingle) DOM.scopeSingle.checked = (scope === 'single');
+            if (DOM.scopeMulti) DOM.scopeMulti.checked = (scope === 'multi');
+            if (DOM.scopeAll) DOM.scopeAll.checked = (scope === 'all');
+
+            if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.classList.toggle('active-single', scope === 'single');
+            if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.toggle('active-multi', scope === 'multi');
+            if (DOM.scopeAllLabel) DOM.scopeAllLabel.classList.toggle('active-all', scope === 'all');
+
+            if (scope === 'single') {
+                const singleId = AppState.selectedModelId || AppState.selectedModelIds[0] || 'nn';
+                AppState.selectedModelIds = [singleId];
+                AppState.selectedModelId = singleId;
+                AppState.activeHyperparamModelId = singleId;
+            } else if (scope === 'all') {
+                AppState.selectedModelIds = ALL_MODEL_IDS.slice();
+            } else if (scope === 'multi') {
+                if (AppState.selectedModelIds.length <= 1) {
+                    AppState.selectedModelIds = ['ensemble', 'rf', 'nn'];
+                }
+            }
+            syncModelCardSelections();
+            updateTrainButtonLabel();
+        }
+
+        function syncModelCardSelections() {
+            DOM.modelCards.forEach(card => {
+                const mId = card.dataset.modelId;
+                const isSelected = AppState.selectedModelIds.includes(mId);
+                card.classList.toggle('selected', isSelected);
+                const chk = card.querySelector('.model-select-checkbox');
+                if (chk) chk.checked = isSelected;
             });
+
+            if (DOM.activeHyperparamSelect) {
+                if (AppState.selectedModelIds.includes(AppState.activeHyperparamModelId)) {
+                    DOM.activeHyperparamSelect.value = AppState.activeHyperparamModelId;
+                } else if (AppState.selectedModelIds.length > 0) {
+                    AppState.activeHyperparamModelId = AppState.selectedModelIds[0];
+                    DOM.activeHyperparamSelect.value = AppState.activeHyperparamModelId;
+                }
+            }
+            updateHyperparamsVisibility(AppState.activeHyperparamModelId);
+        }
+
+        function toggleModelSelection(mId) {
+            if (AppState.modelScope === 'single') {
+                AppState.selectedModelId = mId;
+                AppState.selectedModelIds = [mId];
+                AppState.activeHyperparamModelId = mId;
+            } else {
+                const idx = AppState.selectedModelIds.indexOf(mId);
+                if (idx >= 0) {
+                    if (AppState.selectedModelIds.length > 1) {
+                        AppState.selectedModelIds.splice(idx, 1);
+                    } else {
+                        // Prevent deselecting last remaining model
+                        return;
+                    }
+                } else {
+                    AppState.selectedModelIds.push(mId);
+                }
+                AppState.activeHyperparamModelId = mId;
+
+                if (AppState.selectedModelIds.length === ALL_MODEL_IDS.length) {
+                    AppState.modelScope = 'all';
+                } else if (AppState.selectedModelIds.length === 1) {
+                    AppState.modelScope = 'single';
+                    AppState.selectedModelId = AppState.selectedModelIds[0];
+                } else {
+                    AppState.modelScope = 'multi';
+                }
+                if (DOM.scopeSingle) DOM.scopeSingle.checked = (AppState.modelScope === 'single');
+                if (DOM.scopeMulti) DOM.scopeMulti.checked = (AppState.modelScope === 'multi');
+                if (DOM.scopeAll) DOM.scopeAll.checked = (AppState.modelScope === 'all');
+                if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.classList.toggle('active-single', AppState.modelScope === 'single');
+                if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.toggle('active-multi', AppState.modelScope === 'multi');
+                if (DOM.scopeAllLabel) DOM.scopeAllLabel.classList.toggle('active-all', AppState.modelScope === 'all');
+            }
+            syncModelCardSelections();
+            updateTrainButtonLabel();
+        }
+
+        function updateTrainButtonLabel() {
+            if (!DOM.trainModelBtn) return;
+            const count = AppState.selectedModelIds.length;
+            if (count === 1) {
+                const mInfo = MODEL_INFO[AppState.selectedModelIds[0]] || { short: AppState.selectedModelIds[0].toUpperCase() };
+                DOM.trainModelBtn.textContent = `🚀 Train & Test 1 Model (${mInfo.short})`;
+            } else if (count === ALL_MODEL_IDS.length) {
+                DOM.trainModelBtn.textContent = `🏆 Run Full Tournament (Train & Test All 6 Models)`;
+            } else {
+                DOM.trainModelBtn.textContent = `🚀 Train & Benchmark ${count} Selected Models`;
+            }
+        }
+
+        // Scope Radio Changes & Label Clicks
+        if (DOM.scopeSingle) DOM.scopeSingle.addEventListener('change', () => setModelScope('single'));
+        if (DOM.scopeMulti) DOM.scopeMulti.addEventListener('change', () => setModelScope('multi'));
+        if (DOM.scopeAll) DOM.scopeAll.addEventListener('change', () => setModelScope('all'));
+        if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.addEventListener('click', () => setModelScope('single'));
+        if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.remove('active-multi');
+        if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.addEventListener('click', () => setModelScope('multi'));
+        if (DOM.scopeAllLabel) DOM.scopeAllLabel.addEventListener('click', () => setModelScope('all'));
+
+        // Preset Quick Action Buttons
+        if (DOM.btnSelectAllModels) {
+            DOM.btnSelectAllModels.addEventListener('click', () => setModelScope('all'));
+        }
+        if (DOM.btnSelectTopModels) {
+            DOM.btnSelectTopModels.addEventListener('click', () => {
+                AppState.modelScope = 'multi';
+                AppState.selectedModelIds = ['ensemble', 'rf', 'nn'];
+                if (DOM.scopeMulti) DOM.scopeMulti.checked = true;
+                if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.classList.remove('active-single');
+                if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.add('active-multi');
+                if (DOM.scopeAllLabel) DOM.scopeAllLabel.classList.remove('active-all');
+                syncModelCardSelections();
+                updateTrainButtonLabel();
+            });
+        }
+        if (DOM.btnClearModelSelection) {
+            DOM.btnClearModelSelection.addEventListener('click', () => setModelScope('single'));
+        }
+
+        // Model Card Clicks & Checkbox Changes
+        DOM.modelCards.forEach(card => {
+            const mId = card.dataset.modelId;
+            const chk = card.querySelector('.model-select-checkbox');
+
+            card.addEventListener('click', (e) => {
+                if (e.target === chk) return; // checkbox change will handle it
+                toggleModelSelection(mId);
+            });
+
+            if (chk) {
+                chk.addEventListener('change', (e) => {
+                    e.stopPropagation();
+                    toggleModelSelection(mId);
+                });
+            }
         });
+
+        // Hyperparameter model selector dropdown
+        if (DOM.activeHyperparamSelect) {
+            DOM.activeHyperparamSelect.addEventListener('change', (e) => {
+                AppState.activeHyperparamModelId = e.target.value;
+                updateHyperparamsVisibility(e.target.value);
+            });
+        }
 
         // Protocol Mode Toggle (Option A vs Option B)
         function setValidationMode(mode) {
@@ -794,13 +973,15 @@
     // =========================================================================
     // STEP 4: MODEL TRAINING & EVALUATION
     // =========================================================================
-    function updateHyperparamsVisibility() {
-        const isNN = AppState.selectedModelId === 'nn';
-        const isRF = AppState.selectedModelId === 'rf';
-        const isGLM = AppState.selectedModelId === 'glm';
-        const isKNN = AppState.selectedModelId === 'knn';
-        const isNB = AppState.selectedModelId === 'nb';
-        const isEnsemble = AppState.selectedModelId === 'ensemble';
+    function updateHyperparamsVisibility(targetModelId) {
+        const activeId = targetModelId || AppState.activeHyperparamModelId || AppState.selectedModelId || 'nn';
+        AppState.activeHyperparamModelId = activeId;
+        const isNN = activeId === 'nn';
+        const isRF = activeId === 'rf';
+        const isGLM = activeId === 'glm';
+        const isKNN = activeId === 'knn';
+        const isNB = activeId === 'nb';
+        const isEnsemble = activeId === 'ensemble';
 
         const nnBox = document.getElementById('nn-params-box');
         const rfBox = document.getElementById('rf-params-box');
@@ -815,6 +996,72 @@
         if (knnBox) knnBox.style.display = isKNN ? 'grid' : 'none';
         if (nbBox) nbBox.style.display = isNB ? 'grid' : 'none';
         if (ensembleBox) ensembleBox.style.display = isEnsemble ? 'grid' : 'none';
+
+        if (DOM.activeHyperparamSelect && DOM.activeHyperparamSelect.value !== activeId) {
+            DOM.activeHyperparamSelect.value = activeId;
+        }
+    }
+
+    function getHyperparamsForModel(modelId, prep) {
+        const hp = {};
+        if (modelId === 'nn') {
+            hp.epochs = parseInt(document.getElementById('nn-epochs-input')?.value, 10) || 50;
+            hp.learningRate = parseFloat(document.getElementById('nn-lr-input')?.value) || 0.005;
+            const h1 = parseInt(document.getElementById('nn-h1-input')?.value, 10) || 64;
+            const h2 = parseInt(document.getElementById('nn-h2-input')?.value, 10) || 32;
+            const h3El = document.getElementById('nn-h3-input');
+            const h3 = h3El ? (parseInt(h3El.value, 10) || 0) : 0;
+            hp.hiddenLayers = h3 > 0 ? [h1, h2, h3] : [h1, h2];
+            hp.dropoutRate = parseFloat(document.getElementById('nn-dropout-input')?.value) || 0.1;
+            hp.activation = document.getElementById('nn-act-select')?.value || 'relu';
+            const optEl = document.getElementById('nn-optimizer-select');
+            hp.optimizer = optEl ? optEl.value : 'adam';
+            const batchEl = document.getElementById('nn-batch-select');
+            hp.batchSize = batchEl ? (parseInt(batchEl.value, 10) || 16) : 16;
+            const l2El = document.getElementById('nn-l2-select');
+            hp.l2Reg = l2El ? parseFloat(l2El.value) : 0.0001;
+        } else if (modelId === 'rf') {
+            hp.numTrees = parseInt(document.getElementById('rf-trees-input')?.value, 10) || 30;
+            hp.maxDepth = parseInt(document.getElementById('rf-depth-input')?.value, 10) || 6;
+            const minSplitEl = document.getElementById('rf-minsplit-select');
+            hp.minSamplesSplit = minSplitEl ? (parseInt(minSplitEl.value, 10) || 2) : 2;
+            const maxFeatEl = document.getElementById('rf-maxfeatures-select');
+            hp.featureRatio = maxFeatEl ? maxFeatEl.value : 'sqrt';
+        } else if (modelId === 'glm') {
+            hp.lr = parseFloat(document.getElementById('glm-lr-input')?.value) || 0.05;
+            hp.epochs = parseInt(document.getElementById('glm-epochs-input')?.value, 10) || 150;
+            const lambdaEl = document.getElementById('glm-lambda-select');
+            hp.lambdaL2 = lambdaEl ? parseFloat(lambdaEl.value) : 0.01;
+            const solverEl = document.getElementById('glm-solver-select');
+            hp.solver = solverEl ? solverEl.value : 'momentum';
+        } else if (modelId === 'knn') {
+            hp.k = parseInt(document.getElementById('knn-k-input')?.value, 10) || 5;
+            const metricEl = document.getElementById('knn-metric-select');
+            hp.metric = metricEl ? metricEl.value : 'euclidean';
+            const weightEl = document.getElementById('knn-weighting-select');
+            hp.weighting = weightEl ? weightEl.value : 'uniform';
+        } else if (modelId === 'nb') {
+            const smoothEl = document.getElementById('nb-smoothing-select');
+            hp.varSmoothing = smoothEl ? parseFloat(smoothEl.value) : 1e-4;
+            const priorsEl = document.getElementById('nb-priors-select');
+            hp.priorMode = priorsEl ? priorsEl.value : 'empirical';
+        } else if (modelId === 'ensemble') {
+            const selectedBases = [];
+            if (document.getElementById('ens-include-nn')?.checked) selectedBases.push('nn');
+            if (document.getElementById('ens-include-rf')?.checked) selectedBases.push('rf');
+            if (document.getElementById('ens-include-glm')?.checked) selectedBases.push('glm');
+            if (document.getElementById('ens-include-knn')?.checked) selectedBases.push('knn');
+            if (document.getElementById('ens-include-nb')?.checked && prep?.isClassification) selectedBases.push('nb');
+            if (selectedBases.length === 0) selectedBases.push('rf', 'glm');
+
+            hp.voting = document.getElementById('ensemble-voting-select')?.value || 'soft';
+            hp.baseModels = selectedBases;
+            const powerEl = document.getElementById('ens-power-select');
+            hp.power = powerEl ? parseFloat(powerEl.value) : 2;
+            const capEl = document.getElementById('ens-capacity-select');
+            hp.capacity = capEl ? capEl.value : 'balanced';
+        }
+        return hp;
     }
 
     async function startModelTraining() {
@@ -825,7 +1072,7 @@
 
         try {
             DOM.trainModelBtn.disabled = true;
-            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan); display: inline-flex; align-items: center; gap: 6px;">⚙️ Preparing data partitions and hyperparameter configurations...</span>`;
+            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan); display: inline-flex; align-items: center; gap: 6px;">⚙️ Initializing multi-model tournament and data partitions...</span>`;
 
             // Prepare features and target from training cohort
             const prep = DataEngine.prepareFeaturesAndTarget(AppState.imputedData.imputedRows, AppState.columnConfigs);
@@ -834,67 +1081,18 @@
             // Determine active validation protocol (Option A vs Option B)
             const isOptionA = DOM.valModeA ? DOM.valModeA.checked : (AppState.validationMode !== 'separate');
 
-            // Hyperparameters for Fine-Tuning
-            const hyperparams = {};
-            if (AppState.selectedModelId === 'nn') {
-                hyperparams.epochs = parseInt(document.getElementById('nn-epochs-input').value, 10) || 50;
-                hyperparams.learningRate = parseFloat(document.getElementById('nn-lr-input').value) || 0.005;
-                const h1 = parseInt(document.getElementById('nn-h1-input').value, 10) || 64;
-                const h2 = parseInt(document.getElementById('nn-h2-input').value, 10) || 32;
-                const h3El = document.getElementById('nn-h3-input');
-                const h3 = h3El ? (parseInt(h3El.value, 10) || 0) : 0;
-                hyperparams.hiddenLayers = h3 > 0 ? [h1, h2, h3] : [h1, h2];
-                hyperparams.dropoutRate = parseFloat(document.getElementById('nn-dropout-input').value) || 0.1;
-                hyperparams.activation = document.getElementById('nn-act-select').value || 'relu';
-                const optEl = document.getElementById('nn-optimizer-select');
-                hyperparams.optimizer = optEl ? optEl.value : 'adam';
-                const batchEl = document.getElementById('nn-batch-select');
-                hyperparams.batchSize = batchEl ? (parseInt(batchEl.value, 10) || 16) : 16;
-                const l2El = document.getElementById('nn-l2-select');
-                hyperparams.l2Reg = l2El ? parseFloat(l2El.value) : 0.0001;
-            } else if (AppState.selectedModelId === 'rf') {
-                hyperparams.numTrees = parseInt(document.getElementById('rf-trees-input').value, 10) || 30;
-                hyperparams.maxDepth = parseInt(document.getElementById('rf-depth-input').value, 10) || 6;
-                const minSplitEl = document.getElementById('rf-minsplit-select');
-                hyperparams.minSamplesSplit = minSplitEl ? (parseInt(minSplitEl.value, 10) || 2) : 2;
-                const maxFeatEl = document.getElementById('rf-maxfeatures-select');
-                hyperparams.featureRatio = maxFeatEl ? maxFeatEl.value : 'sqrt';
-            } else if (AppState.selectedModelId === 'glm') {
-                hyperparams.lr = parseFloat(document.getElementById('glm-lr-input').value) || 0.05;
-                hyperparams.epochs = parseInt(document.getElementById('glm-epochs-input').value, 10) || 150;
-                const lambdaEl = document.getElementById('glm-lambda-select');
-                hyperparams.lambdaL2 = lambdaEl ? parseFloat(lambdaEl.value) : 0.01;
-                const solverEl = document.getElementById('glm-solver-select');
-                hyperparams.solver = solverEl ? solverEl.value : 'momentum';
-            } else if (AppState.selectedModelId === 'knn') {
-                hyperparams.k = parseInt(document.getElementById('knn-k-input').value, 10) || 5;
-                const metricEl = document.getElementById('knn-metric-select');
-                hyperparams.metric = metricEl ? metricEl.value : 'euclidean';
-                const weightEl = document.getElementById('knn-weighting-select');
-                hyperparams.weighting = weightEl ? weightEl.value : 'uniform';
-            } else if (AppState.selectedModelId === 'nb') {
-                const smoothEl = document.getElementById('nb-smoothing-select');
-                hyperparams.varSmoothing = smoothEl ? parseFloat(smoothEl.value) : 1e-4;
-                const priorsEl = document.getElementById('nb-priors-select');
-                hyperparams.priorMode = priorsEl ? priorsEl.value : 'empirical';
-            } else if (AppState.selectedModelId === 'ensemble') {
-                const selectedBases = [];
-                if (document.getElementById('ens-include-nn').checked) selectedBases.push('nn');
-                if (document.getElementById('ens-include-rf').checked) selectedBases.push('rf');
-                if (document.getElementById('ens-include-glm').checked) selectedBases.push('glm');
-                if (document.getElementById('ens-include-knn').checked) selectedBases.push('knn');
-                if (document.getElementById('ens-include-nb').checked && prep.isClassification) selectedBases.push('nb');
-                if (selectedBases.length === 0) selectedBases.push('rf', 'glm');
+            // Determine models to test
+            let modelsToTest = (AppState.selectedModelIds && AppState.selectedModelIds.length > 0)
+                ? AppState.selectedModelIds.slice()
+                : [AppState.selectedModelId || 'nn'];
 
-                hyperparams.voting = document.getElementById('ensemble-voting-select').value || 'soft';
-                hyperparams.baseModels = selectedBases;
-
-                const powerEl = document.getElementById('ens-power-select');
-                hyperparams.power = powerEl ? parseFloat(powerEl.value) : 2;
-
-                const capEl = document.getElementById('ens-capacity-select');
-                hyperparams.capacity = capEl ? capEl.value : 'balanced';
+            // Continuous regression guard: Naive Bayes is classification-only
+            if (!prep.isClassification) {
+                modelsToTest = modelsToTest.filter(mId => mId !== 'nb');
             }
+            if (modelsToTest.length === 0) modelsToTest = ['nn'];
+
+            const testedResults = [];
 
             if (isOptionA) {
                 // =============================================================
@@ -910,103 +1108,83 @@
 
                 const shouldRetrain = DOM.retrainYes ? DOM.retrainYes.checked : true;
 
-                // Phase 1: Train validation model on train partition
-                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 Option A Phase 1: Training on ${Math.round(trainRatio * 100)}% partition (${split.trainX.length} cases) to evaluate ${testPct}% test accuracy...</span>`;
+                for (let i = 0; i < modelsToTest.length; i++) {
+                    const mId = modelsToTest[i];
+                    const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
+                    const hyperparams = getHyperparamsForModel(mId, prep);
 
-                setupTrainingLossChart();
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 [${i + 1}/${modelsToTest.length}] Training ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases)...</span>`;
+                    await new Promise(r => setTimeout(r, 40));
 
-                const valModel = ModelEngine.createModel(
-                    AppState.selectedModelId,
-                    prep.isClassification,
-                    prep.targetClasses.length || 2,
-                    hyperparams
-                );
+                    if (modelsToTest.length === 1 && mId === 'nn') {
+                        setupTrainingLossChart();
+                    }
 
-                if (AppState.selectedModelId === 'nn') {
-                    await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
-                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 1 (${Math.round(trainRatio * 100)}% Train): Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
-                        updateLossChart(epoch, logs.loss, logs.val_loss);
-                    });
-                } else if (AppState.selectedModelId === 'ensemble') {
-                    await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
-                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 1 (${Math.round(trainRatio * 100)}% Train): Base ${curr}/${total}...`}</span>`;
-                        if (info.loss !== undefined) {
-                            updateLossChart(curr, info.loss, info.val_loss);
-                        }
-                    });
-                } else {
-                    valModel.fit(split.trainX, split.trainY);
-                }
-
-                // Benchmark accuracy on held-out test split
-                const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
-                evalRes.protocol = 'option-a';
-                evalRes.retrainOn100 = shouldRetrain;
-                evalRes.trainRatio = trainRatio;
-                evalRes.trainPct = Math.round(trainRatio * 100);
-                evalRes.testPct = testPct;
-                evalRes.trainCount = split.trainX.length;
-                evalRes.testCount = split.testX.length;
-                evalRes.totalCount = prep.X.length;
-                AppState.evalResults = evalRes;
-
-                const accuracySummary = evalRes.isClassification
-                    ? `Test Accuracy: ${(evalRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${evalRes.rocAuc !== null ? evalRes.rocAuc.toFixed(3) : 'N/A'})`
-                    : `Test R²: ${evalRes.r2.toFixed(3)} (RMSE: ${evalRes.rmse.toFixed(3)})`;
-
-                if (shouldRetrain) {
-                    // User chose YES: Retrain model with 100% of data
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber); font-weight: 600;">✓ Phase 1 Complete [${accuracySummary}]. Now Phase 2: Retraining final model with 100% of data (N=${prep.X.length} patients)...</span>`;
-
-                    await new Promise(r => setTimeout(r, 60));
-
-                    const fullModel = ModelEngine.createModel(
-                        AppState.selectedModelId,
+                    const valModel = ModelEngine.createModel(
+                        mId,
                         prep.isClassification,
                         prep.targetClasses.length || 2,
                         hyperparams
                     );
 
-                    if (AppState.selectedModelId === 'nn') {
-                        setupTrainingLossChart();
-                        await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
-                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">Phase 2 (100% Retraining): Epoch ${epoch}/${total} &mdash; Full Cohort Loss: ${logs.loss.toFixed(4)}</span>`;
-                            updateLossChart(epoch, logs.loss);
+                    if (mId === 'nn') {
+                        await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                            if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
                         });
-                    } else if (AppState.selectedModelId === 'ensemble') {
-                        await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
-                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${info.stage || `Phase 2 (100% Retraining): Base Model ${curr}/${total}...`}</span>`;
+                    } else if (mId === 'ensemble') {
+                        await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})...</span>`;
                         });
                     } else {
-                        fullModel.fit(prep.X, prep.y);
+                        valModel.fit(split.trainX, split.trainY);
                     }
 
-                    AppState.trainedModel = fullModel;
+                    // Benchmark out-of-sample accuracy on held-out test split
+                    const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
+                    evalRes.protocol = 'option-a';
+                    evalRes.retrainOn100 = shouldRetrain;
+                    evalRes.trainRatio = trainRatio;
+                    evalRes.trainPct = Math.round(trainRatio * 100);
+                    evalRes.testPct = testPct;
+                    evalRes.trainCount = split.trainX.length;
+                    evalRes.testCount = split.testX.length;
+                    evalRes.totalCount = prep.X.length;
 
-                    DOM.trainStatus.innerHTML = `
-                        <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span style="color: var(--accent-emerald); font-weight: 700;">
-                                ✓ Accuracy Evaluated on ${testPct}% Test Set &amp; Model Fully Retrained on 100% of Cohort Data!
-                            </span>
-                            <span style="font-size: 11.5px; color: var(--text-secondary);">
-                                Reported Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>100% Cohort (N = ${prep.X.length} patients)</strong>
-                            </span>
-                        </div>
-                    `;
-                } else {
-                    // User chose NO: Keep model trained strictly on the train partition
-                    AppState.trainedModel = valModel;
+                    let activeModelInstance = valModel;
 
-                    DOM.trainStatus.innerHTML = `
-                        <div style="display: flex; flex-direction: column; gap: 3px;">
-                            <span style="color: var(--accent-cyan); font-weight: 700;">
-                                ✓ Accuracy Evaluated on ${testPct}% Test Set &bull; Single-Phase Model Deployed
-                            </span>
-                            <span style="font-size: 11.5px; color: var(--text-secondary);">
-                                Reported Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>Maintained strictly on ${evalRes.trainPct}% training split (${split.trainX.length} cases; 100% retraining declined)</strong>
-                            </span>
-                        </div>
-                    `;
+                    if (shouldRetrain) {
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber); font-weight: 600;">✓ [${i + 1}/${modelsToTest.length}] ${mInfo.name} benchmarked. Retraining on 100% of cohort (N=${prep.X.length})...</span>`;
+                        await new Promise(r => setTimeout(r, 40));
+
+                        const fullModel = ModelEngine.createModel(
+                            mId,
+                            prep.isClassification,
+                            prep.targetClasses.length || 2,
+                            hyperparams
+                        );
+
+                        if (mId === 'nn') {
+                            await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
+                                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Epoch ${epoch}/${total} &mdash; Loss: ${logs.loss.toFixed(4)}</span>`;
+                            });
+                        } else if (mId === 'ensemble') {
+                            await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
+                                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Base ${curr}/${total}...</span>`;
+                            });
+                        } else {
+                            fullModel.fit(prep.X, prep.y);
+                        }
+                        activeModelInstance = fullModel;
+                    }
+
+                    testedResults.push({
+                        modelId: mId,
+                        info: mInfo,
+                        evalRes: evalRes,
+                        model: activeModelInstance,
+                        retrained: shouldRetrain
+                    });
                 }
             } else {
                 // =============================================================
@@ -1030,57 +1208,101 @@
                     return;
                 }
 
-                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 Option B Protocol: Fitting model on 100% of Training Dataset (i) (${prep.X.length} patients) &amp; evaluating on separate Dataset (ii) (${testPrep.totalEvaluated} external patients)...</span>`;
+                for (let i = 0; i < modelsToTest.length; i++) {
+                    const mId = modelsToTest[i];
+                    const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
+                    const hyperparams = getHyperparamsForModel(mId, prep);
 
-                setupTrainingLossChart();
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 [${i + 1}/${modelsToTest.length}] Fitting ${mInfo.name} on 100% of Training Dataset (i) (${prep.X.length} cases)...</span>`;
+                    await new Promise(r => setTimeout(r, 40));
 
-                const model = ModelEngine.createModel(
-                    AppState.selectedModelId,
-                    prep.isClassification,
-                    prep.targetClasses.length || 2,
-                    hyperparams
-                );
+                    if (modelsToTest.length === 1 && mId === 'nn') {
+                        setupTrainingLossChart();
+                    }
 
-                if (AppState.selectedModelId === 'nn') {
-                    await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (epoch, total, logs) => {
-                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">Training on Dataset (i): Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| External Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
-                        updateLossChart(epoch, logs.loss, logs.val_loss);
+                    const model = ModelEngine.createModel(
+                        mId,
+                        prep.isClassification,
+                        prep.targetClasses.length || 2,
+                        hyperparams
+                    );
+
+                    if (mId === 'nn') {
+                        await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (epoch, total, logs) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| External Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                            if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
+                        });
+                    } else if (mId === 'ensemble') {
+                        await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (curr, total, info) => {
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})...</span>`;
+                        });
+                    } else {
+                        model.fit(prep.X, prep.y);
+                    }
+
+                    // Evaluate on independent Dataset (ii)
+                    const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses);
+                    evalRes.protocol = 'option-b';
+                    evalRes.retrainOn100 = false;
+                    evalRes.trainCount = prep.X.length;
+                    evalRes.testCount = testPrep.totalEvaluated;
+                    evalRes.totalCount = prep.X.length + testPrep.totalEvaluated;
+                    evalRes.testProvided = testPrep.totalProvided;
+                    evalRes.missingTargetCount = testPrep.missingTargetCount;
+                    evalRes.unknownClassCount = testPrep.unknownClassCount;
+
+                    testedResults.push({
+                        modelId: mId,
+                        info: mInfo,
+                        evalRes: evalRes,
+                        model: model,
+                        retrained: false
                     });
-                } else if (AppState.selectedModelId === 'ensemble') {
-                    await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (curr, total, info) => {
-                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">${info.stage || `Training on Dataset (i): Base ${curr}/${total}...`}</span>`;
-                        if (info.loss !== undefined) {
-                            updateLossChart(curr, info.loss, info.val_loss);
-                        }
-                    });
-                } else {
-                    model.fit(prep.X, prep.y);
                 }
+            }
 
-                // Evaluate model on independent Dataset (ii)
-                const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses);
-                evalRes.protocol = 'option-b';
-                evalRes.retrainOn100 = false;
-                evalRes.trainCount = prep.X.length;
-                evalRes.testCount = testPrep.totalEvaluated;
-                evalRes.totalCount = prep.X.length + testPrep.totalEvaluated;
-                evalRes.testProvided = testPrep.totalProvided;
-                evalRes.missingTargetCount = testPrep.missingTargetCount;
-                evalRes.unknownClassCount = testPrep.unknownClassCount;
-                AppState.evalResults = evalRes;
-                AppState.trainedModel = model;
+            // Sort tested models by out-of-sample diagnostic performance (highest accuracy / R² first)
+            if (prep.isClassification) {
+                testedResults.sort((a, b) => (b.evalRes.accuracy - a.evalRes.accuracy) || ((b.evalRes.rocAuc || 0) - (a.evalRes.rocAuc || 0)));
+            } else {
+                testedResults.sort((a, b) => (b.evalRes.r2 - a.evalRes.r2) || (a.evalRes.rmse - b.evalRes.rmse));
+            }
 
-                const accuracySummary = evalRes.isClassification
-                    ? `External Test Accuracy: ${(evalRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${evalRes.rocAuc !== null ? evalRes.rocAuc.toFixed(3) : 'N/A'})`
-                    : `External Test R²: ${evalRes.r2.toFixed(3)} (RMSE: ${evalRes.rmse.toFixed(3)})`;
+            AppState.allTestedResults = testedResults;
+            // Designate top-performing model as champion
+            const champion = testedResults[0];
+            AppState.trainedModel = champion.model;
+            AppState.deployedModelId = champion.modelId;
+            AppState.evalResults = champion.evalRes;
+            AppState.selectedModelId = champion.modelId;
 
+            // Update train status banner
+            if (testedResults.length === 1) {
+                const singleRes = champion.evalRes;
+                const accText = singleRes.isClassification
+                    ? `Test Accuracy: ${(singleRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${singleRes.rocAuc !== null ? singleRes.rocAuc.toFixed(3) : 'N/A'})`
+                    : `Test R²: ${singleRes.r2.toFixed(3)} (RMSE: ${singleRes.rmse.toFixed(3)})`;
                 DOM.trainStatus.innerHTML = `
                     <div style="display: flex; flex-direction: column; gap: 3px;">
-                        <span style="color: var(--accent-purple); font-weight: 700;">
-                            ✓ Option B Complete: Evaluated on Separate Testing Dataset (ii) (${testPrep.totalEvaluated} external cases)!
+                        <span style="color: var(--accent-emerald); font-weight: 700;">
+                            ✓ Successfully Evaluated &amp; Deployed ${champion.info.name}!
                         </span>
                         <span style="font-size: 11.5px; color: var(--text-secondary);">
-                            External Benchmark: <strong>${accuracySummary}</strong> &bull; Active Deployed Model: <strong>Fitted on 100% of Training Dataset (i) (N = ${prep.X.length} patients)</strong>
+                            Reported Benchmark: <strong>${accText}</strong> &bull; Active Predictor: <strong>${champion.info.name} (${champion.retrained ? '100% Cohort Retrained' : (isOptionA ? `${singleRes.trainPct}% Split Model` : 'Dataset i Fitted')})</strong>
+                        </span>
+                    </div>
+                `;
+            } else {
+                const topAccText = champion.evalRes.isClassification
+                    ? `Top Accuracy: ${(champion.evalRes.accuracy * 100).toFixed(1)}%`
+                    : `Top R²: ${champion.evalRes.r2.toFixed(3)}`;
+                DOM.trainStatus.innerHTML = `
+                    <div style="display: flex; flex-direction: column; gap: 3px;">
+                        <span style="color: var(--accent-emerald); font-weight: 700;">
+                            🏆 Tournament Complete: Tested &amp; Evaluated ${testedResults.length} Models!
+                        </span>
+                        <span style="font-size: 11.5px; color: var(--text-secondary);">
+                            Leader: <strong>${champion.info.name}</strong> [${topAccText}] &bull; Auto-deployed as Active Predictor (You can switch to any model below).
                         </span>
                     </div>
                 `;
@@ -1163,9 +1385,33 @@
         chart.update('none');
     }
 
+    function deployTestedModel(modelId) {
+        if (!AppState.allTestedResults) return;
+        const targetItem = AppState.allTestedResults.find(r => r.modelId === modelId);
+        if (!targetItem) return;
+
+        AppState.deployedModelId = modelId;
+        AppState.trainedModel = targetItem.model;
+        AppState.evalResults = targetItem.evalRes;
+        AppState.selectedModelId = modelId;
+
+        // Re-render dashboard to refresh badges and active buttons
+        renderEvaluationDashboard();
+
+        // Update single prediction form headers if open
+        if (AppState.prepMeta) {
+            renderSinglePredictionForm();
+        }
+
+        const mInfo = MODEL_INFO[modelId] || { name: modelId.toUpperCase() };
+        alert(`✓ Model Deployed: "${mInfo.name}" is now the active predictor for Single Prediction (Step 5) and Batch Prediction (Step 6).`);
+    }
+    window.deployTestedModel = deployTestedModel;
+
     function renderEvaluationDashboard() {
         const evalRes = AppState.evalResults;
         const prep = AppState.prepMeta;
+        const allResults = AppState.allTestedResults || [];
         DOM.resultsDashboard.style.display = 'flex';
 
         const isOptionB = evalRes.protocol === 'option-b';
@@ -1185,7 +1431,7 @@
                                 <span>🛡️</span> Option B: Independent External Validation Cohort
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
-                                Model was trained strictly on 100% of <strong>Dataset (i) (${trainCount} patients)</strong> and rigorously evaluated on independent external <strong>Dataset (ii) (${testCount} test cases)</strong> with zero data leakage.
+                                Tested on separate external <strong>Dataset (ii) (${testCount} test cases)</strong> with zero data leakage. All models trained on 100% of <strong>Dataset (i) (${trainCount} patients)</strong>.
                             </div>
                         </div>
                         <span class="pill" style="background: rgba(168, 85, 247, 0.18); color: var(--accent-purple); border: 1px solid rgba(168, 85, 247, 0.4); font-size: 12px; font-weight: 700;">
@@ -1198,14 +1444,14 @@
                     <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.28); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                         <div>
                             <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-emerald); display: flex; align-items: center; gap: 6px;">
-                                <span>✓</span> Option A: Two-Phase Retraining Protocol &bull; 100% Retrained Model Active
+                                <span>✓</span> Option A: Two-Phase Retraining Protocol &bull; 100% Retrained Models Active
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
-                                Out-of-sample accuracy was benchmarked on the held-out <strong>${testPct}% test split (${testCount} cases)</strong> after training on <strong>${trainPct}% (${trainCount} cases)</strong>. The deployed model was then retrained on <strong>100% of the entire cohort (${totalCount} cases)</strong> to maximize diagnostic accuracy.
+                                Accuracy evaluated on held-out <strong>${testPct}% test split (${testCount} cases)</strong> after fitting on <strong>${trainPct}% (${trainCount} cases)</strong>. Deployed models were then fully retrained on <strong>100% of cohort data (${totalCount} cases)</strong>.
                             </div>
                         </div>
                         <span class="pill pill-target" style="background: rgba(16, 185, 129, 0.18); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4); font-size: 12px; font-weight: 700;">
-                            100% Retrained Model Active
+                            100% Retrained Models Active
                         </span>
                     </div>
                 `;
@@ -1214,106 +1460,337 @@
                     <div style="background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.28); border-radius: var(--radius-md); padding: 12px 16px; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
                         <div>
                             <div style="font-weight: 700; font-size: 13.5px; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px;">
-                                <span>ℹ️</span> Option A: Single-Phase Protocol &bull; Split-Trained Model Active
+                                <span>ℹ️</span> Option A: Single-Phase Protocol &bull; Split-Trained Models Active
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
-                                Accuracy was evaluated on the held-out <strong>${testPct}% test split (${testCount} cases)</strong>. As requested, the deployed model is maintained strictly on the <strong>${trainPct}% training split (${trainCount} cases)</strong> without retraining on 100% of the data.
+                                Evaluated on held-out <strong>${testPct}% test split (${testCount} cases)</strong>. Models maintained strictly on the <strong>${trainPct}% training split (${trainCount} cases)</strong> without 100% retraining.
                             </div>
                         </div>
                         <span class="pill" style="background: rgba(6, 182, 212, 0.18); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.4); font-size: 12px; font-weight: 700;">
-                            ${trainPct}% Split Model Active
+                            ${trainPct}% Split Models Active
                         </span>
                     </div>
                 `;
             }
         }
 
-        const testAccLabel = isOptionB ? 'External Test Accuracy (Dataset ii)' : `Test Accuracy (${testPct}% Split)`;
-        const testR2Label = isOptionB ? 'External Test R² (Dataset ii)' : `Test R² Score (${testPct}% Split)`;
-        const cohortDesc = isOptionB ? `External Testing Cohort (Dataset ii: ${testCount} Patients)` : `Held-out ${testPct}% Test Cohort: ${testCount} Patients`;
+        const cohortDesc = isOptionB ? `External Testing Cohort (Dataset ii: ${testCount} Patients)` : `Held-out ${testPct}% Test Cohort (${testCount} Patients)`;
 
-        if (evalRes.isClassification) {
-            DOM.metricsSummaryRow.innerHTML = `
-                <div class="metric-pill-card">
-                    <span class="m-title">${testAccLabel}</span>
-                    <span class="m-val">${(evalRes.accuracy * 100).toFixed(1)}%</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">Macro F1-Score</span>
-                    <span class="m-val">${(evalRes.macroF1 * 100).toFixed(1)}%</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">Macro Precision</span>
-                    <span class="m-val">${(evalRes.macroPrecision * 100).toFixed(1)}%</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">Macro Recall</span>
-                    <span class="m-val">${(evalRes.macroRecall * 100).toFixed(1)}%</span>
-                </div>
-                ${evalRes.rocAuc !== null ? `
-                    <div class="metric-pill-card">
-                        <span class="m-title">ROC AUC</span>
-                        <span class="m-val">${(evalRes.rocAuc).toFixed(3)}</span>
-                    </div>
-                ` : ''}
-            `;
+        // RENDER BASED ON NUMBER OF TESTED MODELS
+        if (allResults.length > 1) {
+            // MULTI-MODEL TOURNAMENT / COMPARISON MODE
+            if (DOM.dashboardSingleHeading) DOM.dashboardSingleHeading.style.display = 'none';
+            if (DOM.metricsSummaryRow) DOM.metricsSummaryRow.style.display = 'none';
+            if (DOM.evaluationDetailContainer) DOM.evaluationDetailContainer.style.display = 'none';
 
-            // Confusion Matrix Table
-            const cm = evalRes.confMatrix;
-            const classes = prep.targetClasses;
-            let cmHtml = `
-                <div style="display: flex; flex-direction: column; gap: 16px;">
-                    <h3 style="font-size: 15px; color: var(--text-primary);">Confusion Matrix (${cohortDesc})</h3>
-                    <div class="table-container" style="max-width: 500px;">
-                        <table class="cm-table">
-                            <thead>
-                                <tr>
-                                    <th>Actual \\ Predicted</th>
-                                    ${classes.map(c => `<th>${c}</th>`).join('')}
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${classes.map((actualClass, r) => `
+            // 1. Benchmark Leaderboard Table
+            if (DOM.multiModelLeaderboardContainer) {
+                DOM.multiModelLeaderboardContainer.style.display = 'block';
+                let lbRows = '';
+                allResults.forEach((resItem, idx) => {
+                    const mInfo = resItem.info;
+                    const rEval = resItem.evalRes;
+                    const isChampion = idx === 0;
+                    const isDeployed = AppState.deployedModelId === resItem.modelId;
+
+                    const rankBadge = isChampion ? '🥇 #1 Champion' : (idx === 1 ? '🥈 #2 Runner-Up' : (idx === 2 ? '🥉 #3' : `#${idx + 1}`));
+                    const scoreDisplay = rEval.isClassification 
+                        ? `<strong style="color: var(--accent-cyan); font-size: 14.5px;">${(rEval.accuracy * 100).toFixed(1)}%</strong>`
+                        : `<strong style="color: var(--accent-cyan); font-size: 14.5px;">R²: ${rEval.r2.toFixed(3)}</strong>`;
+
+                    const rocAucDisplay = rEval.isClassification 
+                        ? (rEval.rocAuc !== null ? rEval.rocAuc.toFixed(3) : '<span style="color:var(--text-muted)">N/A</span>')
+                        : `RMSE: ${rEval.rmse.toFixed(3)}`;
+
+                    const f1Display = rEval.isClassification 
+                        ? `${(rEval.macroF1 * 100).toFixed(1)}%`
+                        : `MAE: ${rEval.mae.toFixed(3)}`;
+
+                    const precDisplay = rEval.isClassification 
+                        ? `${(rEval.macroPrecision * 100).toFixed(1)}%`
+                        : `MSE: ${rEval.mse.toFixed(3)}`;
+
+                    const recDisplay = rEval.isClassification 
+                        ? `${(rEval.macroRecall * 100).toFixed(1)}%`
+                        : '-';
+
+                    const deployBtn = isDeployed
+                        ? `<span class="pill pill-target" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-emerald); font-weight: 700; border-color: rgba(16, 185, 129, 0.4);">✓ Active Predictor</span>`
+                        : `<button class="btn-preset-action deploy-model-btn" onclick="window.deployTestedModel('${resItem.modelId}')" style="padding: 4px 10px; font-size: 11px; cursor: pointer;">Deploy Model</button>`;
+
+                    lbRows += `
+                        <tr style="${isDeployed ? 'background: rgba(6, 182, 212, 0.05);' : ''}">
+                            <td><span class="leaderboard-rank ${isChampion ? 'rank-1' : ''}">${rankBadge}</span></td>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 16px;">${mInfo.icon}</span>
+                                    <div>
+                                        <div style="font-weight: 700; color: var(--text-primary);">${mInfo.name}</div>
+                                        <div style="font-size: 11px; color: var(--text-muted);">${resItem.retrained ? '100% Cohort Retrained' : (isOptionB ? 'External Validated' : 'Split-Trained')}</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span class="pill ${mInfo.pillClass}" style="font-size: 11px;">${mInfo.tag}</span></td>
+                            <td>${scoreDisplay}</td>
+                            <td>${rocAucDisplay}</td>
+                            <td>${f1Display}</td>
+                            <td>${precDisplay}</td>
+                            <td>${recDisplay}</td>
+                            <td>${deployBtn}</td>
+                        </tr>
+                    `;
+                });
+
+                DOM.multiModelLeaderboardContainer.innerHTML = `
+                    <div style="background: var(--bg-surface-elevated); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 24px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
+                            <div>
+                                <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                                    <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked
+                                </h3>
+                                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                                    Comparative diagnostic performance on ${cohortDesc}. Top-performing model (${allResults[0].info.name}) is auto-designated as active predictor.
+                                </div>
+                            </div>
+                            <span class="pill pill-target" style="font-size: 12px; font-weight: 700;">
+                                ${allResults.length} Models Tested
+                            </span>
+                        </div>
+                        <div class="table-container">
+                            <table class="leaderboard-table">
+                                <thead>
                                     <tr>
-                                        <th style="text-align: left;">${actualClass}</th>
-                                        ${classes.map((_, c) => {
-                                            const val = cm[r][c];
-                                            const isHit = r === c;
-                                            return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}">${val}</td>`;
-                                        }).join('')}
+                                        <th>Rank</th>
+                                        <th>Model Algorithm</th>
+                                        <th>Paradigm</th>
+                                        <th>${prep.isClassification ? 'Test Accuracy' : 'Test R²'}</th>
+                                        <th>${prep.isClassification ? 'ROC-AUC' : 'RMSE'}</th>
+                                        <th>${prep.isClassification ? 'Macro F1' : 'MAE'}</th>
+                                        <th>${prep.isClassification ? 'Precision' : 'MSE'}</th>
+                                        <th>${prep.isClassification ? 'Recall' : '-'}</th>
+                                        <th>Status / Deploy</th>
                                     </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    ${lbRows}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                </div>
-            `;
-            DOM.evaluationDetailContainer.innerHTML = cmHtml;
+                `;
+            }
+
+            // 2. Individual Confusion Matrices & Accuracy Cards for ALL Chosen Models
+            if (DOM.multiModelCmContainer) {
+                DOM.multiModelCmContainer.style.display = 'block';
+                let cmCardsHtml = '';
+                allResults.forEach((resItem, idx) => {
+                    const mInfo = resItem.info;
+                    const rEval = resItem.evalRes;
+                    const isChampion = idx === 0;
+                    const isDeployed = AppState.deployedModelId === resItem.modelId;
+
+                    let cmContent = '';
+                    if (rEval.isClassification) {
+                        const cm = rEval.confMatrix;
+                        const classes = prep.targetClasses;
+                        cmContent = `
+                            <div class="table-container" style="margin-top: 10px;">
+                                <table class="cm-table" style="font-size: 11.5px;">
+                                    <thead>
+                                        <tr>
+                                            <th style="padding: 6px 8px;">Actual \\ Pred</th>
+                                            ${classes.map(c => `<th style="padding: 6px 8px;">${c}</th>`).join('')}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${classes.map((actualClass, r) => `
+                                            <tr>
+                                                <th style="text-align: left; padding: 6px 8px;">${actualClass}</th>
+                                                ${classes.map((_, c) => {
+                                                    const val = cm[r][c];
+                                                    const isHit = r === c;
+                                                    return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}" style="padding: 6px 8px; font-weight: 700;">${val}</td>`;
+                                                }).join('')}
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `;
+                    } else {
+                        cmContent = `
+                            <div style="background: var(--bg-surface-subtle); padding: 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); margin-top: 10px;">
+                                <div>MAE: <strong>${rEval.mae.toFixed(3)}</strong> &bull; MSE: <strong>${rEval.mse.toFixed(3)}</strong></div>
+                                <div style="margin-top: 4px;">Residual Variance: <strong>${(rEval.mse / (rEval.r2 || 1)).toFixed(3)}</strong></div>
+                            </div>
+                        `;
+                    }
+
+                    const deployBtn = isDeployed
+                        ? `<button class="btn-preset-action" disabled style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.4); color: var(--accent-emerald); font-weight: 700; width: 100%;">✓ Active Predictor (Steps 5 &amp; 6)</button>`
+                        : `<button class="btn-preset-action deploy-model-btn" onclick="window.deployTestedModel('${resItem.modelId}')" style="width: 100%; font-weight: 600; cursor: pointer;">⭐ Set as Active Predictor</button>`;
+
+                    cmCardsHtml += `
+                        <div class="multi-cm-card ${isDeployed ? 'active-deployed' : ''}">
+                            <div class="multi-cm-card-header">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span style="font-size: 18px;">${mInfo.icon}</span>
+                                    <div>
+                                        <div class="cm-card-title">${mInfo.name}</div>
+                                        <span class="pill ${mInfo.pillClass}" style="font-size: 10px; padding: 1px 6px;">${mInfo.tag}</span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                                    ${isChampion ? `<span class="champion-badge">🏆 #1 Champion</span>` : `<span class="pill" style="font-size: 10.5px;">Rank #${idx + 1}</span>`}
+                                    ${isDeployed ? `<span class="pill pill-target" style="font-size: 10px; background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald);">⭐ Active</span>` : ''}
+                                </div>
+                            </div>
+
+                            <div class="cm-card-metrics">
+                                <div class="cm-metric-item">
+                                    <span class="cm-m-label">${rEval.isClassification ? 'Test Accuracy' : 'R² Score'}</span>
+                                    <span class="cm-m-val">${rEval.isClassification ? `${(rEval.accuracy * 100).toFixed(1)}%` : rEval.r2.toFixed(3)}</span>
+                                </div>
+                                <div class="cm-metric-item">
+                                    <span class="cm-m-label">${rEval.isClassification ? 'ROC-AUC' : 'RMSE'}</span>
+                                    <span class="cm-m-val" style="color: var(--accent-purple);">${rEval.isClassification ? (rEval.rocAuc !== null ? rEval.rocAuc.toFixed(3) : 'N/A') : rEval.rmse.toFixed(3)}</span>
+                                </div>
+                                <div class="cm-metric-item">
+                                    <span class="cm-m-label">${rEval.isClassification ? 'Macro F1' : 'MAE'}</span>
+                                    <span class="cm-m-val" style="color: var(--accent-amber);">${rEval.isClassification ? `${(rEval.macroF1 * 100).toFixed(1)}%` : rEval.mae.toFixed(3)}</span>
+                                </div>
+                            </div>
+
+                            <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); margin-top: 10px;">
+                                ${rEval.isClassification ? 'Confusion Matrix:' : 'Regression Diagnostics:'}
+                            </div>
+                            ${cmContent}
+
+                            <div style="margin-top: 12px;">
+                                ${deployBtn}
+                            </div>
+                        </div>
+                    `;
+                });
+
+                DOM.multiModelCmContainer.innerHTML = `
+                    <div style="margin-bottom: 20px;">
+                        <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+                            <span>📊</span> Confusion Matrix &amp; Diagnostic Accuracy Breakdown &mdash; All Chosen Models
+                        </h3>
+                        <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+                            Individual confusion matrices and test metrics for every model chosen in this benchmark. Click "Set as Active Predictor" to deploy any model.
+                        </p>
+                    </div>
+                    <div class="multi-cm-grid">
+                        ${cmCardsHtml}
+                    </div>
+                `;
+            }
         } else {
-            // Regression Metrics
-            DOM.metricsSummaryRow.innerHTML = `
-                <div class="metric-pill-card">
-                    <span class="m-title">${testR2Label}</span>
-                    <span class="m-val">${evalRes.r2.toFixed(3)}</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">RMSE</span>
-                    <span class="m-val">${evalRes.rmse.toFixed(3)}</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">MAE</span>
-                    <span class="m-val">${evalRes.mae.toFixed(3)}</span>
-                </div>
-                <div class="metric-pill-card">
-                    <span class="m-title">MSE</span>
-                    <span class="m-val">${evalRes.mse.toFixed(3)}</span>
-                </div>
-            `;
-            DOM.evaluationDetailContainer.innerHTML = `
-                <p style="font-size: 13px; color: var(--text-secondary);">
-                    Model validated on ${cohortDesc} with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
-                </p>
-            `;
+            // SINGLE MODEL TESTING MODE
+            if (DOM.multiModelLeaderboardContainer) DOM.multiModelLeaderboardContainer.style.display = 'none';
+            if (DOM.multiModelCmContainer) DOM.multiModelCmContainer.style.display = 'none';
+            if (DOM.dashboardSingleHeading) DOM.dashboardSingleHeading.style.display = 'block';
+            if (DOM.metricsSummaryRow) DOM.metricsSummaryRow.style.display = 'grid';
+            if (DOM.evaluationDetailContainer) DOM.evaluationDetailContainer.style.display = 'block';
+
+            const activeInfo = MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId] || { name: 'Model', icon: '🧠' };
+            if (DOM.dashboardSingleHeading) {
+                DOM.dashboardSingleHeading.innerHTML = `
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span>${activeInfo.icon}</span> Single Model Diagnostic Performance: <strong>${activeInfo.name}</strong>
+                    </div>
+                `;
+            }
+
+            const testAccLabel = isOptionB ? 'External Test Accuracy (Dataset ii)' : `Test Accuracy (${testPct}% Split)`;
+            const testR2Label = isOptionB ? 'External Test R² (Dataset ii)' : `Test R² Score (${testPct}% Split)`;
+
+            if (evalRes.isClassification) {
+                DOM.metricsSummaryRow.innerHTML = `
+                    <div class="metric-pill-card">
+                        <span class="m-title">${testAccLabel}</span>
+                        <span class="m-val">${(evalRes.accuracy * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">Macro F1-Score</span>
+                        <span class="m-val">${(evalRes.macroF1 * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">Macro Precision</span>
+                        <span class="m-val">${(evalRes.macroPrecision * 100).toFixed(1)}%</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">Macro Recall</span>
+                        <span class="m-val">${(evalRes.macroRecall * 100).toFixed(1)}%</span>
+                    </div>
+                    ${evalRes.rocAuc !== null ? `
+                        <div class="metric-pill-card">
+                            <span class="m-title">ROC AUC</span>
+                            <span class="m-val">${(evalRes.rocAuc).toFixed(3)}</span>
+                        </div>
+                    ` : ''}
+                `;
+
+                // Confusion Matrix Table
+                const cm = evalRes.confMatrix;
+                const classes = prep.targetClasses;
+                let cmHtml = `
+                    <div style="display: flex; flex-direction: column; gap: 16px;">
+                        <h3 style="font-size: 15px; color: var(--text-primary);">Confusion Matrix (${cohortDesc})</h3>
+                        <div class="table-container" style="max-width: 500px;">
+                            <table class="cm-table">
+                                <thead>
+                                    <tr>
+                                        <th>Actual \\ Predicted</th>
+                                        ${classes.map(c => `<th>${c}</th>`).join('')}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${classes.map((actualClass, r) => `
+                                        <tr>
+                                            <th style="text-align: left;">${actualClass}</th>
+                                            ${classes.map((_, c) => {
+                                                const val = cm[r][c];
+                                                const isHit = r === c;
+                                                return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}">${val}</td>`;
+                                            }).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                `;
+                DOM.evaluationDetailContainer.innerHTML = cmHtml;
+            } else {
+                // Regression Metrics
+                DOM.metricsSummaryRow.innerHTML = `
+                    <div class="metric-pill-card">
+                        <span class="m-title">${testR2Label}</span>
+                        <span class="m-val">${evalRes.r2.toFixed(3)}</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">RMSE</span>
+                        <span class="m-val">${evalRes.rmse.toFixed(3)}</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">MAE</span>
+                        <span class="m-val">${evalRes.mae.toFixed(3)}</span>
+                    </div>
+                    <div class="metric-pill-card">
+                        <span class="m-title">MSE</span>
+                        <span class="m-val">${evalRes.mse.toFixed(3)}</span>
+                    </div>
+                `;
+                DOM.evaluationDetailContainer.innerHTML = `
+                    <p style="font-size: 13px; color: var(--text-secondary);">
+                        Model validated on ${cohortDesc} with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
+                    </p>
+                `;
+            }
         }
     }
 
@@ -1423,7 +1900,7 @@
                     <h3>Predicted ${prep.targetCol}</h3>
                     <div class="pred-outcome-val">${predictedLabel}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Model: <strong>${AppState.selectedModelId.toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>
                     </div>
                     ${ensembleDetailsHtml}
                 </div>
@@ -1444,7 +1921,7 @@
                     <h3>Predicted Continuous ${prep.targetCol}</h3>
                     <div class="pred-outcome-val">${result.pred}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Model: <strong>${AppState.selectedModelId.toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>
                     </div>
                     ${ensembleDetailsHtml}
                 </div>
@@ -1579,7 +2056,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         initDOM();
         setupEventListeners();
-        updateHyperparamsVisibility();
+        setModelScope('single');
     });
 
 })();

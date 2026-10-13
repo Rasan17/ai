@@ -97,7 +97,21 @@ The platform provides two rigorous clinical evaluation paradigms selectable in S
   - **Dataset (ii) &bull; Testing Cohort:** Model accuracy is evaluated on an independent external validation dataset provided via dedicated CSV upload or built-in validation cohorts.
   - **Strict Zero Data Leakage:** Categorical standardizations and continuous imputation/scaling statistics calculated on Dataset (i) are applied to Dataset (ii) without data leakage. Missing targets and unknown category levels are audited safely.
 
-### 6. Dual Inference Modes
+### 6. Flexible Model Testing Scope & Tournament Benchmarking
+
+Clinicians and researchers can choose the exact scope of models to train and benchmark:
+1. **Test One Model:** Select an individual algorithm (e.g. Deep Neural Network or Random Forest) for focused training and single-model evaluation.
+2. **Test More Than One Model (Custom Subset):** Pick any custom combination of algorithms via interactive card checkboxes (e.g. compare Ensemble vs. Random Forest vs. Logistic Regression).
+3. **Test All Models (Full Tournament):** Benchmark all 6 available algorithms simultaneously in a head-to-head competition with a single click.
+
+#### Multi-Model Diagnostic Results & Confusion Matrices:
+- **Comparative Benchmark Leaderboard:** Ranks all tested models by out-of-sample test accuracy (or $R^2$), displaying ROC-AUC, Macro F1, Precision, Recall, and rank medals (🥇 #1 Champion, 🥈 #2 Runner-Up, etc.).
+- **Individual Confusion Matrices & Accuracy Cards:** Renders an individual diagnostic card for **every chosen model**, featuring:
+  - **Prominent Test Accuracy** (and ROC-AUC / Macro F1 scores).
+  - **Complete Confusion Matrix Table** displaying actual vs. predicted classifications with hit/miss cell coloration.
+  - **One-Click Model Deployment:** The champion model is auto-designated as active, but researchers can click *"Set as Active Predictor"* on any tested model card or leaderboard row to immediately deploy it for Single and Batch Inference.
+
+### 7. Dual Inference Modes
 - **Single Patient Predictor:**
   - Dynamically generated clinical form tailored to the features (sliders, rank selectors, categorical dropdowns).
   - Outputs predicted class/value, confidence score, and probability distribution bar meters.
