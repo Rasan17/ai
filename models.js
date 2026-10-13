@@ -10,6 +10,23 @@
 (function (window) {
     'use strict';
 
+    /**
+     * Pseudo-Random Number Generator (Mulberry32) for deterministic reproducible modeling
+     */
+    function createPRNG(seed) {
+        if (seed === null || seed === undefined || seed === '' || isNaN(seed)) {
+            return Math.random;
+        }
+        let s = Math.floor(Math.abs(Number(seed))) >>> 0;
+        if (s === 0) s = 1;
+        return function () {
+            s |= 0; s = (s + 0x6D2B79F5) | 0;
+            let t = Math.imul(s ^ (s >>> 15), 1 | s);
+            t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
     // ==========================================
     // 1. PURE JS DECISION TREE & RANDOM FOREST
     // ==========================================
@@ -25,11 +42,12 @@
     }
 
     class DecisionTree {
-        constructor(isClassification = true, maxDepth = 6, minSamplesSplit = 2, maxFeatures = null) {
+        constructor(isClassification = true, maxDepth = 6, minSamplesSplit = 2, maxFeatures = null, rng = Math.random) {
             this.isClassification = isClassification;
             this.maxDepth = maxDepth;
             this.minSamplesSplit = minSamplesSplit;
             this.maxFeatures = maxFeatures;
+            this.rng = rng || Math.random;
             this.root = null;
             this.featureImportances = {};
         }
@@ -74,7 +92,7 @@
             // Choose random subset of features
             let featureIndices = Array.from({ length: numFeatures }, (_, i) => i);
             if (this.maxFeatures && this.maxFeatures < numFeatures) {
-                featureIndices.sort(() => Math.random() - 0.5);
+                featureIndices.sort(() => this.rng() - 0.5);
                 featureIndices = featureIndices.slice(0, this.maxFeatures);
             }
 
@@ -187,12 +205,14 @@
     }
 
     class RandomForest {
-        constructor(isClassification = true, numTrees = 25, maxDepth = 5, minSamplesSplit = 2, featureRatio = 'sqrt') {
+        constructor(isClassification = true, numTrees = 25, maxDepth = 5, minSamplesSplit = 2, featureRatio = 'sqrt', seed = null) {
             this.isClassification = isClassification;
             this.numTrees = numTrees;
             this.maxDepth = maxDepth;
             this.minSamplesSplit = minSamplesSplit;
             this.featureRatio = featureRatio;
+            this.seed = seed !== null && seed !== undefined && seed !== '' ? Number(seed) : null;
+            this.rng = createPRNG(this.seed);
             this.trees = [];
             this.featureImportances = [];
         }
@@ -216,16 +236,16 @@
             const aggregatedImportances = new Array(numFeatures).fill(0);
 
             for (let t = 0; t < this.numTrees; t++) {
-                // Bootstrap sample with replacement
+                // Bootstrap sample with replacement using seeded PRNG
                 const sampleX = [];
                 const sampleY = [];
                 for (let i = 0; i < numSamples; i++) {
-                    const randIdx = Math.floor(Math.random() * numSamples);
+                    const randIdx = Math.floor(this.rng() * numSamples);
                     sampleX.push(X[randIdx]);
                     sampleY.push(y[randIdx]);
                 }
 
-                const tree = new DecisionTree(this.isClassification, this.maxDepth, this.minSamplesSplit, maxFeatures);
+                const tree = new DecisionTree(this.isClassification, this.maxDepth, this.minSamplesSplit, maxFeatures, this.rng);
                 tree.fit(sampleX, sampleY);
                 this.trees.push(tree);
 
@@ -269,13 +289,15 @@
     // 2. LOGISTIC / SOFTMAX & RIDGE REGRESSION
     // ==========================================
     class GeneralizedLinearModel {
-        constructor(isClassification = true, numClasses = 2, learningRate = 0.05, epochs = 150, lambdaL2 = 0.01, solver = 'momentum') {
+        constructor(isClassification = true, numClasses = 2, learningRate = 0.05, epochs = 150, lambdaL2 = 0.01, solver = 'momentum', seed = null) {
             this.isClassification = isClassification;
             this.numClasses = numClasses;
             this.lr = learningRate;
             this.epochs = epochs;
             this.lambdaL2 = lambdaL2;
             this.solver = solver;
+            this.seed = seed !== null && seed !== undefined && seed !== '' ? Number(seed) : null;
+            this.rng = createPRNG(this.seed);
             this.weights = null; // matrix or vector
             this.bias = null;
         }
@@ -419,11 +441,12 @@
     // 3. k-NEAREST NEIGHBORS (k-NN)
     // ==========================================
     class KNNModel {
-        constructor(isClassification = true, k = 5, metric = 'euclidean', weighting = 'uniform') {
+        constructor(isClassification = true, k = 5, metric = 'euclidean', weighting = 'uniform', seed = null) {
             this.isClassification = isClassification;
             this.k = k;
             this.metric = metric; // 'euclidean', 'manhattan', 'chebyshev'
             this.weighting = weighting; // 'uniform', 'distance'
+            this.seed = seed !== null && seed !== undefined && seed !== '' ? Number(seed) : null;
             this.trainX = [];
             this.trainY = [];
         }
@@ -508,9 +531,10 @@
     // 4. GAUSSIAN NAIVE BAYES
     // ==========================================
     class GaussianNaiveBayes {
-        constructor(varSmoothing = 1e-4, priorMode = 'empirical') {
+        constructor(varSmoothing = 1e-4, priorMode = 'empirical', seed = null) {
             this.varSmoothing = varSmoothing; // 1e-9, 1e-4, 1e-2, 0.1
             this.priorMode = priorMode; // 'empirical', 'uniform', 'laplace'
+            this.seed = seed !== null && seed !== undefined && seed !== '' ? Number(seed) : null;
             this.classes = [];
             this.priors = {};
             this.means = {};
@@ -608,6 +632,8 @@
             this.dropoutRate = config.dropoutRate !== undefined ? config.dropoutRate : 0.1;
             this.optimizerName = config.optimizer || 'adam';
             this.l2Reg = config.l2Reg !== undefined ? config.l2Reg : 0.0001;
+            this.seed = config.seed !== null && config.seed !== undefined && config.seed !== '' ? Number(config.seed) : null;
+            this.rng = createPRNG(this.seed);
             this.tfModel = null;
             this.fallbackGLM = null;
             this.history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
@@ -627,17 +653,23 @@
                         ? tf.regularizers.l2({ l2: this.l2Reg })
                         : null;
 
+                    // Seed-based weight initializer for reproducibility
+                    const kernelInit = (this.seed !== null && typeof tf.initializers !== 'undefined' && tf.initializers.glorotUniform)
+                        ? tf.initializers.glorotUniform({ seed: this.seed })
+                        : 'glorotUniform';
+
                     // Input + First Hidden Layer
                     const firstDense = {
                         inputShape: [inputDim],
                         units: this.hiddenLayers[0] || 64,
-                        activation: this.activation
+                        activation: this.activation,
+                        kernelInitializer: kernelInit
                     };
                     if (kernelReg) firstDense.kernelRegularizer = kernelReg;
                     model.add(tf.layers.dense(firstDense));
 
                     if (this.dropoutRate > 0) {
-                        model.add(tf.layers.dropout({ rate: this.dropoutRate }));
+                        model.add(tf.layers.dropout({ rate: this.dropoutRate, seed: this.seed }));
                     }
 
                     // Subsequent Hidden Layers
@@ -646,12 +678,13 @@
                         if (!units || units <= 0) continue;
                         const nextDense = {
                             units: units,
-                            activation: this.activation
+                            activation: this.activation,
+                            kernelInitializer: kernelInit
                         };
                         if (kernelReg) nextDense.kernelRegularizer = kernelReg;
                         model.add(tf.layers.dense(nextDense));
                         if (this.dropoutRate > 0) {
-                            model.add(tf.layers.dropout({ rate: this.dropoutRate }));
+                            model.add(tf.layers.dropout({ rate: this.dropoutRate, seed: this.seed ? this.seed + l : null }));
                         }
                     }
 
@@ -659,10 +692,11 @@
                     if (this.isClassification) {
                         model.add(tf.layers.dense({
                             units: this.numClasses,
-                            activation: 'softmax'
+                            activation: 'softmax',
+                            kernelInitializer: kernelInit
                         }));
                     } else {
-                        model.add(tf.layers.dense({ units: 1 }));
+                        model.add(tf.layers.dense({ units: 1, kernelInitializer: kernelInit }));
                     }
 
                     // Optimizer
@@ -799,6 +833,8 @@
             this.selectedBaseIds = config.baseModels && config.baseModels.length > 0 
                 ? config.baseModels 
                 : ['nn', 'rf', 'glm'];
+            this.seed = config.seed !== null && config.seed !== undefined && config.seed !== '' ? Number(config.seed) : null;
+            this.rng = createPRNG(this.seed);
             this.models = [];
             this.weights = [];
             this.baseMetrics = [];
@@ -826,6 +862,7 @@
                     });
                 }
 
+                const subSeed = this.seed !== null ? (this.seed + (idx + 1) * 1007) : null;
                 let subModel = null;
                 if (mId === 'nn') {
                     const epochs = capacity === 'fast' ? 20 : (capacity === 'deep' ? 60 : (this.userHyperparams.nnEpochs || 35));
@@ -838,7 +875,8 @@
                         activation: 'relu',
                         optimizer: 'adam',
                         batchSize: 16,
-                        l2Reg: 0.0001
+                        l2Reg: 0.0001,
+                        seed: subSeed
                     };
                     subModel = new DeepNeuralNetwork(this.isClassification, this.numClasses, nnParams);
                     await subModel.fit(trainX, trainY, testX, testY, (ep, tot, logs) => {
@@ -853,18 +891,18 @@
                 } else if (mId === 'rf') {
                     const trees = capacity === 'fast' ? 15 : (capacity === 'deep' ? 50 : (this.userHyperparams.rfTrees || 30));
                     const depth = capacity === 'fast' ? 4 : (capacity === 'deep' ? 8 : (this.userHyperparams.rfDepth || 6));
-                    subModel = new RandomForest(this.isClassification, trees, depth, 2, 'sqrt');
+                    subModel = new RandomForest(this.isClassification, trees, depth, 2, 'sqrt', subSeed);
                     subModel.fit(trainX, trainY);
                 } else if (mId === 'glm') {
                     const epochs = capacity === 'fast' ? 80 : (capacity === 'deep' ? 250 : 150);
-                    subModel = new GeneralizedLinearModel(this.isClassification, this.numClasses, 0.05, epochs, 0.01, 'momentum');
+                    subModel = new GeneralizedLinearModel(this.isClassification, this.numClasses, 0.05, epochs, 0.01, 'momentum', subSeed);
                     subModel.fit(trainX, trainY);
                 } else if (mId === 'knn') {
                     const kVal = capacity === 'fast' ? 3 : (capacity === 'deep' ? 7 : (this.userHyperparams.knnK || 5));
-                    subModel = new KNNModel(this.isClassification, kVal, 'euclidean', 'distance');
+                    subModel = new KNNModel(this.isClassification, kVal, 'euclidean', 'distance', subSeed);
                     subModel.fit(trainX, trainY);
                 } else if (mId === 'nb' && this.isClassification) {
-                    subModel = new GaussianNaiveBayes(1e-4, 'empirical');
+                    subModel = new GaussianNaiveBayes(1e-4, 'empirical', subSeed);
                     subModel.fit(trainX, trainY);
                 }
 
@@ -1034,40 +1072,50 @@
          * Create an instance of a model based on user selection
          */
         createModel(modelId, isClassification, numClasses = 2, userHyperparams = {}) {
+            let model;
+            const seed = userHyperparams.seed !== undefined && userHyperparams.seed !== null ? userHyperparams.seed : null;
             if (modelId === 'ensemble') {
-                return new EnsembleModel(isClassification, numClasses, userHyperparams);
+                model = new EnsembleModel(isClassification, numClasses, userHyperparams);
             } else if (modelId === 'nn') {
-                return new DeepNeuralNetwork(isClassification, numClasses, userHyperparams);
+                model = new DeepNeuralNetwork(isClassification, numClasses, userHyperparams);
             } else if (modelId === 'rf') {
                 const trees = userHyperparams.numTrees || 30;
                 const depth = userHyperparams.maxDepth || 6;
                 const minSplit = userHyperparams.minSamplesSplit || 2;
                 const featRatio = userHyperparams.featureRatio || 'sqrt';
-                return new RandomForest(isClassification, trees, depth, minSplit, featRatio);
+                model = new RandomForest(isClassification, trees, depth, minSplit, featRatio, seed);
             } else if (modelId === 'glm') {
-                return new GeneralizedLinearModel(
+                model = new GeneralizedLinearModel(
                     isClassification,
                     numClasses,
                     userHyperparams.lr || 0.05,
                     userHyperparams.epochs || 150,
                     userHyperparams.lambdaL2 !== undefined ? userHyperparams.lambdaL2 : 0.01,
-                    userHyperparams.solver || 'momentum'
+                    userHyperparams.solver || 'momentum',
+                    seed
                 );
             } else if (modelId === 'knn') {
-                return new KNNModel(
+                model = new KNNModel(
                     isClassification,
                     userHyperparams.k || 5,
                     userHyperparams.metric || 'euclidean',
-                    userHyperparams.weighting || 'uniform'
+                    userHyperparams.weighting || 'uniform',
+                    seed
                 );
             } else if (modelId === 'nb') {
                 if (!isClassification) throw new Error("Naive Bayes is only supported for classification tasks.");
-                return new GaussianNaiveBayes(
+                model = new GaussianNaiveBayes(
                     userHyperparams.varSmoothing !== undefined ? userHyperparams.varSmoothing : 1e-4,
-                    userHyperparams.priorMode || 'empirical'
+                    userHyperparams.priorMode || 'empirical',
+                    seed
                 );
+            } else {
+                throw new Error(`Unknown model ID: ${modelId}`);
             }
-            throw new Error(`Unknown model ID: ${modelId}`);
+            if (model && seed !== null && seed !== undefined) {
+                model.seed = seed;
+            }
+            return model;
         },
 
         /**
@@ -1157,7 +1205,8 @@
                     confMatrix,
                     classMetrics,
                     actuals: testY,
-                    predictions: preds
+                    predictions: preds,
+                    seed: model.seed !== undefined ? model.seed : null
                 };
             } else {
                 // Regression Metrics: R2, MSE, RMSE, MAE
@@ -1189,7 +1238,8 @@
                     rmse,
                     mae,
                     actuals: testY,
-                    predictions: preds
+                    predictions: preds,
+                    seed: model.seed !== undefined ? model.seed : null
                 };
             }
         },

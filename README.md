@@ -111,14 +111,40 @@ Clinicians and researchers can choose the exact scope of models to train and ben
   - **Complete Confusion Matrix Table** displaying actual vs. predicted classifications with hit/miss cell coloration.
   - **One-Click Model Deployment:** The champion model is auto-designated as active, but researchers can click *"Set as Active Predictor"* on any tested model card or leaderboard row to immediately deploy it for Single and Batch Inference.
 
-### 7. Dual Inference Modes
+### 7. Exact Scientific Reproducibility & Random Seed Management
+
+Reproducibility is a fundamental prerequisite in scientific and clinical research. The platform provides full deterministic random seed control and provenance tracking:
+
+- **Per-Model Seed Input & Randomization:**
+  - Every machine learning and deep learning model includes a **Random Seed (Reproducibility)** input control equipped with a 🎲 dice randomizer button.
+  - Researchers can enter a custom integer seed (e.g. `42`, `1007`) or click the 🎲 dice button to generate a random seed.
+  - If left blank, the system automatically generates a high-entropy seed and immediately populates the input field so the user always has a visible reference.
+- **Option A Data Split Seed:**
+  - An optional **Split Seed** control governs deterministic train/test cohort partitioning, guaranteeing identical patient allocations across validation experiments.
+- **Deterministic Pseudo-Random Number Generation (PRNG):**
+  - Powered by a client-side 32-bit **Mulberry32 PRNG** algorithm.
+  - Ensures identical, platform-independent deterministic execution across browsers for:
+    - Train/test data shuffling.
+    - Random Forest bootstrap resamples and feature subsampling.
+    - Deep Neural Network layer kernel and dropout initialization.
+    - Ensemble derived sub-model seed propagation.
+    - k-NN neighbor distance tie-breaking.
+- **Prominent Output of Reproducibility Seeds for Future Reference:**
+  - **Results Status Banner:** Displays the deployed model's exact seed.
+  - **Benchmark Leaderboard:** Features a dedicated **Seed (Ref)** column with one-click clipboard copy (`🌱 [seed] 📋`).
+  - **Multi-Model Confusion Matrix Cards:** Displays a seed badge with one-click copy on every tested model card.
+  - **Single Model Metrics Summary:** Prominently presents a Reproducibility Seed metric card.
+  - **Single Patient Case Predictor:** Highlights the active model seed within the outcome banner.
+  - **Batch Prediction Export:** Automatically embeds the `Model_Seed` column in exported CSV files for permanent provenance in clinical study records.
+
+### 8. Dual Inference Modes
 - **Single Patient Predictor:**
   - Dynamically generated clinical form tailored to the features (sliders, rank selectors, categorical dropdowns).
-  - Outputs predicted class/value, confidence score, and probability distribution bar meters.
+  - Outputs predicted class/value, confidence score, probability distribution bar meters, and the deployed model's reproducibility seed.
 - **Batch Prediction Facility:**
   - Upload an unseen cohort CSV with multiple patient records.
   - Computes predictions simultaneously for all rows.
-  - Enriches the dataset with `Predicted_[Target]` and `Prediction_Confidence` and exports as `.csv`.
+  - Enriches the dataset with `Predicted_[Target]`, `Prediction_Confidence`, and `Model_Seed` and exports as `.csv`.
 
 ---
 

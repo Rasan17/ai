@@ -426,7 +426,7 @@
                                         <input type="range" id="train-ratio-slider" min="50" max="95" value="80" step="1" style="flex: 1; accent-color: var(--accent-cyan); cursor: pointer;">
                                     </div>
 
-                                    <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                                    <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
                                         <div class="param-group" style="flex: 1; min-width: 130px;">
                                             <label style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
                                             <input type="number" id="train-pct-input" class="control-input" value="80" min="50" max="95" step="1">
@@ -434,6 +434,14 @@
                                         <div class="param-group" style="flex: 1; min-width: 130px;">
                                             <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
                                             <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
+                                        </div>
+                                        <div class="param-group" style="flex: 1; min-width: 160px;">
+                                            <label style="font-size: 11px; text-transform: uppercase;">Split Seed (Reproducibility)</label>
+                                            <div class="seed-input-wrap">
+                                                <input type="number" id="split-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                                <button type="button" class="btn-roll-seed" id="btn-roll-split-seed" title="Generate random split seed">🎲</button>
+                                            </div>
+                                            <div class="seed-hint">Leave blank to auto-generate.</div>
                                         </div>
                                         <div style="display: flex; gap: 6px; align-items: flex-end; padding-top: 18px; flex-wrap: wrap;">
                                             <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="80">80/20 (Default)</button>
@@ -574,6 +582,14 @@
                                     <option value="sigmoid">Sigmoid</option>
                                 </select>
                             </div>
+                            <div class="param-group">
+                                <label>Random Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="nn-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-nn-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Leave blank to auto-generate. Exact seed will be output for reference.</div>
+                            </div>
                         </div>
 
                         <!-- Random Forest Hyperparams -->
@@ -605,6 +621,14 @@
                                     <option value="all">100% of Features (Bagging Mode)</option>
                                 </select>
                             </div>
+                            <div class="param-group">
+                                <label>Random Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="rf-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-rf-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Controls bootstrap resampling and feature subsampling.</div>
+                            </div>
                         </div>
 
                         <!-- Logistic / Ridge Hyperparams -->
@@ -635,6 +659,14 @@
                                     <option value="gd">Standard Batch Gradient Descent</option>
                                 </select>
                             </div>
+                            <div class="param-group">
+                                <label>Random Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="glm-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-glm-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Controls parameter initialization and stochastic updates.</div>
+                            </div>
                         </div>
 
                         <!-- k-NN Hyperparams -->
@@ -658,6 +690,14 @@
                                     <option value="distance">Distance-Weighted (1/dist - Closer cases vote more heavily)</option>
                                 </select>
                             </div>
+                            <div class="param-group">
+                                <label>Random Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="knn-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-knn-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Used for tie-breaking equidistant neighbor rankings.</div>
+                            </div>
                         </div>
 
                         <!-- Gaussian Naive Bayes Hyperparams -->
@@ -678,6 +718,14 @@
                                     <option value="uniform">Balanced / Uniform (Equal Priors 1/K - Adjusts for Class Imbalance)</option>
                                     <option value="laplace">Laplace-Smoothed Priors (Additive Smoothing)</option>
                                 </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Random Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="nb-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-nb-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Reference seed recorded for analysis provenance.</div>
                             </div>
                         </div>
 
@@ -706,6 +754,14 @@
                                     <option value="fast">Fast (Lower trees & epochs for rapid execution)</option>
                                     <option value="deep">High-Capacity (More trees, deeper MLP representation)</option>
                                 </select>
+                            </div>
+                            <div class="param-group">
+                                <label>Master Seed (Reproducibility)</label>
+                                <div class="seed-input-wrap">
+                                    <input type="number" id="ensemble-seed-input" class="control-input" placeholder="e.g. 42 (blank = random)">
+                                    <button type="button" class="btn-roll-seed" id="btn-roll-ensemble-seed" title="Generate random seed">🎲</button>
+                                </div>
+                                <div class="seed-hint">Propagates deterministic derived seeds to all base models.</div>
                             </div>
                             <div class="param-group" style="grid-column: 1 / -1;">
                                 <label>Constituent Base Models to Include</label>

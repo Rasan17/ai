@@ -646,15 +646,33 @@
         },
 
         /**
-         * Train / Test Split
+         * Pseudo-Random Number Generator (Mulberry32) for reproducible data splits & shuffling
          */
-        trainTestSplit(X, y, trainRatio = 0.8, isClassification = true) {
+        createPRNG(seed) {
+            if (seed === null || seed === undefined || seed === '' || isNaN(seed)) {
+                return Math.random;
+            }
+            let s = Math.floor(Math.abs(Number(seed))) >>> 0;
+            if (s === 0) s = 1;
+            return function() {
+                s |= 0; s = (s + 0x6D2B79F5) | 0;
+                let t = Math.imul(s ^ (s >>> 15), 1 | s);
+                t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
+                return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        },
+
+        /**
+         * Train / Test Split with deterministic random seed support
+         */
+        trainTestSplit(X, y, trainRatio = 0.8, isClassification = true, seed = null) {
             const total = X.length;
             const indices = Array.from({ length: total }, (_, i) => i);
+            const rng = this.createPRNG(seed);
 
-            // Seedable or random shuffle
+            // Deterministic seeded Fisher-Yates shuffle
             for (let i = indices.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
+                const j = Math.floor(rng() * (i + 1));
                 [indices[i], indices[j]] = [indices[j], indices[i]];
             }
 

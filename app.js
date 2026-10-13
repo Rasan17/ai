@@ -433,6 +433,29 @@
         // Train Model
         DOM.trainModelBtn.addEventListener('click', startModelTraining);
 
+        // Reproducibility Seed Dice Roll Listeners
+        const seedRollButtons = [
+            { btnId: 'btn-roll-split-seed', inputId: 'split-seed-input', name: 'Split Seed' },
+            { btnId: 'btn-roll-nn-seed', inputId: 'nn-seed-input', name: 'Neural Net Seed' },
+            { btnId: 'btn-roll-rf-seed', inputId: 'rf-seed-input', name: 'Random Forest Seed' },
+            { btnId: 'btn-roll-glm-seed', inputId: 'glm-seed-input', name: 'GLM Seed' },
+            { btnId: 'btn-roll-knn-seed', inputId: 'knn-seed-input', name: 'k-NN Seed' },
+            { btnId: 'btn-roll-nb-seed', inputId: 'nb-seed-input', name: 'Naive Bayes Seed' },
+            { btnId: 'btn-roll-ensemble-seed', inputId: 'ensemble-seed-input', name: 'Ensemble Master Seed' }
+        ];
+        seedRollButtons.forEach(item => {
+            const btn = document.getElementById(item.btnId);
+            const input = document.getElementById(item.inputId);
+            if (btn && input) {
+                btn.addEventListener('click', () => {
+                    const newSeed = Math.floor(Math.random() * 90000) + 10000;
+                    input.value = newSeed;
+                    input.focus();
+                    showSeedToast(`Generated ${item.name}: ${newSeed}`);
+                });
+            }
+        });
+
         // Single Prediction
         DOM.runSinglePredictBtn.addEventListener('click', runSinglePrediction);
 
@@ -1061,6 +1084,21 @@
             const capEl = document.getElementById('ens-capacity-select');
             hp.capacity = capEl ? capEl.value : 'balanced';
         }
+
+        // Extract Reproducibility Seed for this model (or auto-generate and populate for user reference)
+        const seedInput = document.getElementById(`${modelId}-seed-input`);
+        let seedVal = null;
+        if (seedInput && seedInput.value !== '' && !isNaN(parseInt(seedInput.value, 10))) {
+            seedVal = parseInt(seedInput.value, 10);
+        } else {
+            // Auto-generate high-entropy integer seed
+            seedVal = Math.floor(Math.random() * 90000) + 10000;
+            if (seedInput) {
+                seedInput.value = seedVal;
+            }
+        }
+        hp.seed = seedVal;
+
         return hp;
     }
 
@@ -1103,7 +1141,17 @@
                 const trainRatio = Math.min(0.95, Math.max(0.50, (trainPct || 80) / 100));
                 const testPct = Math.round((1 - trainRatio) * 100);
 
-                const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification);
+                // Option A Reproducibility Seed for train/test split
+                const splitSeedInput = document.getElementById('split-seed-input');
+                let splitSeed = null;
+                if (splitSeedInput && splitSeedInput.value !== '' && !isNaN(parseInt(splitSeedInput.value, 10))) {
+                    splitSeed = parseInt(splitSeedInput.value, 10);
+                } else {
+                    splitSeed = Math.floor(Math.random() * 90000) + 10000;
+                    if (splitSeedInput) splitSeedInput.value = splitSeed;
+                }
+
+                const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification, splitSeed);
                 AppState.trainTestData = split;
 
                 const shouldRetrain = DOM.retrainYes ? DOM.retrainYes.checked : true;
@@ -1113,7 +1161,7 @@
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
                     const hyperparams = getHyperparamsForModel(mId, prep);
 
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 [${i + 1}/${modelsToTest.length}] Training ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases)...</span>`;
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 [${i + 1}/${modelsToTest.length}] Training ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases &bull; Seed: ${hyperparams.seed})...</span>`;
                     await new Promise(r => setTimeout(r, 40));
 
                     if (modelsToTest.length === 1 && mId === 'nn') {
@@ -1150,6 +1198,8 @@
                     evalRes.trainCount = split.trainX.length;
                     evalRes.testCount = split.testX.length;
                     evalRes.totalCount = prep.X.length;
+                    evalRes.splitSeed = splitSeed;
+                    evalRes.seed = hyperparams.seed;
 
                     let activeModelInstance = valModel;
 
@@ -1183,7 +1233,9 @@
                         info: mInfo,
                         evalRes: evalRes,
                         model: activeModelInstance,
-                        retrained: shouldRetrain
+                        retrained: shouldRetrain,
+                        seed: hyperparams.seed,
+                        splitSeed: splitSeed
                     });
                 }
             } else {
@@ -1213,7 +1265,7 @@
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
                     const hyperparams = getHyperparamsForModel(mId, prep);
 
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 [${i + 1}/${modelsToTest.length}] Fitting ${mInfo.name} on 100% of Training Dataset (i) (${prep.X.length} cases)...</span>`;
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 [${i + 1}/${modelsToTest.length}] Fitting ${mInfo.name} on 100% of Training Dataset (i) (${prep.X.length} cases &bull; Seed: ${hyperparams.seed})...</span>`;
                     await new Promise(r => setTimeout(r, 40));
 
                     if (modelsToTest.length === 1 && mId === 'nn') {
@@ -1250,13 +1302,15 @@
                     evalRes.testProvided = testPrep.totalProvided;
                     evalRes.missingTargetCount = testPrep.missingTargetCount;
                     evalRes.unknownClassCount = testPrep.unknownClassCount;
+                    evalRes.seed = hyperparams.seed;
 
                     testedResults.push({
                         modelId: mId,
                         info: mInfo,
                         evalRes: evalRes,
                         model: model,
-                        retrained: false
+                        retrained: false,
+                        seed: hyperparams.seed
                     });
                 }
             }
@@ -1288,7 +1342,7 @@
                             ✓ Successfully Evaluated &amp; Deployed ${champion.info.name}!
                         </span>
                         <span style="font-size: 11.5px; color: var(--text-secondary);">
-                            Reported Benchmark: <strong>${accText}</strong> &bull; Active Predictor: <strong>${champion.info.name} (${champion.retrained ? '100% Cohort Retrained' : (isOptionA ? `${singleRes.trainPct}% Split Model` : 'Dataset i Fitted')})</strong>
+                            Reported Benchmark: <strong>${accText}</strong> &bull; Reproducibility Seed: <code style="color: var(--accent-purple); font-weight: 700; background: rgba(168,85,247,0.12); padding: 1px 6px; border-radius: 4px;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code> &bull; Active Predictor: <strong>${champion.info.name} (${champion.retrained ? '100% Cohort Retrained' : (isOptionA ? `${singleRes.trainPct}% Split Model` : 'Dataset i Fitted')})</strong>
                         </span>
                     </div>
                 `;
@@ -1302,7 +1356,7 @@
                             🏆 Tournament Complete: Tested &amp; Evaluated ${testedResults.length} Models!
                         </span>
                         <span style="font-size: 11.5px; color: var(--text-secondary);">
-                            Leader: <strong>${champion.info.name}</strong> [${topAccText}] &bull; Auto-deployed as Active Predictor (You can switch to any model below).
+                            Leader: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds preserved for exact reproduction below.
                         </span>
                     </div>
                 `;
@@ -1407,6 +1461,31 @@
         alert(`✓ Model Deployed: "${mInfo.name}" is now the active predictor for Single Prediction (Step 5) and Batch Prediction (Step 6).`);
     }
     window.deployTestedModel = deployTestedModel;
+
+    function showSeedToast(msg) {
+        const existing = document.querySelector('.seed-toast');
+        if (existing) existing.remove();
+        const toast = document.createElement('div');
+        toast.className = 'seed-toast';
+        toast.innerHTML = `<span>📋</span> <span>${msg}</span>`;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2600);
+    }
+
+    function copySeedToClipboard(seed) {
+        if (seed === undefined || seed === null) return;
+        const seedStr = String(seed);
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(seedStr).then(() => {
+                showSeedToast(`Seed "${seedStr}" copied to clipboard! (Keep as reference)`);
+            }).catch(() => {
+                prompt("Copy reproducibility seed:", seedStr);
+            });
+        } else {
+            prompt("Copy reproducibility seed:", seedStr);
+        }
+    }
+    window.copySeedToClipboard = copySeedToClipboard;
 
     function renderEvaluationDashboard() {
         const evalRes = AppState.evalResults;
@@ -1514,6 +1593,10 @@
                         ? `${(rEval.macroRecall * 100).toFixed(1)}%`
                         : '-';
 
+                    const seedDisplay = (rEval.seed !== null && rEval.seed !== undefined)
+                        ? `<span class="seed-pill" title="Click to copy reproducibility seed: ${rEval.seed}" onclick="window.copySeedToClipboard(${rEval.seed})">🌱 ${rEval.seed} <span class="copy-icon">📋</span></span>`
+                        : `<span style="font-size: 11px; color: var(--text-muted); font-family: monospace;">N/A</span>`;
+
                     const deployBtn = isDeployed
                         ? `<span class="pill pill-target" style="background: rgba(16, 185, 129, 0.2); color: var(--accent-emerald); font-weight: 700; border-color: rgba(16, 185, 129, 0.4);">✓ Active Predictor</span>`
                         : `<button class="btn-preset-action deploy-model-btn" onclick="window.deployTestedModel('${resItem.modelId}')" style="padding: 4px 10px; font-size: 11px; cursor: pointer;">Deploy Model</button>`;
@@ -1536,6 +1619,7 @@
                             <td>${f1Display}</td>
                             <td>${precDisplay}</td>
                             <td>${recDisplay}</td>
+                            <td>${seedDisplay}</td>
                             <td>${deployBtn}</td>
                         </tr>
                     `;
@@ -1549,7 +1633,7 @@
                                     <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked
                                 </h3>
                                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                                    Comparative diagnostic performance on ${cohortDesc}. Top-performing model (${allResults[0].info.name}) is auto-designated as active predictor.
+                                    Comparative diagnostic performance on ${cohortDesc}. Top-performing model (${allResults[0].info.name}) is auto-designated as active predictor. Click any seed pill to copy its reproducible reference.
                                 </div>
                             </div>
                             <span class="pill pill-target" style="font-size: 12px; font-weight: 700;">
@@ -1568,6 +1652,7 @@
                                         <th>${prep.isClassification ? 'Macro F1' : 'MAE'}</th>
                                         <th>${prep.isClassification ? 'Precision' : 'MSE'}</th>
                                         <th>${prep.isClassification ? 'Recall' : '-'}</th>
+                                        <th>Seed (Ref)</th>
                                         <th>Status / Deploy</th>
                                     </tr>
                                 </thead>
@@ -1662,6 +1747,13 @@
                                 </div>
                             </div>
 
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border-color);">
+                                <div class="cm-seed-card-badge" title="Click to copy reproducibility seed: ${rEval.seed}" onclick="window.copySeedToClipboard(${rEval.seed})">
+                                    <span>🌱 Seed:</span> <strong>${rEval.seed !== null && rEval.seed !== undefined ? rEval.seed : 'N/A'}</strong> <span style="font-size: 10px; opacity: 0.8;">📋</span>
+                                </div>
+                                ${rEval.splitSeed ? `<span style="font-size: 10.5px; color: var(--text-muted); font-family: monospace;">Split: ${rEval.splitSeed}</span>` : ''}
+                            </div>
+
                             <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); margin-top: 10px;">
                                 ${rEval.isClassification ? 'Confusion Matrix:' : 'Regression Diagnostics:'}
                             </div>
@@ -1680,7 +1772,7 @@
                             <span>📊</span> Confusion Matrix &amp; Diagnostic Accuracy Breakdown &mdash; All Chosen Models
                         </h3>
                         <p style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                            Individual confusion matrices and test metrics for every model chosen in this benchmark. Click "Set as Active Predictor" to deploy any model.
+                            Individual confusion matrices and test metrics for every model chosen in this benchmark. Each card includes its exact reproducibility seed (click to copy).
                         </p>
                     </div>
                     <div class="multi-cm-grid">
@@ -1732,6 +1824,10 @@
                             <span class="m-val">${(evalRes.rocAuc).toFixed(3)}</span>
                         </div>
                     ` : ''}
+                    <div class="metric-pill-card" style="cursor: pointer;" onclick="window.copySeedToClipboard(${evalRes.seed})" title="Click to copy reproducibility seed: ${evalRes.seed}">
+                        <span class="m-title">Reproducibility Seed</span>
+                        <span class="m-val" style="color: var(--accent-purple); font-family: monospace;">🌱 ${evalRes.seed !== null && evalRes.seed !== undefined ? evalRes.seed : 'Auto'} 📋</span>
+                    </div>
                 `;
 
                 // Confusion Matrix Table
@@ -1783,6 +1879,10 @@
                     <div class="metric-pill-card">
                         <span class="m-title">MSE</span>
                         <span class="m-val">${evalRes.mse.toFixed(3)}</span>
+                    </div>
+                    <div class="metric-pill-card" style="cursor: pointer;" onclick="window.copySeedToClipboard(${evalRes.seed})" title="Click to copy reproducibility seed: ${evalRes.seed}">
+                        <span class="m-title">Reproducibility Seed</span>
+                        <span class="m-val" style="color: var(--accent-purple); font-family: monospace;">🌱 ${evalRes.seed !== null && evalRes.seed !== undefined ? evalRes.seed : 'Auto'} 📋</span>
                     </div>
                 `;
                 DOM.evaluationDetailContainer.innerHTML = `
@@ -1877,6 +1977,14 @@
             `;
         }
 
+        const activeSeed = (AppState.trainedModel && AppState.trainedModel.seed !== undefined && AppState.trainedModel.seed !== null)
+            ? AppState.trainedModel.seed
+            : (AppState.evalResults?.seed !== null && AppState.evalResults?.seed !== undefined ? AppState.evalResults.seed : null);
+
+        const seedSnippet = activeSeed !== null
+            ? ` &bull; Reproducibility Seed: <code style="color: var(--accent-purple); font-weight: 700; background: rgba(168,85,247,0.12); padding: 1px 6px; border-radius: 4px; cursor: pointer;" onclick="window.copySeedToClipboard(${activeSeed})" title="Click to copy reproducibility seed">🌱 ${activeSeed} 📋</code>`
+            : '';
+
         if (prep.isClassification) {
             const predictedLabel = prep.targetIdxToClass[result.pred] || result.pred;
             const confidencePercent = result.confidence ? (result.confidence * 100).toFixed(1) : '90.0';
@@ -1900,7 +2008,7 @@
                     <h3>Predicted ${prep.targetCol}</h3>
                     <div class="pred-outcome-val">${predictedLabel}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
                 </div>
@@ -1921,7 +2029,7 @@
                     <h3>Predicted Continuous ${prep.targetCol}</h3>
                     <div class="pred-outcome-val">${result.pred}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
                 </div>
@@ -1975,6 +2083,9 @@
         const { headers, rows } = AppState.batchData;
         const prep = AppState.prepMeta;
         const results = [];
+        const activeSeed = (AppState.trainedModel && AppState.trainedModel.seed !== undefined && AppState.trainedModel.seed !== null)
+            ? AppState.trainedModel.seed
+            : (AppState.evalResults?.seed !== null && AppState.evalResults?.seed !== undefined ? AppState.evalResults.seed : 'Auto');
 
         rows.forEach(r => {
             const xVector = DataEngine.transformSingleRow(r, prep);
@@ -1990,6 +2101,7 @@
             const rowCopy = { ...r };
             rowCopy[`Predicted_${prep.targetCol}`] = predictedLabel;
             rowCopy[`Prediction_Confidence`] = confidence;
+            rowCopy[`Model_Seed`] = activeSeed;
             results.push(rowCopy);
         });
 
