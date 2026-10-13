@@ -1230,6 +1230,34 @@
                 const mae = Number((sumAbsErr / total).toFixed(4));
                 const r2 = totalSq > 0 ? Number((1 - (sumSqErr / totalSq)).toFixed(4)) : 0;
 
+                // 2x2 Clinical Dichotomization / Concordance Confusion Matrix for Continuous Target
+                const sortedActuals = [...testY].sort((a, b) => a - b);
+                const medianThreshold = sortedActuals.length % 2 === 0
+                    ? Number(((sortedActuals[sortedActuals.length / 2 - 1] + sortedActuals[sortedActuals.length / 2]) / 2).toFixed(2))
+                    : Number(sortedActuals[Math.floor(sortedActuals.length / 2)].toFixed(2));
+                const threshold = medianThreshold;
+
+                // 2x2 table: Row 0 = Actual < Thresh, Row 1 = Actual >= Thresh
+                // Col 0 = Pred < Thresh, Col 1 = Pred >= Thresh
+                const confMatrix2x2 = [
+                    [0, 0],
+                    [0, 0]
+                ];
+                let hits = 0;
+                for (let i = 0; i < total; i++) {
+                    const actBin = testY[i] >= threshold ? 1 : 0;
+                    const predBin = preds[i] >= threshold ? 1 : 0;
+                    confMatrix2x2[actBin][predBin]++;
+                    if (actBin === predBin) hits++;
+                }
+                const thresholdAccuracy = Number((hits / total).toFixed(4));
+                const tp = confMatrix2x2[1][1];
+                const fn = confMatrix2x2[1][0];
+                const fp = confMatrix2x2[0][1];
+                const tn = confMatrix2x2[0][0];
+                const sensitivity = (tp + fn) > 0 ? Number((tp / (tp + fn)).toFixed(4)) : 0;
+                const specificity = (tn + fp) > 0 ? Number((tn / (tn + fp)).toFixed(4)) : 0;
+
                 return {
                     isClassification: false,
                     totalSamples: total,
@@ -1239,6 +1267,11 @@
                     mae,
                     actuals: testY,
                     predictions: preds,
+                    confMatrix: confMatrix2x2,
+                    threshold: threshold,
+                    thresholdAccuracy: thresholdAccuracy,
+                    sensitivity: sensitivity,
+                    specificity: specificity,
                     seed: model.seed !== undefined ? model.seed : null
                 };
             }

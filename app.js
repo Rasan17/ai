@@ -1704,12 +1704,45 @@
                             </div>
                         `;
                     } else {
+                        const cm = rEval.confMatrix || [[0, 0], [0, 0]];
+                        const thresh = rEval.threshold !== undefined ? rEval.threshold : 0;
+                        const regClasses = [`< ${thresh}`, `≥ ${thresh}`];
+                        const accPct = rEval.thresholdAccuracy !== undefined ? (rEval.thresholdAccuracy * 100).toFixed(1) : 'N/A';
+                        const sensPct = rEval.sensitivity !== undefined ? (rEval.sensitivity * 100).toFixed(1) : 'N/A';
+                        const specPct = rEval.specificity !== undefined ? (rEval.specificity * 100).toFixed(1) : 'N/A';
                         cmContent = `
-                            <div style="background: var(--bg-surface-subtle); padding: 12px; border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); margin-top: 10px;">
-                                <div>MAE: <strong>${rEval.mae.toFixed(3)}</strong> &bull; MSE: <strong>${rEval.mse.toFixed(3)}</strong></div>
-                                <div style="margin-top: 4px;">Residual Variance: <strong>${(rEval.mse / (rEval.r2 || 1)).toFixed(3)}</strong></div>
-                                <div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color); font-size: 11px; color: var(--text-muted); line-height: 1.45;">
-                                    💡 <em>Continuous Numeric Target (${prep.targetCol}):</em> Confusion matrices (2-by-2 tables) are specifically for <strong>Classification</strong> outcomes (discrete binary/multi-class categories). To obtain a 2-by-2 Confusion Matrix, change your Target scale to <strong>Nominal</strong> or <strong>Ordinal</strong> in <strong>Step 2</strong>.
+                            <div class="table-container" style="margin-top: 10px;">
+                                <div style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+                                    <span>2×2 Concordance Matrix (Cutoff: ${thresh})</span>
+                                    <span style="color: var(--accent-emerald); font-weight: 700;">${accPct}% Acc</span>
+                                </div>
+                                <table class="cm-table" style="font-size: 11.5px; width: 100%;">
+                                    <thead>
+                                        <tr>
+                                            <th style="padding: 6px 8px; font-size: 10px;">Actual \\ Pred</th>
+                                            ${regClasses.map(c => `<th style="padding: 6px 8px; font-size: 10.5px;">${c}</th>`).join('')}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${regClasses.map((actualClass, r) => `
+                                            <tr>
+                                                <th style="text-align: left; padding: 6px 8px; font-size: 10.5px;">${actualClass}</th>
+                                                ${regClasses.map((_, c) => {
+                                                    const val = cm[r][c];
+                                                    const isHit = r === c;
+                                                    return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}" style="padding: 6px 8px; font-weight: 700;">${val}</td>`;
+                                                }).join('')}
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                                <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-secondary); padding: 0 4px;">
+                                    <span>Sens: <strong>${sensPct}%</strong></span>
+                                    <span>Spec: <strong>${specPct}%</strong></span>
+                                    <span>MAE: <strong>${rEval.mae.toFixed(3)}</strong></span>
+                                </div>
+                                <div style="margin-top: 6px; padding: 6px 8px; background: var(--bg-surface-subtle); border-radius: var(--radius-sm); font-size: 10.5px; color: var(--text-muted); line-height: 1.35;">
+                                    💡 <em>2×2 matrix dichotomized at median cutoff (${thresh}). For discrete binary categories, choose <strong>Nominal</strong> or <strong>Ordinal</strong> in Step 2.</em>
                                 </div>
                             </div>
                         `;
@@ -1758,7 +1791,7 @@
                             </div>
 
                             <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); margin-top: 10px;">
-                                ${rEval.isClassification ? 'Confusion Matrix:' : 'Regression Diagnostics:'}
+                                ${rEval.isClassification ? 'Confusion Matrix:' : '2×2 Confusion Matrix &amp; Diagnostics:'}
                             </div>
                             ${cmContent}
 
@@ -1880,18 +1913,65 @@
                         <span class="m-val">${evalRes.mae.toFixed(3)}</span>
                     </div>
                     <div class="metric-pill-card">
-                        <span class="m-title">MSE</span>
-                        <span class="m-val">${evalRes.mse.toFixed(3)}</span>
+                        <span class="m-title">2×2 Concordance Acc</span>
+                        <span class="m-val" style="color: var(--accent-emerald);">${evalRes.thresholdAccuracy !== undefined ? `${(evalRes.thresholdAccuracy * 100).toFixed(1)}%` : evalRes.mse.toFixed(3)}</span>
                     </div>
                     <div class="metric-pill-card" style="cursor: pointer;" onclick="window.copySeedToClipboard(${evalRes.seed})" title="Click to copy reproducibility seed: ${evalRes.seed}">
                         <span class="m-title">Reproducibility Seed</span>
                         <span class="m-val" style="color: var(--accent-purple); font-family: monospace;">🌱 ${evalRes.seed !== null && evalRes.seed !== undefined ? evalRes.seed : 'Auto'} 📋</span>
                     </div>
                 `;
+
+                const cm = evalRes.confMatrix;
+                const thresh = evalRes.threshold !== undefined ? evalRes.threshold : 0;
+                const regClasses = [`< ${thresh}`, `≥ ${thresh}`];
+                let regCmHtml = '';
+                if (cm) {
+                    regCmHtml = `
+                        <div style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px;">
+                            <div style="display: flex; justify-content: space-between; align-items: baseline; max-width: 500px;">
+                                <h3 style="font-size: 15px; color: var(--text-primary); margin: 0;">2×2 Concordance Confusion Matrix (${cohortDesc})</h3>
+                                <span class="pill pill-target" style="font-size: 11px;">Cutoff: ${thresh}</span>
+                            </div>
+                            <div class="table-container" style="max-width: 500px;">
+                                <table class="cm-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Actual \\ Predicted</th>
+                                            ${regClasses.map(c => `<th>${c}</th>`).join('')}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${regClasses.map((actualClass, r) => `
+                                            <tr>
+                                                <th style="text-align: left;">${actualClass}</th>
+                                                ${regClasses.map((_, c) => {
+                                                    const val = cm[r][c];
+                                                    const isHit = r === c;
+                                                    return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}">${val}</td>`;
+                                                }).join('')}
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div style="max-width: 500px; display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); background: var(--bg-surface-subtle); padding: 8px 12px; border-radius: var(--radius-sm);">
+                                <span>Sensitivity: <strong style="color: var(--text-primary);">${(evalRes.sensitivity * 100).toFixed(1)}%</strong></span>
+                                <span>Specificity: <strong style="color: var(--text-primary);">${(evalRes.specificity * 100).toFixed(1)}%</strong></span>
+                                <span>Concordance Acc: <strong style="color: var(--accent-emerald);">${(evalRes.thresholdAccuracy * 100).toFixed(1)}%</strong></span>
+                            </div>
+                        </div>
+                    `;
+                }
+
                 DOM.evaluationDetailContainer.innerHTML = `
-                    <p style="font-size: 13px; color: var(--text-secondary);">
+                    ${regCmHtml}
+                    <p style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
                         Model validated on ${cohortDesc} with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
                     </p>
+                    <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">
+                        💡 <em>Note: For continuous regression targets, the 2×2 Confusion Matrix is generated by clinical dichotomization at the median threshold (${thresh}). To train as categorical classification, select <strong>Nominal</strong> or <strong>Ordinal</strong> in Step 2.</em>
+                    </div>
                 `;
             }
         }
