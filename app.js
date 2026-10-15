@@ -75,6 +75,211 @@
     };
     const ALL_MODEL_IDS = ['nn', 'rf', 'glm', 'knn', 'nb', 'ensemble'];
 
+    // =========================================================================
+    // EXECUTION WATCHDOG: LIVE MONITOR, LOOP DETECTOR & STALL SENTINEL
+    // =========================================================================
+    class ExecutionWatchdog {
+        constructor(config) {
+            this.container = config.container;
+            this.badge = config.badge;
+            this.stateText = config.stateText;
+            this.timerText = config.timerText;
+            this.loopText = config.loopText;
+            this.loopStatus = config.loopStatus;
+            this.taskName = config.taskName;
+            this.stepCounter = config.stepCounter;
+            this.progressBar = config.progressBar;
+            this.threadStatus = config.threadStatus;
+            this.heartbeatTick = config.heartbeatTick;
+            this.stuckHint = config.stuckHint;
+            this.cancelBtn = config.cancelBtn;
+
+            this.startTime = 0;
+            this.lastTickTime = 0;
+            this.timerInterval = null;
+            this.aborted = false;
+            this.transitionHistory = [];
+            this.loopCount = 0;
+            this.onCancelCallback = null;
+
+            if (this.cancelBtn) {
+                this.cancelBtn.addEventListener('click', () => this.forceAbort());
+            }
+        }
+
+        start(taskDescription, totalSteps = 1, onCancel = null) {
+            this.aborted = false;
+            this.onCancelCallback = onCancel;
+            this.startTime = Date.now();
+            this.lastTickTime = Date.now();
+            this.totalSteps = totalSteps;
+            this.currentStep = 1;
+            this.transitionHistory = [];
+            this.loopCount = 0;
+
+            if (this.container) this.container.style.display = 'block';
+            if (this.badge) {
+                this.badge.className = 'monitor-status-badge running';
+            }
+            if (this.stateText) this.stateText.innerHTML = 'ACTIVE &bull; COMPUTING';
+            if (this.loopStatus) this.loopStatus.className = 'monitor-loop-status';
+            if (this.loopText) this.loopText.innerText = 'Loop Guard: Normal (0 cycles)';
+            if (this.stuckHint) {
+                this.stuckHint.style.color = 'var(--accent-emerald)';
+                this.stuckHint.innerText = 'System operating smoothly';
+            }
+            if (this.threadStatus) {
+                this.threadStatus.style.color = 'var(--accent-emerald)';
+                this.threadStatus.innerText = 'Responsive';
+            }
+            if (this.progressBar) this.progressBar.style.width = '5%';
+            if (this.taskName) this.taskName.innerText = taskDescription;
+            if (this.stepCounter) this.stepCounter.innerText = totalSteps > 1 ? `Step 1 of ${totalSteps}` : 'In progress...';
+
+            // Start timer interval (updates every 100ms)
+            if (this.timerInterval) clearInterval(this.timerInterval);
+            this.timerInterval = setInterval(() => this.onTimerTick(), 100);
+        }
+
+        onTimerTick() {
+            if (this.aborted) return;
+            const now = Date.now();
+            const elapsed = (now - this.startTime) / 1000;
+            const mins = Math.floor(elapsed / 60);
+            const secs = Math.floor(elapsed % 60);
+            const tenths = Math.floor((elapsed * 10) % 10);
+            const timerStr = `⏱️ ${mins < 10 ? '0' + mins : mins}:${secs < 10 ? '0' + secs : secs}.${tenths}s`;
+
+            if (this.timerText) this.timerText.innerText = timerStr;
+
+            // Heartbeat stall check
+            const gap = (now - this.lastTickTime) / 1000;
+            if (this.heartbeatTick) {
+                this.heartbeatTick.innerText = gap < 1 ? '< 1s ago' : `${gap.toFixed(1)}s ago`;
+            }
+
+            if (gap > 12) {
+                // Potential stall warning
+                if (this.badge) this.badge.className = 'monitor-status-badge stalled';
+                if (this.stateText) this.stateText.innerText = '⚠️ HEAVY LOAD / POSSIBLE STALL';
+                if (this.threadStatus) {
+                    this.threadStatus.style.color = 'var(--accent-rose)';
+                    this.threadStatus.innerText = 'High Latency';
+                }
+                if (this.stuckHint) {
+                    this.stuckHint.style.color = 'var(--accent-rose)';
+                    this.stuckHint.innerText = 'Calculations taking longer than expected. Click Force Stop if frozen.';
+                }
+            } else if (gap > 5) {
+                // Elevated compute
+                if (this.badge) this.badge.className = 'monitor-status-badge warning';
+                if (this.stateText) this.stateText.innerText = '⚙️ BUSY COMPUTING';
+                if (this.threadStatus) {
+                    this.threadStatus.style.color = 'var(--accent-amber)';
+                    this.threadStatus.innerText = 'Heavy Math';
+                }
+                if (this.stuckHint) {
+                    this.stuckHint.style.color = 'var(--accent-amber)';
+                    this.stuckHint.innerText = 'Complex gradient descent / tree construction in progress...';
+                }
+            } else {
+                if (this.badge && this.badge.className.includes('warning')) {
+                    this.badge.className = 'monitor-status-badge running';
+                    if (this.stateText) this.stateText.innerHTML = 'ACTIVE &bull; COMPUTING';
+                    if (this.threadStatus) {
+                        this.threadStatus.style.color = 'var(--accent-emerald)';
+                        this.threadStatus.innerText = 'Responsive';
+                    }
+                    if (this.stuckHint) {
+                        this.stuckHint.style.color = 'var(--accent-emerald)';
+                        this.stuckHint.innerText = 'System operating smoothly';
+                    }
+                }
+            }
+        }
+
+        tick(stepIndex, taskDescription, details = '') {
+            if (this.aborted) throw new Error("Operation halted by user.");
+            this.lastTickTime = Date.now();
+            this.currentStep = stepIndex;
+
+            // 1. Loop detection check
+            const transitionKey = `${stepIndex}:${taskDescription}`;
+            this.transitionHistory.push({ key: transitionKey, time: this.lastTickTime });
+
+            // Check if same transition occurred more than 3 times in recent history
+            const occurrences = this.transitionHistory.filter(t => t.key === transitionKey).length;
+            if (occurrences > 4) {
+                this.loopCount++;
+                if (this.loopStatus) this.loopStatus.className = 'monitor-loop-status loop-detected';
+                if (this.loopText) this.loopText.innerText = `🚨 Loop Guard: Repetitive Cycle (${this.loopCount}x)! Auto-mitigating...`;
+                console.warn(`[Watchdog Loop Guard] Repetitive cycling detected on key: ${transitionKey}`);
+                if (occurrences > 8) {
+                    this.forceAbort("Infinite recursion loop automatically prevented by Loop Guard.");
+                    throw new Error("Infinite loop broken by Watchdog Loop Guard.");
+                }
+            } else {
+                if (this.loopText) this.loopText.innerText = `Loop Guard: Normal (${this.loopCount} cycles)`;
+            }
+
+            // 2. Update UI
+            if (this.taskName) this.taskName.innerText = taskDescription;
+            if (this.stepCounter && this.totalSteps > 1) {
+                this.stepCounter.innerText = `Step ${stepIndex} of ${this.totalSteps}`;
+            }
+            if (this.progressBar) {
+                const pct = Math.min(100, Math.round((stepIndex / this.totalSteps) * 100));
+                this.progressBar.style.width = `${pct}%`;
+            }
+        }
+
+        finish(successMessage = 'Completed successfully') {
+            if (this.timerInterval) clearInterval(this.timerInterval);
+            this.timerInterval = null;
+
+            if (this.badge) this.badge.className = 'monitor-status-badge completed';
+            if (this.stateText) this.stateText.innerText = '✓ COMPLETED';
+            if (this.progressBar) this.progressBar.style.width = '100%';
+            if (this.taskName) this.taskName.innerText = successMessage;
+            if (this.stuckHint) {
+                this.stuckHint.style.color = 'var(--accent-cyan)';
+                this.stuckHint.innerText = 'Results rendered successfully';
+            }
+
+            setTimeout(() => {
+                if (this.container && !this.aborted) {
+                    this.container.style.display = 'none';
+                }
+            }, 800);
+        }
+
+        forceAbort(reason = "Operation aborted by user.") {
+            this.aborted = true;
+            if (this.timerInterval) clearInterval(this.timerInterval);
+            this.timerInterval = null;
+
+            if (this.badge) this.badge.className = 'monitor-status-badge stalled';
+            if (this.stateText) this.stateText.innerText = '🛑 ABORTED';
+            if (this.taskName) this.taskName.innerText = reason;
+            if (this.stuckHint) {
+                this.stuckHint.style.color = 'var(--accent-rose)';
+                this.stuckHint.innerText = 'State safely restored & computations cancelled.';
+            }
+
+            if (typeof this.onCancelCallback === 'function') {
+                try {
+                    this.onCancelCallback();
+                } catch (e) {
+                    console.error("Cancel callback error:", e);
+                }
+            }
+
+            setTimeout(() => {
+                if (this.container) this.container.style.display = 'none';
+            }, 2500);
+        }
+    }
+
     // DOM Elements
     const DOM = {};
 
@@ -212,6 +417,45 @@
         DOM.pipelineCompareBaselineBtn = document.getElementById('pipeline-compare-baseline-btn');
         DOM.pipelineVsBaselinePanel = document.getElementById('pipeline-vs-baseline-panel');
         DOM.pipelineVsBaselineContent = document.getElementById('pipeline-vs-baseline-content');
+
+        // Step 7 Pipeline Watchdog
+        DOM.pipelineMonitor = {
+            container: document.getElementById('pipeline-train-status'),
+            badge: document.getElementById('pipeline-monitor-badge'),
+            stateText: document.getElementById('pipeline-monitor-state'),
+            timerText: document.getElementById('pipeline-monitor-timer'),
+            loopStatus: document.getElementById('pipeline-monitor-loop-status'),
+            loopText: document.getElementById('pipeline-monitor-loop-text'),
+            taskName: document.getElementById('pipeline-train-status-text'),
+            stepCounter: document.getElementById('pipeline-monitor-step-counter'),
+            progressBar: document.getElementById('pipeline-monitor-progress-bar'),
+            threadStatus: document.getElementById('pipeline-monitor-thread-status'),
+            heartbeatTick: document.getElementById('pipeline-monitor-heartbeat-tick'),
+            stuckHint: document.getElementById('pipeline-monitor-stuck-hint'),
+            cancelBtn: document.getElementById('pipeline-monitor-cancel-btn')
+        };
+
+        // Step 4 Model Training Watchdog
+        DOM.step4Monitor = {
+            container: document.getElementById('step4-train-monitor'),
+            badge: document.getElementById('step4-monitor-badge'),
+            stateText: document.getElementById('step4-monitor-state'),
+            timerText: document.getElementById('step4-monitor-timer'),
+            loopStatus: document.getElementById('step4-monitor-loop-status'),
+            loopText: document.getElementById('step4-monitor-loop-text'),
+            taskName: document.getElementById('step4-monitor-task-name'),
+            stepCounter: document.getElementById('step4-monitor-step-counter'),
+            progressBar: document.getElementById('step4-monitor-progress-bar'),
+            threadStatus: document.getElementById('step4-monitor-thread-status'),
+            heartbeatTick: document.getElementById('step4-monitor-heartbeat-tick'),
+            stuckHint: document.getElementById('step4-monitor-stuck-hint'),
+            cancelBtn: document.getElementById('step4-monitor-cancel-btn')
+        };
+
+        AppState.watchdogs = {
+            pipeline: new ExecutionWatchdog(DOM.pipelineMonitor),
+            step4: new ExecutionWatchdog(DOM.step4Monitor)
+        };
     }
 
     function setupEventListeners() {
@@ -1412,6 +1656,8 @@
             return;
         }
 
+        const watchdog = AppState.watchdogs ? AppState.watchdogs.step4 : null;
+
         try {
             DOM.trainModelBtn.disabled = true;
             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan); display: inline-flex; align-items: center; gap: 6px;">⚙️ Initializing multi-model tournament and data partitions...</span>`;
@@ -1433,6 +1679,14 @@
                 modelsToTest = modelsToTest.filter(mId => mId !== 'nb');
             }
             if (modelsToTest.length === 0) modelsToTest = ['nn'];
+
+            if (watchdog) {
+                watchdog.start(`Initializing tournament for ${modelsToTest.length} model(s)...`, modelsToTest.length, () => {
+                    console.warn("Step 4 Model Training cancelled by user watchdog.");
+                    DOM.trainModelBtn.disabled = false;
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">⚠️ Model training interrupted by user.</span>`;
+                });
+            }
 
             const testedResults = [];
 
@@ -1464,9 +1718,15 @@
                 const shouldRetrain = DOM.retrainYes ? DOM.retrainYes.checked : true;
 
                 for (let i = 0; i < modelsToTest.length; i++) {
+                    if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
+
                     const mId = modelsToTest[i];
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
                     const hyperparams = getHyperparamsForModel(mId, prep);
+
+                    if (watchdog) {
+                        watchdog.tick(i + 1, `Fitting ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases)...`);
+                    }
 
                     DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">🚀 [${i + 1}/${modelsToTest.length}] Training ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases &bull; Seed: ${hyperparams.seed})...</span>`;
                     await new Promise(r => setTimeout(r, 40));
@@ -1484,16 +1744,26 @@
 
                     if (mId === 'nn') {
                         await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
+                            if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
+                            if (watchdog && (epoch % 4 === 0 || epoch === total)) {
+                                watchdog.tick(i + 1, `${mInfo.name}: Epoch ${epoch}/${total} (Loss: ${logs.loss.toFixed(4)})`);
+                            }
                         });
                     } else if (mId === 'ensemble') {
                         await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
+                            if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})...</span>`;
+                            if (watchdog) {
+                                watchdog.tick(i + 1, `${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})`);
+                            }
                         });
                     } else {
                         valModel.fit(split.trainX, split.trainY);
                     }
+
+                    if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Benchmark out-of-sample accuracy on held-out test split
                     const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
@@ -1511,6 +1781,9 @@
                     let activeModelInstance = valModel;
 
                     if (shouldRetrain) {
+                        if (watchdog) {
+                            watchdog.tick(i + 1, `Retraining ${mInfo.name} on 100% of cohort (N=${prep.X.length})...`);
+                        }
                         DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber); font-weight: 600;">✓ [${i + 1}/${modelsToTest.length}] ${mInfo.name} benchmarked. Retraining on 100% of cohort (N=${prep.X.length})...</span>`;
                         await new Promise(r => setTimeout(r, 40));
 
@@ -1523,11 +1796,19 @@
 
                         if (mId === 'nn') {
                             await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
+                                if (watchdog && watchdog.aborted) return;
                                 DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Epoch ${epoch}/${total} &mdash; Loss: ${logs.loss.toFixed(4)}</span>`;
+                                if (watchdog && (epoch % 4 === 0 || epoch === total)) {
+                                    watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Epoch ${epoch}/${total}`);
+                                }
                             });
                         } else if (mId === 'ensemble') {
                             await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
+                                if (watchdog && watchdog.aborted) return;
                                 DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Base ${curr}/${total}...</span>`;
+                                if (watchdog) {
+                                    watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Base ${curr}/${total}`);
+                                }
                             });
                         } else {
                             fullModel.fit(prep.X, prep.y);
@@ -1552,6 +1833,7 @@
                 if (!AppState.separateTestRawRows || AppState.separateTestRawRows.length === 0) {
                     DOM.trainStatus.innerHTML = `<span style="color: var(--accent-amber);">⚠️ Option B requires a separate testing cohort (Dataset ii). Please upload a test CSV or click 'Load Built-In Validation Cohort'.</span>`;
                     DOM.trainModelBtn.disabled = false;
+                    if (watchdog) watchdog.forceAbort("Missing external test cohort.");
                     alert("Option B requires a separate testing cohort (Dataset ii). Please upload a test CSV or load the built-in validation cohort in the Option B card.");
                     return;
                 }
@@ -1563,14 +1845,21 @@
                 if (!testPrep.totalEvaluated || testPrep.totalEvaluated === 0) {
                     DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">Testing cohort evaluation failed: 0 valid test cases found.</span>`;
                     DOM.trainModelBtn.disabled = false;
+                    if (watchdog) watchdog.forceAbort("0 valid test cases in external cohort.");
                     alert(`Could not extract any valid test cases with matching predictors and target. Missing target cases: ${testPrep.missingTargetCount}, unknown classes: ${testPrep.unknownClassCount}. Please check the testing CSV.`);
                     return;
                 }
 
                 for (let i = 0; i < modelsToTest.length; i++) {
+                    if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
+
                     const mId = modelsToTest[i];
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
                     const hyperparams = getHyperparamsForModel(mId, prep);
+
+                    if (watchdog) {
+                        watchdog.tick(i + 1, `Fitting ${mInfo.name} on 100% of Dataset (i) (${prep.X.length} cases)...`);
+                    }
 
                     DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">🚀 [${i + 1}/${modelsToTest.length}] Fitting ${mInfo.name} on 100% of Training Dataset (i) (${prep.X.length} cases &bull; Seed: ${hyperparams.seed})...</span>`;
                     await new Promise(r => setTimeout(r, 40));
@@ -1588,16 +1877,26 @@
 
                     if (mId === 'nn') {
                         await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (epoch, total, logs) => {
+                            if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| External Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
+                            if (watchdog && (epoch % 4 === 0 || epoch === total)) {
+                                watchdog.tick(i + 1, `${mInfo.name}: Epoch ${epoch}/${total}`);
+                            }
                         });
                     } else if (mId === 'ensemble') {
                         await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (curr, total, info) => {
+                            if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})...</span>`;
+                            if (watchdog) {
+                                watchdog.tick(i + 1, `${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})`);
+                            }
                         });
                     } else {
                         model.fit(prep.X, prep.y);
                     }
+
+                    if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Evaluate on independent Dataset (ii)
                     const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses);
@@ -1637,6 +1936,10 @@
             AppState.evalResults = champion.evalRes;
             AppState.selectedModelId = champion.modelId;
 
+            if (watchdog) {
+                watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Champion: ${champion.info.name}!`);
+            }
+
             // Update train status banner
             if (testedResults.length === 1) {
                 const singleRes = champion.evalRes;
@@ -1675,9 +1978,14 @@
 
             renderEvaluationDashboard();
         } catch (e) {
-            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">Training failed: ${e.message}</span>`;
+            if (watchdog && !watchdog.aborted) {
+                watchdog.forceAbort(`Training failed: ${e.message}`);
+            }
+            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">Training halted: ${e.message}</span>`;
             DOM.trainModelBtn.disabled = false;
-            alert(`Training error: ${e.message}`);
+            if (e.message !== "Training aborted by user.") {
+                alert(`Training error: ${e.message}`);
+            }
         }
     }
 
@@ -3346,11 +3654,19 @@
         AppState.pipeline.evalSeed = isNaN(userSeed) ? 42 : userSeed;
 
         if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = true;
-        if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'flex';
         if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
 
+        const watchdog = AppState.watchdogs ? AppState.watchdogs.pipeline : null;
+        if (watchdog) {
+            watchdog.start("Initializing constrained clinical pipeline...", 5, () => {
+                console.warn("Pipeline Step 7 training halted by user watchdog abort.");
+                if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = false;
+            });
+        } else if (DOM.pipelineTrainStatus) {
+            DOM.pipelineTrainStatus.style.display = 'block';
+        }
+
         try {
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Initializing constrained clinical pipeline...";
             await new Promise(r => setTimeout(r, 60));
 
             // Ensure balancedTrainRows is populated
@@ -3408,7 +3724,7 @@
             const benchmarkList = [];
 
             // A. k-NN Model (Strict constraint: Bottom 30% features dropped)
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 1/5: k-NN (Top 70% features only)...";
+            if (watchdog) watchdog.tick(1, "Training Model 1/5: k-NN (Top 70% features only)...");
             await new Promise(r => setTimeout(r, 60));
             const knn = new KNNModel(isClassification, 5, 'euclidean', 'distance', AppState.pipeline.evalSeed);
             knn.fit(top70Prep.X, top70Prep.y);
@@ -3419,7 +3735,7 @@
 
             // B. Gaussian Naive Bayes (Strict constraint: Bottom 30% features dropped)
             if (isClassification) {
-                if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 2/5: Gaussian Naive Bayes (Top 70% features only)...";
+                if (watchdog) watchdog.tick(2, "Training Model 2/5: Gaussian Naive Bayes (Top 70% features only)...");
                 await new Promise(r => setTimeout(r, 60));
                 const nb = new GaussianNaiveBayes(1e-4, 'empirical', AppState.pipeline.evalSeed);
                 nb.fit(top70Prep.X, top70Prep.y);
@@ -3430,7 +3746,7 @@
             }
 
             // C. Deep Neural Network (Strict constraint: L2 Weight Decay + Dropout)
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 3/5: Deep Neural Network (L2 Regularization + Dropout)...";
+            if (watchdog) watchdog.tick(3, "Training Model 3/5: Deep Neural Network (L2 Regularization + Dropout)...");
             await new Promise(r => setTimeout(r, 60));
             const dnnParams = {
                 epochs: 25,
@@ -3445,8 +3761,8 @@
             };
             const dnn = new DeepNeuralNetwork(isClassification, numClasses, dnnParams);
             await dnn.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (ep, tot) => {
-                if (DOM.pipelineTrainStatusText && (ep % 5 === 0 || ep === tot)) {
-                    DOM.pipelineTrainStatusText.innerText = `Training Model 3/5: Deep Neural Network (Epoch ${ep}/${tot})...`;
+                if (watchdog && (ep % 4 === 0 || ep === tot)) {
+                    watchdog.tick(3, `Training Model 3/5: Deep Neural Network (Epoch ${ep}/${tot})...`);
                 }
             });
             const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
@@ -3455,7 +3771,7 @@
             benchmarkList.push({ id: 'nn', name: 'Deep Neural Network (DNN / MLP)', model: dnn, prep: fullPrep, eval: dnnEval });
 
             // D. Logistic / Ridge Regression (Strict constraint: L2 penalization against collinearity)
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 4/5: Logistic / Ridge Regression (L2 lambda = 0.02)...";
+            if (watchdog) watchdog.tick(4, "Training Model 4/5: Logistic / Ridge Regression (L2 lambda = 0.02)...");
             await new Promise(r => setTimeout(r, 60));
             const glm = new GeneralizedLinearModel(
                 isClassification,
@@ -3473,7 +3789,7 @@
             benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', model: glm, prep: fullPrep, eval: glmEval });
 
             // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 5/5: Ensemble Super Learner...";
+            if (watchdog) watchdog.tick(5, "Training Model 5/5: Ensemble Super Learner...");
             await new Promise(r => setTimeout(r, 60));
             const ensembleConfig = {
                 voting: 'soft',
@@ -3483,8 +3799,8 @@
             };
             const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
             await ensemble.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (curr, tot, info) => {
-                if (DOM.pipelineTrainStatusText) {
-                    DOM.pipelineTrainStatusText.innerText = `Training Model 5/5: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`;
+                if (watchdog) {
+                    watchdog.tick(5, `Training Model 5/5: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`);
                 }
             });
             const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
@@ -3499,11 +3815,15 @@
 
             if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'block';
 
+            if (watchdog) watchdog.finish("All 5 Clinical Models Evaluated Successfully!");
+
         } catch (err) {
             console.error("Pipeline Step 7 training error:", err);
+            if (watchdog && !watchdog.aborted) {
+                watchdog.forceAbort(`Pipeline error: ${err.message}`);
+            }
             alert(`Pipeline training error: ${err.message}`);
         } finally {
-            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
             if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = false;
         }
     }

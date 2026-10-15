@@ -1012,6 +1012,37 @@
                                 🚀 Train Selected Model
                             </button>
                         </div>
+
+                        <!-- Step 4 Execution Watchdog & Loop / Stall Diagnostic Monitor -->
+                        <div id="step4-train-monitor" class="execution-monitor-card" style="display: none; margin-top: 18px;">
+                            <div class="monitor-header">
+                                <div class="monitor-status-badge running" id="step4-monitor-badge">
+                                    <span class="pulse-dot"></span>
+                                    <span id="step4-monitor-state">ACTIVE &bull; COMPUTING</span>
+                                </div>
+                                <div class="monitor-timer" id="step4-monitor-timer">⏱️ 00:00.0s</div>
+                                <div class="monitor-loop-status" id="step4-monitor-loop-status">
+                                    <span class="loop-icon">🛡️</span> <span id="step4-monitor-loop-text">Loop Guard: Normal</span>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-xs monitor-cancel-btn" id="step4-monitor-cancel-btn" style="color: var(--accent-rose); border-color: rgba(244,63,94,0.4);" title="Emergency halt if task is stalled">
+                                    🛑 Force Stop / Reset
+                                </button>
+                            </div>
+                            <div class="monitor-body">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <div class="monitor-task-name" id="step4-monitor-task-name">Training Machine Learning Models...</div>
+                                    <div class="monitor-step-counter" id="step4-monitor-step-counter">Stage 1 of 1</div>
+                                </div>
+                                <div class="monitor-progress-bar-wrap">
+                                    <div class="monitor-progress-bar" id="step4-monitor-progress-bar" style="width: 5%;"></div>
+                                </div>
+                                <div class="monitor-subtext">
+                                    <span>Thread Status: <strong id="step4-monitor-thread-status" style="color: var(--accent-emerald);">Responsive</strong></span> &bull; 
+                                    <span>Heartbeat: <strong id="step4-monitor-heartbeat-tick">&lt; 0.1s ago</strong></span> &bull; 
+                                    <span id="step4-monitor-stuck-hint" style="color: var(--accent-emerald);">System operating smoothly</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Training Progress Chart -->
@@ -1506,9 +1537,35 @@
                             </button>
                         </div>
 
-                        <div id="pipeline-train-status" class="train-status-box" style="display: none; margin-bottom: 20px;">
-                            <div class="spinner"></div>
-                            <span id="pipeline-train-status-text">Training algorithm-constrained clinical models...</span>
+                        <!-- Execution Watchdog & Loop / Stall Diagnostic Monitor -->
+                        <div id="pipeline-train-status" class="execution-monitor-card" style="display: none; margin-bottom: 24px;">
+                            <div class="monitor-header">
+                                <div class="monitor-status-badge running" id="pipeline-monitor-badge">
+                                    <span class="pulse-dot"></span>
+                                    <span id="pipeline-monitor-state">ACTIVE &bull; COMPUTING</span>
+                                </div>
+                                <div class="monitor-timer" id="pipeline-monitor-timer">⏱️ 00:00.0s</div>
+                                <div class="monitor-loop-status" id="pipeline-monitor-loop-status">
+                                    <span class="loop-icon">🛡️</span> <span id="pipeline-monitor-loop-text">Loop Guard: Normal (0 cycles)</span>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-xs monitor-cancel-btn" id="pipeline-monitor-cancel-btn" style="color: var(--accent-rose); border-color: rgba(244,63,94,0.4);" title="Emergency halt if task is stalled">
+                                    🛑 Force Stop / Reset
+                                </button>
+                            </div>
+                            <div class="monitor-body">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                    <div class="monitor-task-name" id="pipeline-train-status-text">Training algorithm-constrained clinical models...</div>
+                                    <div class="monitor-step-counter" id="pipeline-monitor-step-counter">Step 1 of 5</div>
+                                </div>
+                                <div class="monitor-progress-bar-wrap">
+                                    <div class="monitor-progress-bar" id="pipeline-monitor-progress-bar" style="width: 5%;"></div>
+                                </div>
+                                <div class="monitor-subtext">
+                                    <span>Thread Status: <strong id="pipeline-monitor-thread-status" style="color: var(--accent-emerald);">Responsive</strong></span> &bull; 
+                                    <span>Heartbeat: <strong id="pipeline-monitor-heartbeat-tick">&lt; 0.1s ago</strong></span> &bull; 
+                                    <span id="pipeline-monitor-stuck-hint" style="color: var(--accent-emerald);">System operating smoothly</span>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Results Dashboard -->

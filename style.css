@@ -1415,3 +1415,154 @@ body {
     color: var(--accent-amber);
 }
 
+/* ==========================================================================
+   EXECUTION WATCHDOG & LOOP / STALL DETECTOR WIDGET
+   ========================================================================== */
+.execution-monitor-card {
+    background: var(--bg-surface-elevated);
+    border: 1px solid rgba(6, 182, 212, 0.35);
+    border-radius: var(--card-radius);
+    padding: 16px 20px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    margin-bottom: 20px;
+    animation: fadeIn 0.2s ease-out;
+}
+
+.monitor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.monitor-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.monitor-status-badge.running {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-emerald);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.monitor-status-badge.warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--accent-amber);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.monitor-status-badge.stalled {
+    background: rgba(244, 63, 94, 0.15);
+    color: var(--accent-rose);
+    border: 1px solid rgba(244, 63, 94, 0.4);
+}
+
+.monitor-status-badge.completed {
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--accent-cyan);
+    border: 1px solid rgba(6, 182, 212, 0.4);
+}
+
+.pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: currentColor;
+    display: inline-block;
+    box-shadow: 0 0 8px currentColor;
+    animation: pulseDot 1.4s infinite cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+@keyframes pulseDot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(1.3); }
+}
+
+.monitor-timer {
+    font-family: 'SF Mono', Monaco, Inconsolata, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    background: var(--bg-surface);
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.monitor-loop-status {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-surface);
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color);
+}
+
+.monitor-loop-status.loop-detected {
+    color: var(--accent-rose);
+    border-color: rgba(244, 63, 94, 0.5);
+    background: rgba(244, 63, 94, 0.1);
+    font-weight: 700;
+    animation: shakeAlert 0.4s ease-in-out;
+}
+
+@keyframes shakeAlert {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-4px); }
+    40%, 80% { transform: translateX(4px); }
+}
+
+.monitor-task-name {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.monitor-step-counter {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent-emerald);
+}
+
+.monitor-progress-bar-wrap {
+    background: var(--bg-surface);
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 8px 0;
+    border: 1px solid var(--border-color);
+}
+
+.monitor-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-emerald));
+    border-radius: 4px;
+    transition: width 0.3s ease;
+}
+
+.monitor-subtext {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+
