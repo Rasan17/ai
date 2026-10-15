@@ -126,9 +126,21 @@
             const rows = [];
             let currentRow = [];
             let currentField = '';
+            let fieldQuoted = false;   // field content came from a quoted section (kept verbatim)
+            let afterQuote = '';       // characters between a closing quote and the next delimiter
             let inQuotes = false;
             let i = 0;
             const len = csvText.length;
+
+            // Unquoted fields are trimmed; quoted fields keep their exact content (RFC 4180), with only
+            // whitespace outside the quotes discarded
+            const finishField = () => {
+                const value = fieldQuoted ? currentField + afterQuote.trim() : currentField.trim();
+                currentRow.push(value);
+                currentField = '';
+                afterQuote = '';
+                fieldQuoted = false;
+            };
 
             while (i < len) {
                 const char = csvText[i];
@@ -139,50 +151,42 @@
                         if (nextChar === '"') {
                             currentField += '"';
                             i += 2;
-                            continue;
                         } else {
                             inQuotes = false;
                             i++;
-                            continue;
                         }
                     } else {
                         currentField += char;
                         i++;
-                        continue;
                     }
+                    continue;
+                }
+
+                if (char === '"' && !fieldQuoted && currentField.trim() === '') {
+                    // Opening quote (any whitespace before it is not part of the value)
+                    inQuotes = true;
+                    fieldQuoted = true;
+                    currentField = '';
+                    i++;
+                } else if (char === delimiter) {
+                    finishField();
+                    i++;
+                } else if (char === '\r' || char === '\n') {
+                    finishField();
+                    i += (char === '\r' && nextChar === '\n') ? 2 : 1;
+                    if (currentRow.some(val => val.length > 0)) {
+                        rows.push(currentRow);
+                    }
+                    currentRow = [];
                 } else {
-                    if (char === '"') {
-                        inQuotes = true;
-                        i++;
-                        continue;
-                    } else if (char === delimiter) {
-                        currentRow.push(currentField.trim());
-                        currentField = '';
-                        i++;
-                        continue;
-                    } else if (char === '\r' || char === '\n') {
-                        currentRow.push(currentField.trim());
-                        currentField = '';
-                        if (char === '\r' && nextChar === '\n') {
-                            i += 2;
-                        } else {
-                            i++;
-                        }
-                        if (currentRow.some(val => val.length > 0)) {
-                            rows.push(currentRow);
-                        }
-                        currentRow = [];
-                        continue;
-                    } else {
-                        currentField += char;
-                        i++;
-                        continue;
-                    }
+                    if (fieldQuoted) afterQuote += char;
+                    else currentField += char;
+                    i++;
                 }
             }
 
-            if (currentField.length > 0 || currentRow.length > 0) {
-                currentRow.push(currentField.trim());
+            if (currentField.length > 0 || fieldQuoted || currentRow.length > 0) {
+                finishField();
                 if (currentRow.some(val => val.length > 0)) {
                     rows.push(currentRow);
                 }
@@ -193,13 +197,16 @@
             }
 
             const rawHeaders = rows[0];
-            // Deduplicate headers if any
+            // Deduplicate headers if any (renames are reported to the user via renamedHeaders)
             const seenHeaders = {};
+            const renamedHeaders = [];
             const headers = rawHeaders.map((h, idx) => {
                 let name = (h || `Column_${idx + 1}`).trim();
                 if (seenHeaders[name]) {
                     seenHeaders[name]++;
-                    name = `${name}_${seenHeaders[name]}`;
+                    const renamed = `${name}_${seenHeaders[name]}`;
+                    renamedHeaders.push({ column: idx + 1, from: name, to: renamed });
+                    name = renamed;
                 } else {
                     seenHeaders[name] = 1;
                 }
@@ -225,7 +232,8 @@
                 delimiter,
                 totalRows: dataRows.length,
                 totalCols: headers.length,
-                raggedRowCount
+                raggedRowCount,
+                renamedHeaders
             };
         },
 
@@ -495,8 +503,15 @@
 
                     // Scales for KNN distances (from the fitting rows only)
                     const refScale = {};
-                    const numericCols = Object.keys(columnConfigs).filter(c =>
-                        columnConfigs[c].type === 'continuous' && columnConfigs[c].role === 'feature' && c !== col);
+                    // Distance features: continuous and numeric-valued ordinal predictors (text ordinals excluded)
+                    const numericCols = Object.keys(columnConfigs).filter(c => {
+                        const cc = columnConfigs[c];
+                        if (cc.role !== 'feature' || c === col) return false;
+                        if (cc.type === 'continuous') return true;
+                        if (cc.type !== 'ordinal') return false;
+                        const vals = snapshotRows.map(r => r[c]).filter(v => !this.isMissing(v));
+                        return vals.length > 0 && vals.every(v => !isNaN(Number(v)));
+                    });
                     if (strategy === 'knn') {
                         numericCols.forEach(nCol => {
                             const vals = snapshotRows.map(r => r[nCol]).filter(v => !this.isMissing(v)).map(Number).filter(n => !isNaN(n));

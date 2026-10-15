@@ -219,7 +219,8 @@
     function summariseHeldOutSet(ev) {
         // Caveats about the size/composition of the evaluation set
         const notes = [];
-        const n = ev.totalSamples || ev.testCount || 0;
+        // testCount is the held-out set size; totalSamples (from evaluate()) is the same number
+        const n = ev.testCount || ev.totalSamples || 0;
         if (n > 0 && n < 30) {
             notes.push(`Only ${n} test cases: performance estimates are imprecise${Array.isArray(ev.accuracyCI) && ev.accuracyCI.length === 2 ? ` (accuracy 95% CI ${(ev.accuracyCI[0] * 100).toFixed(0)}–${(ev.accuracyCI[1] * 100).toFixed(0)}%)` : ''}. Treat differences between models with caution.`);
         }
@@ -1402,6 +1403,10 @@
             AppState.sampleCohortFile = null; // set again by loadSampleDataset for built-in cohorts
             AppState.parsedData = parsed;
             AppState.fileName = name;
+            if (parsed.renamedHeaders && parsed.renamedHeaders.length > 0) {
+                alert(`Duplicate column name(s) were renamed so every column is unique:\n` +
+                    parsed.renamedHeaders.map(r => `• column ${r.column}: "${r.from}" → "${r.to}"`).join('\n'));
+            }
             if (parsed.raggedRowCount > 0) {
                 alert(`${parsed.raggedRowCount} row(s) have a different number of cells from the header row. Short rows were padded with blanks (treated as missing) and extra cells were ignored. Please check the file's delimiters and quoting.`);
             }
@@ -2456,7 +2461,13 @@
     // Shows the ranking metric that applies to the current outcome type in both selectors
     function syncRankingSelectors(isClassification) {
         const value = `${isClassification ? 'clf' : 'reg'}:${rankingMetricKey(isClassification)}`;
-        document.querySelectorAll('.ranking-metric-select').forEach(sel => { sel.value = value; });
+        const otherPrefix = isClassification ? 'reg:' : 'clf:';
+        document.querySelectorAll('.ranking-metric-select').forEach(sel => {
+            // Metrics for the other outcome type cannot be chosen (selecting one would have no effect
+            // and the selector would snap back), so they are disabled while these results are shown
+            Array.from(sel.options).forEach(opt => { opt.disabled = opt.value.startsWith(otherPrefix); });
+            sel.value = value;
+        });
     }
 
     // Fits a non-neural model. Random Forest and logistic/ridge regression yield to the browser between

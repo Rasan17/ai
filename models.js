@@ -123,7 +123,11 @@
             // Choose random subset of features
             let featureIndices = Array.from({ length: numFeatures }, (_, i) => i);
             if (this.maxFeatures && this.maxFeatures < numFeatures) {
-                featureIndices.sort(() => this.rng() - 0.5);
+                // Seeded Fisher-Yates shuffle (a sort() with a random comparator is not a uniform shuffle)
+                for (let i = featureIndices.length - 1; i > 0; i--) {
+                    const j = Math.floor(this.rng() * (i + 1));
+                    [featureIndices[i], featureIndices[j]] = [featureIndices[j], featureIndices[i]];
+                }
                 featureIndices = featureIndices.slice(0, this.maxFeatures);
             }
 
@@ -411,7 +415,10 @@
                     yield epoch;
                 }
             } else {
-                // Ridge Linear Regression via Gradient Descent with momentum
+                // Ridge Linear Regression via Gradient Descent with momentum.
+                // Objective: (1/2n)·Σ(pred − y)² + (λ/2)·‖w‖² (intercept unpenalised), whose gradient is
+                // (1/n)·Σ err·x + λw, exactly as computed below. This is equivalent to scikit-learn
+                // Ridge(alpha = n·λ) (checked in tests/reference_check.py); the learning rate applies to it.
                 this.weights = new Array(p).fill(0);
                 this.bias = 0;
                 const velW = new Array(p).fill(0);
@@ -802,6 +809,8 @@
                 let model = null;
                 let valXTensor = null;
                 let valYTensor = null;
+                let xAll = null;
+                let yAll = null;
                 let bestWeights = null;
                 const disposeBest = () => {
                     if (bestWeights) bestWeights.forEach(w => { try { w.dispose(); } catch (e) {} });
@@ -905,6 +914,12 @@
                     let stoppedEpoch = this.epochs;
                     let earlyStopped = false;
 
+                    // Training tensors are built once; each epoch reorders them with tf.gather
+                    xAll = tf.tensor2d(trainX, [n, inputDim]);
+                    yAll = this.isClassification ?
+                        tf.tensor1d(trainY, 'float32') :
+                        tf.tensor2d(trainY.map(v => [v]), [n, 1]);
+
                     // Epoch loop with our own seeded shuffle (TF.js's built-in shuffle uses an unseeded RNG)
                     for (let epoch = 0; epoch < this.epochs; epoch++) {
                         const perm = Array.from({ length: n }, (_, i) => i);
@@ -912,10 +927,10 @@
                             const j = Math.floor(this.rng() * (i + 1));
                             [perm[i], perm[j]] = [perm[j], perm[i]];
                         }
-                        const xTensor = tf.tensor2d(perm.map(i => trainX[i]), [n, inputDim]);
-                        const yTensor = this.isClassification ?
-                            tf.tensor1d(perm.map(i => trainY[i]), 'float32') :
-                            tf.tensor2d(perm.map(i => [trainY[i]]), [n, 1]);
+                        const permTensor = tf.tensor1d(perm, 'int32');
+                        const xTensor = tf.gather(xAll, permTensor);
+                        const yTensor = tf.gather(yAll, permTensor);
+                        permTensor.dispose();
 
                         let h;
                         try {
@@ -999,6 +1014,8 @@
                 } finally {
                     // Guaranteed cleanup of intermediate tensors and of a partially-built model
                     disposeBest();
+                    if (xAll) { try { xAll.dispose(); } catch (e) {} }
+                    if (yAll) { try { yAll.dispose(); } catch (e) {} }
                     if (model) { try { model.dispose(); } catch (e) {} }
                     if (valXTensor) { try { valXTensor.dispose(); } catch (e) {} }
                     if (valYTensor) { try { valYTensor.dispose(); } catch (e) {} }
