@@ -729,6 +729,8 @@
             goToStep(2);
         });
         DOM.toStep3Btn.addEventListener('click', () => goToStep(3));
+        document.getElementById('var-include-all-btn').addEventListener('click', () => { if (AppState.parsedData) setAllVariablesIncluded(true); });
+        document.getElementById('var-exclude-all-btn').addEventListener('click', () => { if (AppState.parsedData) setAllVariablesIncluded(false); });
         DOM.toStep4Btn.addEventListener('click', () => goToStep(4));
         DOM.toStep5Btn.addEventListener('click', () => goToStep(5));
         DOM.toStep6Btn.addEventListener('click', () => goToStep(6));
@@ -1591,7 +1593,10 @@
             gridHtml += `
                 <div class="var-card ${cfg.role === 'target' ? 'is-target' : (cfg.role === 'meta' ? 'is-meta' : '')}" id="card-col-${escapeHtml(col)}">
                     <div class="var-header">
-                        <span class="var-name" title="${escapeHtml(col)}">${escapeHtml(col)}</span>
+                        <label class="var-include" title="${cfg.role === 'target' ? 'The outcome is always included; change its role to exclude it' : 'Tick to include this variable in the analysis; untick to exclude it'}">
+                            <input type="checkbox" class="var-include-check" data-col="${escapeHtml(col)}" ${cfg.role !== 'meta' ? 'checked' : ''} ${cfg.role === 'target' ? 'disabled' : ''} aria-label="Include ${escapeHtml(col)} in the analysis">
+                            <span class="var-name" title="${escapeHtml(col)}">${escapeHtml(col)}</span>
+                        </label>
                         ${a.missingCount > 0 ? `<span class="pill pill-missing">${a.missingCount} missing (${a.missingPercent}%)</span>` : `<span class="pill" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">Complete</span>`}
                     </div>
 
@@ -1643,6 +1648,7 @@
         }
 
         DOM.varConfigGrid.innerHTML = gridHtml;
+        renderVariableIncludeSummary();
 
         // Attach listeners for role & type updates
         document.querySelectorAll('.var-role-select').forEach(sel => {
@@ -1666,6 +1672,13 @@
 
                 AppState.columnConfigs[col].role = newRole;
                 // Re-render so target-only controls (positive class) appear/disappear
+                renderVariableConfigGrid();
+            });
+        });
+
+        document.querySelectorAll('.var-include-check').forEach(box => {
+            box.addEventListener('change', (e) => {
+                setVariableIncluded(e.target.dataset.col, e.target.checked);
                 renderVariableConfigGrid();
             });
         });
@@ -1706,6 +1719,55 @@
                 }
             });
         });
+    }
+
+    // Include (ticked) / exclude (unticked) a variable. Excluded variables use the existing Meta / ID role, which
+    // every step already ignores; the role held before exclusion is remembered so re-ticking restores it.
+    function setVariableIncluded(col, include) {
+        const cfg = AppState.columnConfigs[col];
+        if (!cfg || cfg.role === 'target') return;
+        if (!include) {
+            if (cfg.role !== 'meta') { cfg.prevRole = cfg.role; cfg.role = 'meta'; }
+            return;
+        }
+        if (cfg.role !== 'meta') return;
+        const otherTarget = Object.keys(AppState.columnConfigs).some(c => c !== col && AppState.columnConfigs[c].role === 'target');
+        cfg.role = cfg.prevRole === 'target' && !otherTarget ? 'target' : 'feature';
+        delete cfg.prevRole;
+    }
+
+    // Columns the app itself flagged as identifiers or dates: "Include all" leaves these unticked
+    function isAutoExcludedColumn(col) {
+        const a = AppState.columnAnalysis[col];
+        return Boolean(a && a.role === 'meta');
+    }
+
+    function renderVariableIncludeSummary() {
+        const el = document.getElementById('var-include-summary');
+        if (!el) return;
+        const headers = AppState.parsedData.headers;
+        const cfgs = AppState.columnConfigs;
+        const target = headers.find(h => cfgs[h].role === 'target');
+        const included = headers.filter(h => cfgs[h].role === 'feature').length;
+        const excluded = headers.filter(h => cfgs[h].role === 'meta').length;
+        el.textContent = `${included} predictor(s) included, ${excluded} excluded` + (target ? `; outcome: ${target}` : '; no outcome selected yet');
+    }
+
+    function setAllVariablesIncluded(include) {
+        const headers = AppState.parsedData.headers;
+        let skipped = 0;
+        headers.forEach(col => {
+            if (include && isAutoExcludedColumn(col)) {
+                if (AppState.columnConfigs[col].role === 'meta') skipped++;
+                return;
+            }
+            setVariableIncluded(col, include);
+        });
+        renderVariableConfigGrid();
+        if (skipped > 0) {
+            const el = document.getElementById('var-include-summary');
+            if (el) el.textContent += ` (${skipped} identifier/date column(s) left unticked; tick them individually if needed)`;
+        }
     }
 
     // Extra Step 2 controls: positive (event) class for a binary target, level order for ordinals
@@ -5472,7 +5534,7 @@
     const SETTINGS_APP = 'Universal Medical ML/NeuralNet Predictor';
     const SETTINGS_KEY_PREFIX = 'ummp-settings:';
     const SETTINGS_MAX_STORED = 20;
-    const VARIABLE_FIELDS = ['role', 'type', 'imputationStrategy', 'prevImputationStrategy', 'customImputeVal', 'positiveClass', 'ordinalOrder'];
+    const VARIABLE_FIELDS = ['role', 'prevRole', 'type', 'imputationStrategy', 'prevImputationStrategy', 'customImputeVal', 'positiveClass', 'ordinalOrder'];
 
     // Identifies a dataset by its column headers (FNV-1a hash), so a re-loaded or updated file matches
     function datasetSignature(headers) {
@@ -5666,7 +5728,7 @@
             if (!saved || !AppState.columnConfigs[h]) return;
             const cfg = AppState.columnConfigs[h];
             // Optional choices absent from the saved file must not linger from the current session
-            ['prevImputationStrategy', 'positiveClass', 'ordinalOrder'].forEach(f => { delete cfg[f]; });
+            ['prevRole', 'prevImputationStrategy', 'positiveClass', 'ordinalOrder'].forEach(f => { delete cfg[f]; });
             VARIABLE_FIELDS.forEach(f => { if (saved[f] !== undefined) cfg[f] = Array.isArray(saved[f]) ? saved[f].slice() : saved[f]; });
         });
         // Exactly one target

@@ -1669,3 +1669,31 @@ body {
 .settings-banner-box .settings-warn {
     color: var(--accent-amber);
 }
+
+/* Step 2: include / exclude tick boxes */
+.var-include-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px 16px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-elevated);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.var-include-bar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.var-include-summary { display: block; margin-top: 2px; font-size: 12px; color: var(--text-muted); }
+.var-include {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    cursor: pointer;
+}
+.var-include input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--accent-cyan, #38bdf8); cursor: pointer; }
+.var-include input:disabled { cursor: not-allowed; }
+.var-card.is-meta .var-name { text-decoration: line-through; color: var(--text-muted); }

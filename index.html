@@ -6,7 +6,7 @@
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=11">
+    <link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 
@@ -164,6 +164,15 @@
                             <span class="pill pill-feature">Feature (Input)</span>
                             <span class="pill pill-target">Target (Outcome)</span>
                         </div>
+                    </div>
+
+                    <div class="var-include-bar">
+                        <span class="var-include-bar-text">☑️ Tick a variable to <strong>include</strong> it in the analysis; untick to <strong>exclude</strong> it.
+                            <span id="var-include-summary" class="var-include-summary" aria-live="polite"></span></span>
+                        <span class="var-include-bar-actions">
+                            <button type="button" id="var-include-all-btn" class="btn btn-secondary btn-sm" title="Include every variable (columns detected as identifiers or dates stay unticked)">☑ Include all</button>
+                            <button type="button" id="var-exclude-all-btn" class="btn btn-secondary btn-sm" title="Exclude every predictor (the outcome stays included)">☐ Exclude all</button>
+                        </span>
                     </div>
 
                     <div id="var-config-grid" class="var-config-grid">
@@ -1715,6 +1724,6 @@
     <script src="tf.min.js"></script>
     <script src="data-engine.js?v=29"></script>
     <script src="models.js?v=29"></script>
-    <script src="app.js?v=30"></script>
+    <script src="app.js?v=31"></script>
 </body>
 </html>
