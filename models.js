@@ -43,6 +43,11 @@
         return new Promise(resolve => setTimeout(resolve, 0));
     }
 
+    // Row-by-row outputs for any model, using a batched path when the model provides one
+    function batchOutputs(model, X) {
+        return typeof model.predictOutputs === 'function' ? model.predictOutputs(X) : X.map(x => model.predictSingle(x));
+    }
+
     /**
      * Drives a step generator (one step = one tree / one epoch) asynchronously, yielding to the browser
      * every `every` steps so the UI can repaint and Force Stop can take effect. `opts.onYield` is called
@@ -522,6 +527,10 @@
         fit(X, y) {
             this.trainX = X;
             this.trainY = y;
+            // Seeded tie-break key per training case: equidistant neighbours are ordered by this key
+            // (otherwise ties always favour rows earlier in the CSV); identical seed -> identical result
+            const rng = createPRNG(this.seed);
+            this.tieKeys = X.map(() => rng());
         }
 
         predictSingle(x) {
@@ -544,10 +553,10 @@
                     }
                     d = Math.sqrt(sumSq);
                 }
-                return { dist: d, label: this.trainY[idx] };
+                return { dist: d, label: this.trainY[idx], tie: this.tieKeys ? this.tieKeys[idx] : idx };
             });
 
-            distances.sort((a, b) => a.dist - b.dist);
+            distances.sort((a, b) => (a.dist - b.dist) || (a.tie - b.tie));
             const kNearest = distances.slice(0, Math.min(this.k, distances.length));
 
             if (this.isClassification) {
@@ -800,11 +809,8 @@
             }
 
             if (hasTF) {
-                // Dispose existing model instance if retraining to prevent GPU memory leak
-                if (this.tfModel) {
-                    try { this.tfModel.dispose(); } catch (e) { /* ignore */ }
-                    this.tfModel = null;
-                }
+                // Dispose existing model instance (and its optimizer state) if retraining
+                this.dispose();
 
                 let model = null;
                 let valXTensor = null;
@@ -1016,7 +1022,11 @@
                     disposeBest();
                     if (xAll) { try { xAll.dispose(); } catch (e) {} }
                     if (yAll) { try { yAll.dispose(); } catch (e) {} }
-                    if (model) { try { model.dispose(); } catch (e) {} }
+                    if (model) {
+                        const opt = model.optimizer;
+                        try { model.dispose(); } catch (e) {}
+                        try { if (opt && typeof opt.dispose === 'function') opt.dispose(); } catch (e) {}
+                    }
                     if (valXTensor) { try { valXTensor.dispose(); } catch (e) {} }
                     if (valYTensor) { try { valYTensor.dispose(); } catch (e) {} }
                 }
@@ -1044,20 +1054,27 @@
         }
 
         predictSingle(x) {
-            if (this.tfModel) {
-                const tf = window.tf;
-                const tensor = tf.tensor2d([x], [1, x.length]);
-                const output = this.tfModel.predict(tensor);
-                const data = output.dataSync();
-                tensor.dispose();
-                output.dispose();
+            return this.predictOutputs([x])[0];
+        }
 
-                if (this.isClassification) {
+        // Batched prediction: one tensor and one GPU->CPU read for all rows (per-row dataSync() calls
+        // stall the browser on large evaluation or batch files)
+        predictOutputs(X) {
+            if (this.tfModel) {
+                if (X.length === 0) return [];
+                const tf = window.tf;
+                const width = this.isClassification ? this.numClasses : 1;
+                const data = tf.tidy(() => this.tfModel.predict(tf.tensor2d(X, [X.length, X[0].length])).dataSync());
+                return X.map((_, r) => {
+                    const row = data.subarray(r * width, (r + 1) * width);
+                    if (!this.isClassification) {
+                        return { pred: Number(row[0].toFixed(4)), confidence: null };
+                    }
                     let bestClass = 0;
                     let maxP = 0;
                     const probMap = {};
                     for (let c = 0; c < this.numClasses; c++) {
-                        const prob = data[c];
+                        const prob = row[c];
                         probMap[c] = Number(prob.toFixed(4));
                         if (prob > maxP) {
                             maxP = prob;
@@ -1065,17 +1082,26 @@
                         }
                     }
                     return { pred: bestClass, probabilities: probMap, confidence: Number(maxP.toFixed(4)), probabilityType: 'model' };
-                } else {
-                    return { pred: Number(data[0].toFixed(4)), confidence: null };
-                }
+                });
             } else if (this.fallbackGLM) {
-                return this.fallbackGLM.predictSingle(x);
+                return X.map(x => this.fallbackGLM.predictSingle(x));
             }
             throw new Error("Model is not trained yet.");
         }
 
         predict(X) {
-            return X.map(x => this.predictSingle(x).pred);
+            return this.predictOutputs(X).map(o => o.pred);
+        }
+
+        // Frees the TensorFlow.js (GPU/WebGL) memory held by this model. model.dispose() does NOT free the
+        // optimizer's state (e.g. Adam's moment estimates), so the optimizer is disposed explicitly too.
+        dispose() {
+            if (this.tfModel) {
+                const opt = this.tfModel.optimizer;
+                try { this.tfModel.dispose(); } catch (e) { /* ignore */ }
+                try { if (opt && typeof opt.dispose === 'function') opt.dispose(); } catch (e) { /* ignore */ }
+                this.tfModel = null;
+            }
         }
     }
 
@@ -1248,6 +1274,10 @@
                         }
                     });
                     this.weightingNote = `Weights estimated on an internal ${innerVal.length}-case validation split of the training data.`;
+                    // Weighting-phase models are no longer needed: free their GPU memory
+                    weightingModels.forEach(item => {
+                        if (item.model && typeof item.model.dispose === 'function') item.model.dispose();
+                    });
                 }
             }
 
@@ -1276,12 +1306,25 @@
             if (!this.models || this.models.length === 0) {
                 throw new Error("Ensemble model is not trained yet.");
             }
+            return this._combine(this.models.map(item => item.model.predictSingle(x)));
+        }
 
+        // Batched prediction: each base model predicts all rows at once (one GPU pass for the neural network)
+        predictOutputs(X) {
+            if (!this.models || this.models.length === 0) {
+                throw new Error("Ensemble model is not trained yet.");
+            }
+            const perModel = this.models.map(item => batchOutputs(item.model, X));
+            return X.map((_, r) => this._combine(perModel.map(outs => outs[r])));
+        }
+
+        // Combines one row's base-model outputs (baseResults[i] belongs to this.models[i])
+        _combine(baseResults) {
             if (this.isClassification) {
                 if (this.voting === 'hard') {
                     const votes = new Array(this.numClasses).fill(0);
                     this.models.forEach((item, i) => {
-                        const res = item.model.predictSingle(x);
+                        const res = baseResults[i];
                         const predClass = res.pred;
                         if (predClass >= 0 && predClass < this.numClasses) {
                             votes[predClass] += this.weights[i];
@@ -1315,7 +1358,7 @@
                     const combinedProbs = new Array(this.numClasses).fill(0);
 
                     this.models.forEach((item, i) => {
-                        const res = item.model.predictSingle(x);
+                        const res = baseResults[i];
                         const w = this.weights[i];
 
                         if (res.probabilities) {
@@ -1355,7 +1398,7 @@
                 const subPredictions = [];
 
                 this.models.forEach((item, i) => {
-                    const res = item.model.predictSingle(x);
+                    const res = baseResults[i];
                     weightedSum += this.weights[i] * res.pred;
                     subPredictions.push({ id: item.id, pred: res.pred, weight: this.weights[i] });
                 });
@@ -1370,7 +1413,15 @@
         }
 
         predict(X) {
-            return X.map(x => this.predictSingle(x).pred);
+            return this.predictOutputs(X).map(o => o.pred);
+        }
+
+        // Frees GPU memory held by neural-network base models
+        dispose() {
+            (this.models || []).forEach(item => {
+                if (item.model && typeof item.model.dispose === 'function') item.model.dispose();
+            });
+            this.models = [];
         }
     }
 
@@ -1452,7 +1503,7 @@
             if (isClassification) {
                 const numClasses = targetClasses.length || [...new Set(testY)].length;
                 const total = testX.length;
-                const outputs = testX.map(x => model.predictSingle(x));
+                const outputs = batchOutputs(model, testX);
                 const preds = outputs.map(o => o.pred);
                 let correct = 0;
 
@@ -1634,6 +1685,10 @@
                 }
                 return result;
             }
+        },
+
+        predictOutputs(model, X) {
+            return batchOutputs(model, X);
         },
 
         evaluateModel(model, testX, testY, isClassificationOrClasses = true, targetClassesOrStats = []) {

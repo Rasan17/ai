@@ -82,6 +82,15 @@
         },
 
         /**
+         * Standardises an ordinal rank with its training mean/SD (metadata from older preps without
+         * mean/std is used unscaled)
+         */
+        scaleOrdinalRank(rank, meta) {
+            if (typeof meta.mean !== 'number' || typeof meta.std !== 'number') return rank;
+            return Number(((rank - meta.mean) / meta.std).toFixed(5));
+        },
+
+        /**
          * Builds a value -> rank lookup for an ordinal column
          */
         buildOrdinalRankMap(values, customOrder = null) {
@@ -744,11 +753,19 @@
                     // Median rank of the training rows: fallback for missing / unseen levels at prediction time
                     const rankVals = rows.map(r => rankMap[String(r[col])]).filter(v => v !== undefined).sort((a, b) => a - b);
                     const defaultRank = rankVals.length ? rankVals[Math.floor((rankVals.length - 1) / 2)] : 0;
+                    // Ranks are z-scored with the training mean/SD (same convention as continuous features),
+                    // so a many-level scale (e.g. GCS, mRS) does not dominate k-NN distances or L2 penalties
+                    const rankMean = rankVals.length ? rankVals.reduce((a, b) => a + b, 0) / rankVals.length : 0;
+                    const rankStd = rankVals.length
+                        ? Math.sqrt(rankVals.reduce((a, b) => a + (b - rankMean) * (b - rankMean), 0) / rankVals.length) || 1
+                        : 1;
                     featureMetadata[col] = {
                         type: 'ordinal',
                         ranks,
                         rankMap,
                         defaultRank,
+                        mean: rankMean,
+                        std: rankStd,
                         startIndex: totalEncodedFeatures,
                         length: 1
                     };
@@ -792,7 +809,7 @@
                         }
                     } else if (meta.type === 'ordinal') {
                         const rankVal = meta.rankMap[String(val)] !== undefined ? meta.rankMap[String(val)] : meta.defaultRank;
-                        xRow[meta.startIndex] = rankVal;
+                        xRow[meta.startIndex] = this.scaleOrdinalRank(rankVal, meta);
                     } else {
                         // Continuous: standardized (missing -> training mean, i.e. 0 after scaling)
                         const num = this.isMissing(val) ? NaN : Number(val);
@@ -868,7 +885,7 @@
                         note(col, missing ? 'missing' : 'unseen', rawVal);
                         rankVal = meta.defaultRank !== undefined ? meta.defaultRank : 0;
                     }
-                    xRow[meta.startIndex] = rankVal;
+                    xRow[meta.startIndex] = this.scaleOrdinalRank(rankVal, meta);
                 } else {
                     // Note: Number('') === 0, so blanks must be detected explicitly
                     const num = missing ? NaN : Number(rawVal);
@@ -1384,85 +1401,79 @@
                 }
             }
 
-            // Calculate VIF for each encoded column via regression on all other columns
-            const encodedVIFs = [];
-            for (let j = 0; j < P; j++) {
-                // Dependent var y = X[:, j]
-                const y = X_raw.map(row => row[j]);
-                // Predictors Z = X[:, != j] with intercept
-                const Z = X_raw.map(row => [1, ...row.filter((_, idx) => idx !== j)]);
-                const dimZ = Z[0].length;
-
-                // Compute Z^T * Z + lambda * I
-                const ZtZ = Array.from({ length: dimZ }, () => new Array(dimZ).fill(0));
-                const Zty = new Array(dimZ).fill(0);
-
-                for (let i = 0; i < N; i++) {
-                    const zRow = Z[i];
-                    const yVal = y[i];
-                    for (let a = 0; a < dimZ; a++) {
-                        Zty[a] += zRow[a] * yVal;
-                        for (let b = 0; b < dimZ; b++) {
-                            ZtZ[a][b] += zRow[a] * zRow[b];
-                        }
-                    }
+            // Generalised VIF (Fox & Monette, 1992) for each ORIGINAL feature, computed from the
+            // correlation matrix R of the encoded columns (standardised, so the intercept is implicit and
+            // unpenalised): GVIF = det(R_SS)·det(R_OO) / det(R), where S = the feature's columns (one, or
+            // its k−1 dummies) and O = all other columns. For a single column this equals the classical VIF
+            // 1/(1 − R²). For multi-level nominal features GVIF measures their JOINT collinearity (the old
+            // "largest single-dummy VIF" understated it); it is reported on the VIF scale as GVIF^(1/df),
+            // i.e. (GVIF^(1/(2·df)))², so the same > 5 threshold applies.
+            const R = Array.from({ length: P }, () => new Array(P).fill(0));
+            for (let i = 0; i < N; i++) {
+                const row = X_raw[i];
+                for (let a2 = 0; a2 < P; a2++) {
+                    const va = row[a2];
+                    if (va === 0) continue;
+                    for (let b2 = a2; b2 < P; b2++) R[a2][b2] += va * row[b2];
                 }
-
-                // Add small ridge lambda to guarantee well-conditioned inversion
-                for (let a = 0; a < dimZ; a++) ZtZ[a][a] += 1e-4;
-
-                const invZtZ = this.invertMatrix(ZtZ);
-                let r2 = 0;
-                if (invZtZ) {
-                    const beta = new Array(dimZ).fill(0);
-                    for (let a = 0; a < dimZ; a++) {
-                        for (let b = 0; b < dimZ; b++) {
-                            beta[a] += invZtZ[a][b] * Zty[b];
-                        }
-                    }
-
-                    let ssTot = 0;
-                    let ssRes = 0;
-                    const yMean = y.reduce((a, b) => a + b, 0) / N;
-
-                    for (let i = 0; i < N; i++) {
-                        let yHat = 0;
-                        for (let a = 0; a < dimZ; a++) yHat += Z[i][a] * beta[a];
-                        ssTot += Math.pow(y[i] - yMean, 2);
-                        ssRes += Math.pow(y[i] - yHat, 2);
-                    }
-
-                    r2 = ssTot > 0 ? Math.max(0, 1 - (ssRes / ssTot)) : 0;
+            }
+            for (let a2 = 0; a2 < P; a2++) {
+                for (let b2 = a2; b2 < P; b2++) {
+                    R[a2][b2] /= N;
+                    R[b2][a2] = R[a2][b2];
                 }
-
-                let vif = r2 >= 0.999 ? 999.0 : 1 / Math.max(0.001, 1 - r2);
-                encodedVIFs.push({
-                    encodedName: encodedCols[j].name,
-                    originalCol: encodedCols[j].originalCol,
-                    rSquared: Number(r2.toFixed(4)),
-                    vif: Number(vif.toFixed(2))
-                });
+                // Tiny ridge keeps determinants finite under exact collinearity (scale-free: R has unit diagonal)
+                R[a2][a2] += 1e-6;
             }
 
-            // Aggregate back to original clinical feature level (taking the max VIF across its dummy levels)
-            const featureVIFMap = {};
-            encodedVIFs.forEach(item => {
-                const col = item.originalCol;
-                if (!featureVIFMap[col] || item.vif > featureVIFMap[col].vif) {
-                    featureVIFMap[col] = {
-                        feature: col,
-                        vif: item.vif,
-                        rSquared: item.rSquared,
-                        type: columnConfigs[col]?.type || 'continuous',
-                        dummyCount: (featureVIFMap[col]?.dummyCount || 0) + 1,
-                        highVIF: item.vif > 5.0
-                    };
-                } else {
-                    featureVIFMap[col].dummyCount++;
+            const logDet = (M) => {
+                const n = M.length;
+                if (n === 0) return 0;
+                const A = M.map(r => r.slice());
+                let ld = 0;
+                for (let c = 0; c < n; c++) {
+                    let piv = c;
+                    for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+                    if (Math.abs(A[piv][c]) < 1e-300) return -Infinity;
+                    if (piv !== c) [A[piv], A[c]] = [A[c], A[piv]];
+                    ld += Math.log(Math.abs(A[c][c]));
+                    for (let r = c + 1; r < n; r++) {
+                        const f = A[r][c] / A[c][c];
+                        if (f === 0) continue;
+                        for (let k = c; k < n; k++) A[r][k] -= f * A[c][k];
+                    }
                 }
+                return ld;
+            };
+            const sub = (idx) => idx.map(i => idx.map(j => R[i][j]));
+            const logDetAll = logDet(R);
+
+            const byFeature = {};
+            encodedCols.forEach((ec, j) => {
+                (byFeature[ec.originalCol] = byFeature[ec.originalCol] || []).push(j);
             });
 
-            const results = Object.values(featureVIFMap);
+            const results = Object.keys(byFeature).map(col => {
+                const S = byFeature[col];
+                const O = [];
+                for (let j = 0; j < P; j++) if (!S.includes(j)) O.push(j);
+                const df = S.length;
+                const logGVIF = logDet(sub(S)) + logDet(sub(O)) - logDetAll;
+                let gvif = Math.exp(logGVIF);
+                if (!isFinite(gvif) || gvif < 1) gvif = isFinite(gvif) ? 1 : 999;
+                let vifScale = Math.pow(gvif, 1 / df);
+                if (!isFinite(vifScale) || vifScale > 999) vifScale = 999;
+                return {
+                    feature: col,
+                    vif: Number(vifScale.toFixed(2)),               // VIF scale: GVIF^(1/df)
+                    gvif: Number(Math.min(gvif, 1e6).toFixed(2)),
+                    adjustedGVIF: Number(Math.sqrt(vifScale).toFixed(3)), // GVIF^(1/(2·df))
+                    rSquared: Number((1 - 1 / vifScale).toFixed(4)),     // equivalent R² on the VIF scale
+                    type: columnConfigs[col]?.type || 'continuous',
+                    dummyCount: df,
+                    highVIF: vifScale > 5.0
+                };
+            });
             results.sort((a, b) => b.vif - a.vif);
             return results;
         },

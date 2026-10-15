@@ -1354,6 +1354,14 @@
 
     // Clears every result derived from a previous dataset so nothing stale can be trained or predicted on
     function resetDerivedState() {
+        // Free GPU memory of every model from the previous dataset (including the deployed one)
+        const oldModels = [
+            ...((AppState.allTestedResults || []).map(r => r.model)),
+            ...(((AppState.pipeline && AppState.pipeline.benchmarkResults) || []).map(b => b.model)),
+            AppState.trainedModel
+        ];
+        AppState.trainedModel = null;
+        disposeModels(oldModels);
         AppState.imputedData = null;
         AppState.prepMeta = null;
         AppState.trainTestData = null;
@@ -2221,7 +2229,8 @@
                     evalRes.testPct = testPct;
                     evalRes.trainCount = split.trainX.length;
                     evalRes.testCount = split.testX.length;
-                    evalRes.totalCount = rawRows.length;
+                    // Rows actually available for the 100% retrain (after any 'drop rows' imputation choices)
+                    evalRes.totalCount = prep.X.length;
                     evalRes.splitSeed = splitSeed;
                     evalRes.seed = hyperparams.seed;
                     if (valModel.trainingInfo) evalRes.nnNote = describeNNTraining(valModel.trainingInfo);
@@ -2267,6 +2276,8 @@
                             await fitWithYields(fullModel, prep.X, prep.y, watchdog);
                         }
                         activeModelInstance = fullModel;
+                        // The split-phase model has been evaluated and is replaced: free its GPU memory
+                        disposeModels([valModel]);
                     }
 
                     testedResults.push({
@@ -2391,6 +2402,7 @@
             // Sort tested models by out-of-sample performance (macro-F1 then AUC for classification; R² for regression)
             testedResults.sort((a, b) => compareEvalResults(a.evalRes, b.evalRes, prep.isClassification));
 
+            const previousResults = AppState.allTestedResults;
             AppState.allTestedResults = testedResults;
             // Designate top-performing model as champion
             const champion = testedResults[0];
@@ -2401,6 +2413,8 @@
             // Remember the encoding the Step 4 models use, then mark the standard workflow as the source
             AppState.baselinePrepMeta = AppState.prepMeta;
             markBaselineDeployed();
+            // The previous run's models are no longer reachable (the new leader is now deployed)
+            disposeModels((previousResults || []).map(r => r.model));
 
             if (watchdog) {
                 watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Top-ranked on ${rankingMetricLabel(prep.isClassification)}: ${champion.info.name}`);
@@ -2467,6 +2481,16 @@
             // and the selector would snap back), so they are disabled while these results are shown
             Array.from(sel.options).forEach(opt => { opt.disabled = opt.value.startsWith(otherPrefix); });
             sel.value = value;
+        });
+    }
+
+    // Frees GPU (WebGL) memory held by trained neural networks / ensembles that are no longer reachable.
+    // The currently deployed model is never disposed.
+    function disposeModels(models) {
+        (models || []).forEach(m => {
+            if (m && m !== AppState.trainedModel && typeof m.dispose === 'function') {
+                try { m.dispose(); } catch (e) { /* ignore */ }
+            }
         });
     }
 
@@ -3327,10 +3351,14 @@
         let rowsWithImputation = 0;
         let totalImputedCells = 0;
 
-        rows.forEach(r => {
-            const rowIssues = [];
-            const xVector = DataEngine.transformSingleRow(r, prep, rowIssues);
-            const predRes = AppState.trainedModel.predictSingle(xVector);
+        // Encode every row, then predict in one batched pass (one GPU call for neural networks)
+        const rowIssueLists = rows.map(() => []);
+        const xMatrix = rows.map((r, i) => DataEngine.transformSingleRow(r, prep, rowIssueLists[i]));
+        const outputs = rows.length ? ModelEngine.predictOutputs(AppState.trainedModel, xMatrix) : [];
+
+        rows.forEach((r, rowIdx) => {
+            const rowIssues = rowIssueLists[rowIdx];
+            const predRes = outputs[rowIdx];
 
             let predictedLabel = predRes.pred;
             let confidence = 'N/A';
@@ -3585,6 +3613,8 @@
         AppState.pipeline.rfImportance = [];
         AppState.pipeline.top70Features = [];
         AppState.pipeline.bottom30Features = [];
+        // Old pipeline models are discarded by a new Step 1 (the deployed one is kept until replaced)
+        disposeModels((AppState.pipeline.benchmarkResults || []).map(b => b.model));
         AppState.pipeline.benchmarkResults = [];
         if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
         if (DOM.pipelineRfImportanceContainer) DOM.pipelineRfImportanceContainer.innerHTML = '';
@@ -3723,7 +3753,7 @@
                     <td><strong style="color: ${norm.isNormal ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">${norm.skewness}</strong></td>
                     <td>
                         <span class="pill" style="${norm.isNormal ? 'background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);' : 'background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.4);'}">
-                            ${norm.isNormal ? '✓ Approx. symmetric (|g₁| ≤ 1.0)' : '⚠️ Skewed (|g₁| > 1.0)'}
+                            ${norm.isNormal ? '✓ Approx. symmetric (|G₁| ≤ 1.0)' : '⚠️ Skewed (|G₁| > 1.0)'}
                         </span>
                     </td>
                     <td style="font-size: 12px; color: var(--text-secondary);">
@@ -3766,7 +3796,7 @@
                                 <span class="vif-badge-danger">${p.method} = ${p.coeff}</span>
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary);">
-                                <strong>Method:</strong> ${p.bothNormal ? 'Both variables approximately symmetric (|g₁| ≤ 1) &rarr; Pearson product-moment correlation.' : `Skewness detected (${escapeHtml([p.norm1.isNormal ? '' : p.var1, p.norm2.isNormal ? '' : p.var2].filter(Boolean).join(', '))}) &rarr; Spearman rank correlation.`}
+                                <strong>Method:</strong> ${p.bothNormal ? 'Both variables approximately symmetric (|G₁| ≤ 1) &rarr; Pearson product-moment correlation.' : `Skewness detected (${escapeHtml([p.norm1.isNormal ? '' : p.var1, p.norm2.isNormal ? '' : p.var2].filter(Boolean).join(', '))}) &rarr; Spearman rank correlation.`}
                             </div>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
@@ -3817,9 +3847,9 @@
                         <th style="width: 40px; text-align: center;">Select</th>
                         <th>Feature Name</th>
                         <th>Measurement Scale</th>
-                        <th>Encoded Dummy Levels</th>
-                        <th>Linear R² Score</th>
-                        <th>VIF Score</th>
+                        <th>df (Encoded Columns)</th>
+                        <th>Equivalent R²</th>
+                        <th>VIF (GVIF<sup>1/df</sup> for df &gt; 1)</th>
                         <th>Collinearity Status</th>
                     </tr>
                 </thead>
@@ -3839,7 +3869,7 @@
                     <td><span class="pill pill-${item.type}">${item.type}</span></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${item.dummyCount}</td>
                     <td>${item.rSquared}</td>
-                    <td><strong style="color: ${isHigh ? 'var(--accent-rose)' : 'var(--accent-emerald)'}; font-size: 13.5px;">${item.vif >= 999 ? '≥ 999 (≈ perfect collinearity)' : item.vif}</strong></td>
+                    <td><strong style="color: ${isHigh ? 'var(--accent-rose)' : 'var(--accent-emerald)'}; font-size: 13.5px;">${item.vif >= 999 ? '≥ 999 (≈ perfect collinearity)' : item.vif}</strong>${item.dummyCount > 1 && item.vif < 999 ? `<div style="font-size: 10.5px; color: var(--text-muted);">GVIF ${item.gvif}; GVIF<sup>1/(2·df)</sup> ${item.adjustedGVIF}</div>` : ''}</td>
                     <td>
                         <span class="${isHigh ? 'vif-badge-danger' : 'vif-badge-ok'}">
                             ${isHigh ? '⚠️ VIF > 5.0 (High Multicollinearity)' : '✓ VIF ≤ 5.0 (Acceptable)'}
@@ -4308,7 +4338,7 @@
             const targetCol = AppState.pipeline.targetCol;
             const isClassification = AppState.pipeline.columnConfigs[targetCol]?.type !== 'continuous';
             // Model plan: Naive Bayes is classification-only, so regression runs 4 models, not 5
-            const plannedModels = isClassification ? ['knn', 'nb', 'nn', 'glm', 'ensemble'] : ['knn', 'nn', 'glm', 'ensemble'];
+            const plannedModels = isClassification ? ['knn', 'nb', 'rf', 'nn', 'glm', 'ensemble'] : ['knn', 'rf', 'nn', 'glm', 'ensemble'];
             const totalModels = plannedModels.length;
             const stepOf = id => plannedModels.indexOf(id) + 1;
             if (watchdog) watchdog.totalSteps = totalModels;
@@ -4371,6 +4401,17 @@
                 nbEval.constraintNote = "Bottom 30% RF-importance features removed (fewer noisy inputs; does not make features conditionally independent).";
                 benchmarkList.push({ id: 'nb', name: 'Naive Bayes (Gaussian + Bernoulli)', model: nb, prep: top70Prep, eval: nbEval });
             }
+
+            // B2. Random Forest (all surviving features). Tree splits are scale-free and the forest
+            // selects features per split, so no RF-importance pruning is applied.
+            if (watchdog) watchdog.tick(stepOf('rf'), `Training Model ${stepOf('rf')}/${totalModels}: Random Forest (all surviving features)...`);
+            await new Promise(r => setTimeout(r, 60));
+            const rfFinal = new RandomForest(isClassification, 40, 6, 2, 'sqrt', AppState.pipeline.evalSeed);
+            await fitWithYields(rfFinal, fullPrep.X, fullPrep.y, watchdog);
+            const rfEval = ModelEngine.evaluate(rfFinal, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            rfEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
+            rfEval.constraintNote = "40 trees, max depth 6, √p features per split; probabilities are tree vote shares.";
+            benchmarkList.push({ id: 'rf', name: 'Random Forest', model: rfFinal, prep: fullPrep, eval: rfEval });
 
             // C. Deep Neural Network (Strict constraint: L2 Weight Decay + Dropout)
             if (watchdog) watchdog.tick(stepOf('nn'), `Training Model ${stepOf('nn')}/${totalModels}: Neural Network (MLP; L2 + dropout + early stopping)...`);
@@ -4444,6 +4485,7 @@
             // Store ranked best-first (macro-F1 then AUC for classification; R² for regression),
             // so benchmarkResults[0] is genuinely the top model everywhere it is used
             benchmarkList.sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
+            disposeModels((AppState.pipeline.benchmarkResults || []).map(b => b.model));
             AppState.pipeline.benchmarkResults = benchmarkList;
 
             // Render Leaderboard & Confusion Matrices
@@ -4451,7 +4493,7 @@
 
             if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'block';
 
-            if (watchdog) watchdog.finish("All 5 Clinical Models Evaluated Successfully!");
+            if (watchdog) watchdog.finish(`All ${benchmarkList.length} Clinical Models Evaluated Successfully!`);
 
         } catch (err) {
             console.error("Pipeline Step 7 training error:", err);

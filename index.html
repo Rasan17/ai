@@ -1343,7 +1343,7 @@
                         <!-- Continuous Skewness Table -->
                         <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
                             <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
-                                📈 Training Variables Skewness Screen (|g₁| ≤ 1 rule of thumb)
+                                📈 Training Variables Skewness Screen (|G₁| ≤ 1 rule of thumb)
                             </h4>
                             <div id="pipeline-normality-table-container" class="table-container"></div>
                         </div>
@@ -1385,7 +1385,7 @@
                             <div style="font-size: 18px;">📐</div>
                             <div>
                                 <strong>Step 3: Variance Inflation Factor (VIF) Check</strong><br>
-                                Categorical variables are one-hot encoded (dropping reference category to eliminate dummy trap) and continuous variables standardized. VIF is computed for all surviving features. Features with VIF &gt; 5 indicate severe multicollinearity and can be permanently eliminated from both Train and Test sets.
+                                Categorical variables are one-hot encoded (dropping reference category to eliminate dummy trap) and continuous variables standardized. VIF is computed for all surviving features; multi-level categorical features use the Generalised VIF (Fox &amp; Monette), which captures the joint collinearity of all their dummy columns and is shown on the VIF scale as GVIF<sup>1/df</sup>. Features with VIF &gt; 5 indicate severe multicollinearity and can be permanently eliminated from both Train and Test sets.
                             </div>
                         </div>
 
@@ -1540,6 +1540,7 @@
                                 Applies strict stability constraints to each algorithm:
                                 <ul style="margin: 6px 0 0 20px; font-size: 12.5px;">
                                     <li><strong>k-NN & Naive Bayes:</strong> Use only the top 70% of features by Step 6 RF importance (fewer noisy inputs for distance- and likelihood-based models).</li>
+                                    <li><strong>Random Forest:</strong> All surviving features (tree splits are scale-free and the forest selects features per split).</li>
                                     <li><strong>Neural Network (MLP):</strong> L2 weight decay + dropout, with early stopping on an internal validation split of the training rows (the test set is never used in training).</li>
                                     <li><strong>Logistic / Ridge Regression:</strong> Applies L2 penalization to stabilize any remaining minor collinearity.</li>
                                     <li><strong>Voting Ensemble:</strong> Equal-weight soft vote of its base models; scaling and one-hot encoding fitted on the Training set only (as for every model).</li>
@@ -1688,8 +1689,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=16"></script>
-    <script src="models.js?v=16"></script>
-    <script src="app.js?v=16"></script>
+    <script src="data-engine.js?v=18"></script>
+    <script src="models.js?v=18"></script>
+    <script src="app.js?v=18"></script>
 </body>
 </html>

@@ -31,6 +31,16 @@ chk('Skewness g1 (bias-corrected)',o['skew'],stats.skew(col('x3'),bias=False),6e
 Xv=sm.add_constant(np.column_stack([col('x1'),col('x2'),col('x3')]))
 vif={v['feature']:v['vif'] for v in o['vif']}
 for i,f in enumerate(['x1','x2','x3']): chk(f'VIF {f}',vif[f],variance_inflation_factor(Xv,i+1),6e-3)
+# Generalised VIF (Fox & Monette): x1..x3 plus 3-level nominal g (dummies B, C; reference A)
+D=np.column_stack([col('x1'),col('x2'),col('x3'),(col('g')=='B').astype(float),(col('g')=='C').astype(float)])
+Rm=np.corrcoef(D,rowvar=False)
+gv={v['feature']:v for v in o['gvif']}
+for f,S in [('x1',[0]),('x2',[1]),('x3',[2]),('g',[3,4])]:
+    O=[j for j in range(5) if j not in S]
+    G=np.linalg.det(Rm[np.ix_(S,S)])*np.linalg.det(Rm[np.ix_(O,O)])/np.linalg.det(Rm)
+    chk(f'GVIF^(1/df) {f} (df={len(S)})',gv[f]['vif'],G**(1/len(S)),6e-3)
+Xg=sm.add_constant(D)
+for i,f in enumerate(['x1','x2','x3']): chk(f'GVIF(df=1) == statsmodels VIF {f}',gv[f]['vif'],variance_inflation_factor(Xg,i+1),6e-3)
 # classification metrics
 y=np.array(o['auc_y']); s=np.array(o['auc_s'])
 chk('ROC-AUC with ties',o['auc'],metrics.roc_auc_score(y,s),6e-5)

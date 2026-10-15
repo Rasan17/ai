@@ -18,6 +18,7 @@ out.pearson=DE.calculatePearson(rows.map(r=>r.x1),rows.map(r=>r.x2));
 out.spearman=DE.calculateSpearman(rows.map(r=>r.x1),rows.map(r=>r.x3));
 out.skew=DE.calculateSkewness(rows.map(r=>r.x3)).skewness;
 out.vif=DE.calculateVIF(rows,['x1','x2','x3'],cfg);
+out.gvif=DE.calculateVIF(rows,['x1','x2','x3','g'],cfg);
 // classification metrics
 const yt=[],sc=[];for(let i=0;i<200;i++){const y=rnd()<0.4?1:0; yt.push(y); sc.push(Math.round((0.35*y+rnd()*0.65)*10)/10);} // rounded -> many ties
 out.auc_y=yt; out.auc_s=sc; out.auc=ME._calculateBinaryAUC(yt,sc);
