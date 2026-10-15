@@ -521,8 +521,13 @@
         if (DOM.pipelineDownloadReportBtn) DOM.pipelineDownloadReportBtn.addEventListener('click', downloadPipelineProtocolReport);
         if (DOM.pipelineDirectLaunchBtn) {
             DOM.pipelineDirectLaunchBtn.addEventListener('click', () => {
+                if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
+                    alert("Please select a sample medical cohort (e.g. 🫀 Cardiometabolic Risk or 🧠 Neurosurgical Shunt Response) or upload a clinical CSV first.");
+                    return;
+                }
                 goToStep('pipeline');
                 initPipelineUI();
+                goToPipelineSubstep(AppState.pipeline && AppState.pipeline.substep ? AppState.pipeline.substep : 1);
             });
         }
         if (DOM.pipelineToSinglePredictBtn) {
@@ -546,7 +551,13 @@
         }
 
         // Next Step Buttons
-        DOM.toStep2Btn.addEventListener('click', () => goToStep(2));
+        DOM.toStep2Btn.addEventListener('click', () => {
+            if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
+                alert("Please select a sample medical cohort or upload a clinical CSV first.");
+                return;
+            }
+            goToStep(2);
+        });
         DOM.toStep3Btn.addEventListener('click', () => goToStep(3));
         DOM.toStep4Btn.addEventListener('click', () => goToStep(4));
         DOM.toStep5Btn.addEventListener('click', () => goToStep(5));
@@ -1056,7 +1067,10 @@
         if (stepNum === 3 || stepNum === '3') renderImputationTable();
         if (stepNum === 4 || stepNum === '4') refreshOptionBSummaries();
         if (stepNum === 5 || stepNum === '5') renderSinglePredictionForm();
-        if (stepNum === 'pipeline') initPipelineUI();
+        if (stepNum === 'pipeline') {
+            initPipelineUI();
+            goToPipelineSubstep(AppState.pipeline && AppState.pipeline.substep ? AppState.pipeline.substep : 1);
+        }
     }
 
     function handleFileUpload(file) {
@@ -1106,6 +1120,9 @@
 
             renderDataOverview();
             DOM.toStep2Btn.disabled = false;
+            if (DOM.pipelineDirectLaunchBtn) {
+                DOM.pipelineDirectLaunchBtn.disabled = false;
+            }
 
             // Sync with pipeline tab if currently active or loaded
             if (DOM.pipelineDatasetName) {
