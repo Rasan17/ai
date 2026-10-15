@@ -1,7 +1,7 @@
 /**
  * NPH ML/Neuralnet Predictor - Machine Learning & Deep Learning Engine
  * Provides Deep Neural Networks (TensorFlow.js + Pure JS Fallback), Random Forests,
- * Logistic/Softmax Regression, Ridge Regression, Support Vector Machines, k-NN,
+ * Logistic/Softmax Regression, Ridge Regression, k-NN,
  * and Gaussian Naive Bayes with comprehensive evaluation metrics.
  * 
  * Conceived, designed and developed by Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)
@@ -25,6 +25,22 @@
             t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
+    }
+
+    /**
+     * Yields control back to the browser between training epochs. TF.js's default yielding uses
+     * requestAnimationFrame, which never fires in a background tab (training would freeze); here a
+     * MessageChannel is used when the page is hidden, and setTimeout (allowing UI repaint) when visible.
+     */
+    function yieldToBrowser() {
+        if (typeof document !== 'undefined' && document.hidden && typeof MessageChannel !== 'undefined') {
+            return new Promise(resolve => {
+                const ch = new MessageChannel();
+                ch.port1.onmessage = () => resolve();
+                ch.port2.postMessage(null);
+            });
+        }
+        return new Promise(resolve => setTimeout(resolve, 0));
     }
 
     // ==========================================
@@ -357,6 +373,7 @@
                             this.weights[c][j] -= velW[c][j];
                         }
                     }
+                    this._checkFinite(epoch);
                 }
             } else {
                 // Ridge Linear Regression via Gradient Descent with momentum
@@ -391,7 +408,15 @@
                         velW[j] = momentumBeta * velW[j] + this.lr * gW;
                         this.weights[j] -= velW[j];
                     }
+                    this._checkFinite(epoch);
                 }
+            }
+        }
+
+        _checkFinite(epoch) {
+            const flat = this.isClassification ? [...this.bias, ...this.weights.flat()] : [this.bias, ...this.weights];
+            if (flat.some(v => !Number.isFinite(v))) {
+                throw new Error(`Logistic/Ridge regression diverged at iteration ${epoch + 1} (coefficients became non-finite). Reduce the learning rate or increase the L2 penalty.`);
             }
         }
 
@@ -642,6 +667,10 @@
         async fit(trainX, trainY, testX = null, testY = null, onEpochCallback = null) {
             const hasTF = typeof window.tf !== 'undefined' && window.tf !== null;
             const inputDim = trainX[0].length;
+            this.usedFallback = false;
+            this.fallbackReason = null;
+            // Fresh seeded RNG per fit so refits with the same seed reproduce the same shuffles
+            this.rng = createPRNG(this.seed);
 
             if (hasTF) {
                 // Dispose existing model instance if retraining to prevent GPU memory leak
@@ -650,37 +679,39 @@
                     this.tfModel = null;
                 }
 
-                let xTensor = null;
-                let yTensor = null;
+                let model = null;
                 let valXTensor = null;
                 let valYTensor = null;
 
                 try {
                     const tf = window.tf;
-                    const model = tf.sequential();
+                    model = tf.sequential();
 
                     // Optional L2 kernel regularizer
                     const kernelReg = (this.l2Reg && this.l2Reg > 0 && typeof tf.regularizers !== 'undefined' && tf.regularizers.l2)
                         ? tf.regularizers.l2({ l2: this.l2Reg })
                         : null;
 
-                    // Seed-based weight initializer for reproducibility
-                    const kernelInit = (this.seed !== null && typeof tf.initializers !== 'undefined' && tf.initializers.glorotUniform)
-                        ? tf.initializers.glorotUniform({ seed: this.seed })
-                        : 'glorotUniform';
+                    // Seed-based weight initializer for reproducibility (a different derived seed per layer)
+                    const hasSeededInit = this.seed !== null && typeof tf.initializers !== 'undefined' && tf.initializers.glorotUniform;
+                    const kernelInitFor = (layerIdx) => (hasSeededInit
+                        ? tf.initializers.glorotUniform({ seed: this.seed + layerIdx * 7919 })
+                        : 'glorotUniform');
 
                     // Input + First Hidden Layer
                     const firstDense = {
                         inputShape: [inputDim],
                         units: this.hiddenLayers[0] || 64,
                         activation: this.activation,
-                        kernelInitializer: kernelInit
+                        kernelInitializer: kernelInitFor(0)
                     };
                     if (kernelReg) firstDense.kernelRegularizer = kernelReg;
                     model.add(tf.layers.dense(firstDense));
 
                     if (this.dropoutRate > 0) {
-                        model.add(tf.layers.dropout({ rate: this.dropoutRate, seed: this.seed }));
+                        const dropCfg = { rate: this.dropoutRate };
+                        if (this.seed !== null) dropCfg.seed = this.seed;
+                        model.add(tf.layers.dropout(dropCfg));
                     }
 
                     // Subsequent Hidden Layers
@@ -690,24 +721,27 @@
                         const nextDense = {
                             units: units,
                             activation: this.activation,
-                            kernelInitializer: kernelInit
+                            kernelInitializer: kernelInitFor(l)
                         };
                         if (kernelReg) nextDense.kernelRegularizer = kernelReg;
                         model.add(tf.layers.dense(nextDense));
                         if (this.dropoutRate > 0) {
-                            model.add(tf.layers.dropout({ rate: this.dropoutRate, seed: this.seed ? this.seed + l : null }));
+                            const dropCfg = { rate: this.dropoutRate };
+                            if (this.seed !== null) dropCfg.seed = this.seed + l;
+                            model.add(tf.layers.dropout(dropCfg));
                         }
                     }
 
                     // Output Layer
+                    const outIdx = this.hiddenLayers.length;
                     if (this.isClassification) {
                         model.add(tf.layers.dense({
                             units: this.numClasses,
                             activation: 'softmax',
-                            kernelInitializer: kernelInit
+                            kernelInitializer: kernelInitFor(outIdx)
                         }));
                     } else {
-                        model.add(tf.layers.dense({ units: 1, kernelInitializer: kernelInit }));
+                        model.add(tf.layers.dense({ units: 1, kernelInitializer: kernelInitFor(outIdx) }));
                     }
 
                     // Optimizer
@@ -726,72 +760,109 @@
                         metrics: this.isClassification ? ['accuracy'] : ['mse']
                     });
 
-                    // Prepare Tensors
-                    xTensor = tf.tensor2d(trainX, [trainX.length, inputDim]);
-                    yTensor = this.isClassification ?
-                        tf.tensor1d(trainY, 'int32') :
-                        tf.tensor2d(trainY.map(v => [v]), [trainY.length, 1]);
-
-                    let validationData = null;
+                    // Validation data is used for loss monitoring only (no early stopping / model selection)
+                    let validationData = undefined;
                     if (testX && testY && testX.length > 0) {
                         valXTensor = tf.tensor2d(testX, [testX.length, inputDim]);
+                        // Class indices as float32: TF.js 4.x's accuracy metric fails on int32 labels
                         valYTensor = this.isClassification ?
-                            tf.tensor1d(testY, 'int32') :
+                            tf.tensor1d(testY, 'float32') :
                             tf.tensor2d(testY.map(v => [v]), [testY.length, 1]);
                         validationData = [valXTensor, valYTensor];
                     }
 
                     const history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
+                    const n = trainX.length;
+                    const batchSize = Math.min(this.batchSize, n);
 
-                    await model.fit(xTensor, yTensor, {
-                        epochs: this.epochs,
-                        batchSize: Math.min(this.batchSize, trainX.length),
-                        validationData: validationData,
-                        shuffle: true,
-                        callbacks: {
-                            onEpochEnd: (epoch, logs) => {
-                                history.loss.push(Number(logs.loss.toFixed(4)));
-                                if (logs.val_loss !== undefined) history.valLoss.push(Number(logs.val_loss.toFixed(4)));
-                                if (logs.acc !== undefined) history.accuracy.push(Number(logs.acc.toFixed(4)));
-                                if (logs.val_acc !== undefined) history.valAccuracy.push(Number(logs.val_acc.toFixed(4)));
+                    // Epoch loop with our own seeded shuffle (TF.js's built-in shuffle uses an unseeded RNG)
+                    for (let epoch = 0; epoch < this.epochs; epoch++) {
+                        const perm = Array.from({ length: n }, (_, i) => i);
+                        for (let i = n - 1; i > 0; i--) {
+                            const j = Math.floor(this.rng() * (i + 1));
+                            [perm[i], perm[j]] = [perm[j], perm[i]];
+                        }
+                        const xTensor = tf.tensor2d(perm.map(i => trainX[i]), [n, inputDim]);
+                        const yTensor = this.isClassification ?
+                            tf.tensor1d(perm.map(i => trainY[i]), 'float32') :
+                            tf.tensor2d(perm.map(i => [trainY[i]]), [n, 1]);
 
-                                if (onEpochCallback) {
-                                    onEpochCallback(epoch + 1, this.epochs, logs);
-                                }
+                        let h;
+                        try {
+                            h = await model.fit(xTensor, yTensor, {
+                                epochs: 1,
+                                batchSize,
+                                validationData,
+                                shuffle: false,
+                                yieldEvery: 'never' // we yield per epoch ourselves (works in background tabs)
+                            });
+                        } finally {
+                            xTensor.dispose();
+                            yTensor.dispose();
+                        }
+
+                        const H = h.history;
+                        const logs = {
+                            loss: H.loss ? H.loss[0] : NaN,
+                            val_loss: H.val_loss ? H.val_loss[0] : undefined,
+                            acc: H.acc ? H.acc[0] : (H.accuracy ? H.accuracy[0] : undefined),
+                            val_acc: H.val_acc ? H.val_acc[0] : (H.val_accuracy ? H.val_accuracy[0] : undefined)
+                        };
+                        if (!Number.isFinite(logs.loss)) {
+                            throw new Error(`Neural network training diverged at epoch ${epoch + 1} (loss is not finite). Reduce the learning rate.`);
+                        }
+
+                        history.loss.push(Number(logs.loss.toFixed(4)));
+                        if (logs.val_loss !== undefined) history.valLoss.push(Number(logs.val_loss.toFixed(4)));
+                        if (logs.acc !== undefined) history.accuracy.push(Number(logs.acc.toFixed(4)));
+                        if (logs.val_acc !== undefined) history.valAccuracy.push(Number(logs.val_acc.toFixed(4)));
+
+                        if (onEpochCallback) {
+                            try {
+                                onEpochCallback(epoch + 1, this.epochs, logs);
+                            } catch (cbErr) {
+                                // e.g. user cancellation via the watchdog: propagate, do not fall back
+                                if (cbErr && typeof cbErr === 'object') cbErr.isCallbackError = true;
+                                throw cbErr;
                             }
                         }
-                    });
+                        await yieldToBrowser();
+                    }
 
                     this.tfModel = model;
+                    model = null; // ownership transferred
                     this.history = history;
                     return;
                 } catch (e) {
+                    if (e && e.isCallbackError) throw e;
                     console.warn("TensorFlow.js training exception, using native fallback:", e);
+                    this.fallbackReason = e && e.message ? e.message : String(e);
                 } finally {
-                    // Guaranteed cleanup of intermediate tensors
-                    if (xTensor) { try { xTensor.dispose(); } catch (e) {} }
-                    if (yTensor) { try { yTensor.dispose(); } catch (e) {} }
+                    // Guaranteed cleanup of intermediate tensors and of a partially-built model
+                    if (model) { try { model.dispose(); } catch (e) {} }
                     if (valXTensor) { try { valXTensor.dispose(); } catch (e) {} }
                     if (valYTensor) { try { valYTensor.dispose(); } catch (e) {} }
                 }
+            } else {
+                this.fallbackReason = 'TensorFlow.js is not available';
             }
 
-            // Fallback to Native Logistic/Softmax/Ridge
+            // Fallback: native (single-layer) logistic / softmax / ridge model.
+            // This is NOT a neural network; callers can detect it via `usedFallback`.
+            console.warn(`Deep Neural Network unavailable (${this.fallbackReason}); trained a linear fallback model instead.`);
+            this.usedFallback = true;
             this.fallbackGLM = new GeneralizedLinearModel(
                 this.isClassification,
                 this.numClasses,
-                this.learningRate,
-                this.epochs,
+                0.05,
+                Math.max(150, this.epochs),
                 this.l2Reg,
-                'momentum'
+                'momentum',
+                this.seed
             );
             this.fallbackGLM.fit(trainX, trainY);
-            this.history = {
-                loss: [0.8, 0.6, 0.4, 0.3],
-                valLoss: [0.85, 0.65, 0.45, 0.35],
-                accuracy: [0.65, 0.78, 0.85, 0.90],
-                valAccuracy: [0.60, 0.72, 0.80, 0.85]
-            };
+            // No epoch-level training history exists for the fallback model
+            this.history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
         }
 
         predictSingle(x) {
@@ -849,23 +920,18 @@
             this.userHyperparams = config;
         }
 
-        async fit(trainX, trainY, testX = null, testY = null, onProgress = null) {
-            this.models = [];
-            this.weights = [];
-            this.baseMetrics = [];
-
-            const totalBases = this.selectedBaseIds.length;
+        async _trainBaseModels(trainX, trainY, onProgress, phaseLabel = '') {
+            const models = [];
+            const baseIds = this.selectedBaseIds.filter(mId => this.isClassification || mId !== 'nb'); // NB is classification only
+            const totalBases = baseIds.length;
             const capacity = this.userHyperparams.capacity || 'balanced';
 
             for (let idx = 0; idx < totalBases; idx++) {
-                const mId = this.selectedBaseIds[idx];
-                if (!this.isClassification && mId === 'nb') {
-                    continue; // Naive Bayes is classification only
-                }
+                const mId = baseIds[idx];
 
                 if (onProgress) {
                     onProgress(idx + 1, totalBases, {
-                        stage: `Training Ensemble Base Model ${idx + 1}/${totalBases}: ${mId.toUpperCase()}...`,
+                        stage: `${phaseLabel}Training Ensemble Base Model ${idx + 1}/${totalBases}: ${mId.toUpperCase()}...`,
                         baseId: mId
                     });
                 }
@@ -887,12 +953,11 @@
                         seed: subSeed
                     };
                     subModel = new DeepNeuralNetwork(this.isClassification, this.numClasses, nnParams);
-                    await subModel.fit(trainX, trainY, testX, testY, (ep, tot, logs) => {
+                    await subModel.fit(trainX, trainY, null, null, (ep, tot, logs) => {
                         if (onProgress) {
                             onProgress(idx + 1, totalBases, {
-                                stage: `Base ${idx + 1}/${totalBases} (NN Epoch ${ep}/${tot} - Loss: ${logs.loss.toFixed(4)})`,
-                                loss: logs.loss,
-                                val_loss: logs.val_loss
+                                stage: `${phaseLabel}Base ${idx + 1}/${totalBases} (NN Epoch ${ep}/${tot} - Loss: ${logs.loss.toFixed(4)})`,
+                                loss: logs.loss
                             });
                         }
                     });
@@ -915,41 +980,90 @@
                 }
 
                 if (subModel) {
-                    this.models.push({ id: mId, model: subModel });
+                    models.push({ id: mId, model: subModel });
+                }
+                // Yield to the browser between base models so the UI (and Force Stop) stays responsive
+                await new Promise(r => setTimeout(r, 0));
+            }
+            return models;
+        }
+
+        /**
+         * testX / testY are accepted for API compatibility but are deliberately NOT used:
+         * performance weights are estimated on an internal validation split of the TRAINING data,
+         * so the test set never influences the model.
+         */
+        async fit(trainX, trainY, testX = null, testY = null, onProgress = null) {
+            this.models = [];
+            this.weights = [];
+            this.baseMetrics = [];
+            this.weightingNote = null;
+            this.rng = createPRNG(this.seed);
+
+            const power = this.userHyperparams.power || 2;
+            let rawWeights = null;
+            const n = trainX.length;
+
+            if (this.voting === 'weighted' && n >= 10) {
+                // Internal 80/20 validation split of the training data (stratified by class when classifying)
+                const idx = Array.from({ length: n }, (_, i) => i);
+                for (let i = n - 1; i > 0; i--) {
+                    const j = Math.floor(this.rng() * (i + 1));
+                    [idx[i], idx[j]] = [idx[j], idx[i]];
+                }
+                const innerTrain = [];
+                const innerVal = [];
+                if (this.isClassification) {
+                    const byClass = {};
+                    idx.forEach(i => { (byClass[trainY[i]] = byClass[trainY[i]] || []).push(i); });
+                    Object.values(byClass).forEach(list => {
+                        const cut = list.length > 1 ? Math.max(1, Math.round(list.length * 0.8)) : list.length;
+                        innerTrain.push(...list.slice(0, cut));
+                        innerVal.push(...list.slice(cut));
+                    });
+                } else {
+                    const cut = Math.round(n * 0.8);
+                    innerTrain.push(...idx.slice(0, cut));
+                    innerVal.push(...idx.slice(cut));
+                }
+
+                if (innerVal.length > 0 && innerTrain.length > 1) {
+                    const itX = innerTrain.map(i => trainX[i]);
+                    const itY = innerTrain.map(i => trainY[i]);
+                    const ivX = innerVal.map(i => trainX[i]);
+                    const ivY = innerVal.map(i => trainY[i]);
+                    const weightingModels = await this._trainBaseModels(itX, itY, onProgress, 'Weighting phase · ');
+                    rawWeights = [];
+                    weightingModels.forEach(item => {
+                        const preds = item.model.predict(ivX);
+                        if (this.isClassification) {
+                            let correct = 0;
+                            for (let i = 0; i < ivY.length; i++) if (preds[i] === ivY[i]) correct++;
+                            const acc = correct / ivY.length;
+                            const w = Math.pow(Math.max(0.05, acc), power);
+                            rawWeights.push(w);
+                            this.baseMetrics.push({ id: item.id, accuracy: acc, weight: w });
+                        } else {
+                            let sumSq = 0;
+                            for (let i = 0; i < ivY.length; i++) sumSq += Math.pow(ivY[i] - preds[i], 2);
+                            const mse = sumSq / ivY.length;
+                            const w = Math.pow(1.0 / (mse + 0.001), power / 2);
+                            rawWeights.push(w);
+                            this.baseMetrics.push({ id: item.id, mse, weight: w });
+                        }
+                    });
+                    this.weightingNote = `Weights estimated on an internal ${innerVal.length}-case validation split of the training data.`;
                 }
             }
 
-            // Determine weights
-            const valX = (testX && testX.length > 0) ? testX : trainX.slice(0, Math.min(trainX.length, 50));
-            const valY = (testY && testY.length > 0) ? testY : trainY.slice(0, Math.min(trainY.length, 50));
+            // Final base models are always fitted on the full training data
+            this.models = await this._trainBaseModels(trainX, trainY, onProgress, rawWeights ? 'Final fit · ' : '');
 
-            const power = this.userHyperparams.power || 2;
-            let rawWeights = [];
-
-            if (this.voting === 'weighted' && valX.length > 0) {
-                for (let item of this.models) {
-                    const preds = item.model.predict(valX);
-                    if (this.isClassification) {
-                        let correct = 0;
-                        for (let i = 0; i < valY.length; i++) {
-                            if (preds[i] === valY[i]) correct++;
-                        }
-                        const acc = correct / valY.length;
-                        const w = Math.pow(Math.max(0.05, acc), power);
-                        rawWeights.push(w);
-                        this.baseMetrics.push({ id: item.id, accuracy: acc, weight: w });
-                    } else {
-                        let sumSq = 0;
-                        for (let i = 0; i < valY.length; i++) {
-                            sumSq += Math.pow(valY[i] - preds[i], 2);
-                        }
-                        const mse = sumSq / valY.length;
-                        const w = Math.pow(1.0 / (mse + 0.001), power / 2);
-                        rawWeights.push(w);
-                        this.baseMetrics.push({ id: item.id, mse, weight: w });
-                    }
+            if (!rawWeights || rawWeights.length !== this.models.length) {
+                if (this.voting === 'weighted') {
+                    this.weightingNote = 'Too few training cases for an internal validation split; equal weights used.';
                 }
-            } else {
+                this.baseMetrics = [];
                 rawWeights = new Array(this.models.length).fill(1.0);
                 this.models.forEach(item => {
                     this.baseMetrics.push({ id: item.id, weight: 1.0 });
@@ -1070,8 +1184,8 @@
         SUPPORTED_MODELS: [
             { id: 'ensemble', name: 'Ensemble Meta-Learner (Voting & Blending)', type: 'both', desc: 'Clinical ensemble combining Deep Neural Networks, Random Forests, Logistic Regression, and k-NN with soft probability blending.' },
             { id: 'nn', name: 'Deep Neural Network (MLP / TF.js)', type: 'both', desc: 'Multi-layer perceptron with backpropagation, dense hidden layers, dropout & Adam optimizer.' },
-            { id: 'rf', name: 'Random Forest (Ensemble Trees)', type: 'both', desc: 'Ensemble of bootstrap decision trees with out-of-bag diversity and feature importance ranking.' },
-            { id: 'glm', name: 'Logistic / Ridge Regression', type: 'both', desc: 'L2-regularized linear/softmax model providing interpretable odds ratios and coefficients.' },
+            { id: 'rf', name: 'Random Forest (Ensemble Trees)', type: 'both', desc: 'Ensemble of bootstrap-sampled decision trees with random feature subsets and impurity-based feature importance ranking.' },
+            { id: 'glm', name: 'Logistic / Ridge Regression', type: 'both', desc: 'L2-regularized linear (ridge) or logistic/softmax model fitted by gradient descent on standardised features.' },
             { id: 'knn', name: 'k-Nearest Neighbors (k-NN)', type: 'both', desc: 'Non-parametric distance-based instance retrieval model for local pattern recognition.' },
             { id: 'nb', name: 'Gaussian Naive Bayes', type: 'classification', desc: 'Probabilistic baseline utilizing Gaussian likelihood distribution per feature.' }
         ],
@@ -1194,7 +1308,8 @@
                     try {
                         const probs = testX.map(x => {
                             const res = model.predictSingle(x);
-                            return res.probabilities && res.probabilities[1] !== undefined ? res.probabilities[1] : (res.pred === 1 ? 1 : 0);
+                            const p = res.probabilities && res.probabilities[1] !== undefined ? Number(res.probabilities[1]) : (res.pred === 1 ? 1 : 0);
+                            return isNaN(p) ? 0 : p;
                         });
                         rocAuc = this._calculateBinaryAUC(testY, probs);
                     } catch (e) {
@@ -1210,6 +1325,8 @@
                     macroRecall,
                     macroF1,
                     rocAuc,
+                    // For binary outcomes, class index 1 is the "positive" class for AUC / sensitivity / TP
+                    positiveClass: numClasses === 2 && targetClasses.length === 2 ? targetClasses[1] : null,
                     confMatrix,
                     classMetrics,
                     actuals: testY,
@@ -1313,14 +1430,21 @@
                 else nNeg++;
             });
 
-            if (nPos === 0 || nNeg === 0) return 1.0;
+            // AUC is undefined when the test set contains only one class
+            if (nPos === 0 || nNeg === 0) return null;
 
+            // Mid-ranks for tied scores (ties are common with vote-based probabilities)
             let rankSumPos = 0;
-            items.forEach((it, idx) => {
-                if (it.y === 1) {
-                    rankSumPos += (idx + 1);
+            let i = 0;
+            while (i < items.length) {
+                let j = i;
+                while (j + 1 < items.length && items[j + 1].score === items[i].score) j++;
+                const avgRank = (i + j + 2) / 2;
+                for (let k = i; k <= j; k++) {
+                    if (items[k].y === 1) rankSumPos += avgRank;
                 }
-            });
+                i = j + 1;
+            }
 
             const u = rankSumPos - (nPos * (nPos + 1)) / 2;
             const auc = u / (nPos * nNeg);

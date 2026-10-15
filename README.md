@@ -95,7 +95,7 @@ The platform provides two rigorous clinical evaluation paradigms selectable in S
 - **Option B: Separate Training &amp; Testing Datasets (Independent External Validation)**
   - **Dataset (i) &bull; Training Cohort:** Model parameters are fitted strictly on 100% of the primary training cohort.
   - **Dataset (ii) &bull; Testing Cohort:** Model accuracy is evaluated on an independent external validation dataset provided via dedicated CSV upload or built-in validation cohorts.
-  - **Strict Zero Data Leakage:** Categorical standardizations and continuous imputation/scaling statistics calculated on Dataset (i) are applied to Dataset (ii) without data leakage. Missing targets and unknown category levels are audited safely.
+  - **Training-Only Encoding:** Category encodings and continuous scaling statistics calculated on Dataset (i) are applied to Dataset (ii), so no Dataset (ii) information enters the model. Rows with a missing outcome or an outcome class unseen in training are excluded and counted; missing or unrecognised predictor values are filled from Dataset (i) statistics and reported.
 
 ### 6. Flexible Model Testing Scope & Tournament Benchmarking
 

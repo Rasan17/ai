@@ -9,7 +9,72 @@
 (function (window) {
     'use strict';
 
+    const TARGET_NAME_RE = /^(target|outcome|response|shunt_response|label|class|diagnos|result|improvement)/i;
+
+    // Conventional clinical ordering words (lowest rank first) used to order text ordinal levels
+    const ORDINAL_WORD_ORDER = [
+        'none', 'absent', 'never', 'normal', 'very low', 'low', 'minimal', 'mild', 'slight',
+        'moderate', 'medium', 'intermediate', 'average', 'high', 'marked', 'severe', 'very high', 'very severe', 'critical', 'extreme'
+    ];
+
+    function ordinalWordRank(value) {
+        const v = String(value).trim().toLowerCase();
+        let best = -1;
+        let bestLen = 0;
+        ORDINAL_WORD_ORDER.forEach((w, idx) => {
+            // Longest matching word wins (so "very high" beats "high")
+            if ((v === w || v.startsWith(w + ' ') || v.endsWith(' ' + w) || v.includes(' ' + w + ' ')) && w.length > bestLen) {
+                best = idx;
+                bestLen = w.length;
+            }
+        });
+        return best;
+    }
+
+    function arrayMin(arr) {
+        let m = Infinity;
+        for (let i = 0; i < arr.length; i++) if (arr[i] < m) m = arr[i];
+        return m;
+    }
+
+    function arrayMax(arr) {
+        let m = -Infinity;
+        for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i];
+        return m;
+    }
+
     const DataEngine = {
+        /**
+         * Orders ordinal levels: numerically when all numeric; by conventional clinical words
+         * (none < mild < moderate < severe, low < medium < high) when every level is recognised;
+         * otherwise by natural (numeric-aware) text order, so "Grade 2" < "Grade 10".
+         */
+        sortOrdinalLevels(values) {
+            const levels = Array.from(new Set(values.map(v => (typeof v === 'number' ? v : String(v)))));
+            if (levels.every(v => !isNaN(Number(v)) && String(v).trim() !== '')) {
+                return levels.sort((a, b) => Number(a) - Number(b));
+            }
+            const wordRanks = levels.map(ordinalWordRank);
+            const rankSet = new Set(wordRanks);
+            if (wordRanks.every(r => r >= 0) && rankSet.size === levels.length) {
+                return levels
+                    .map((v, i) => ({ v, r: wordRanks[i] }))
+                    .sort((a, b) => a.r - b.r)
+                    .map(o => o.v);
+            }
+            return levels.sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
+        },
+
+        /**
+         * Builds a value -> rank lookup for an ordinal column
+         */
+        buildOrdinalRankMap(values) {
+            const ranks = this.sortOrdinalLevels(values);
+            const rankMap = {};
+            ranks.forEach((val, rk) => { rankMap[String(val)] = rk; });
+            return { ranks, rankMap };
+        },
+
         /**
          * RFC 4180 compliant CSV Parser with auto delimiter detection
          */
@@ -183,7 +248,7 @@
 
                 if (lowerCol.match(/^(patient_id|id|mrn|record_id|patient|subjid|subject|hash)$/i) || (colIdx === 0 && distinctCount === validCount && !isNumeric)) {
                     role = 'meta';
-                } else if (colIdx === headers.length - 1 || lowerCol.match(/^(target|outcome|response|shunt_response|label|class|diagnos|result|improvement)/i)) {
+                } else if (colIdx === headers.length - 1 || TARGET_NAME_RE.test(lowerCol)) {
                     role = 'target';
                 }
 
@@ -255,6 +320,15 @@
                 };
             });
 
+            // Only one target may be suggested: prefer an outcome-like column name, else the last column
+            const targetCols = headers.filter(h => analysis[h].role === 'target');
+            if (targetCols.length > 1) {
+                const keep = targetCols.find(h => TARGET_NAME_RE.test(h.toLowerCase())) || targetCols[targetCols.length - 1];
+                targetCols.forEach(h => {
+                    if (h !== keep) analysis[h].role = 'feature';
+                });
+            }
+
             return analysis;
         },
 
@@ -268,13 +342,19 @@
             let workingRows = rows.map(r => ({ ...r }));
             const audit = [];
             const rowsToDrop = new Set();
+            const targetMissingRows = new Set();
 
-            // First pass: identify rows that must be dropped if user chose 'drop' on any column
+            // First pass: identify rows that must be dropped.
+            // Rows with a missing outcome (target) are always excluded: an outcome must never be imputed.
             Object.keys(columnConfigs).forEach(col => {
                 const config = columnConfigs[col];
                 if (config.role === 'meta') return; // skip meta columns
 
-                if (config.imputationStrategy === 'drop') {
+                if (config.role === 'target') {
+                    workingRows.forEach((row, rIdx) => {
+                        if (this.isMissing(row[col])) targetMissingRows.add(rIdx);
+                    });
+                } else if (config.imputationStrategy === 'drop') {
                     workingRows.forEach((row, rIdx) => {
                         if (this.isMissing(row[col])) {
                             rowsToDrop.add(rIdx);
@@ -283,22 +363,31 @@
                 }
             });
 
-            if (rowsToDrop.size > 0) {
-                workingRows = workingRows.filter((_, idx) => !rowsToDrop.has(idx));
+            if (targetMissingRows.size > 0) {
                 audit.push({
                     type: 'drop_rows',
-                    description: `Dropped ${rowsToDrop.size} rows with missing values in columns marked for row deletion.`
+                    description: `Excluded ${targetMissingRows.size} row(s) with a missing outcome (target values are never imputed).`
                 });
+            }
+            const featureOnlyDrops = [...rowsToDrop].filter(idx => !targetMissingRows.has(idx)).length;
+            if (featureOnlyDrops > 0) {
+                audit.push({
+                    type: 'drop_rows',
+                    description: `Dropped ${featureOnlyDrops} row(s) with missing values in columns marked for row deletion.`
+                });
+            }
+            if (targetMissingRows.size > 0 || rowsToDrop.size > 0) {
+                workingRows = workingRows.filter((_, idx) => !rowsToDrop.has(idx) && !targetMissingRows.has(idx));
             }
 
             // Second pass: Compute imputation values on the filtered rows
             Object.keys(columnConfigs).forEach(col => {
                 const config = columnConfigs[col];
-                const analysis = columnAnalysis[col];
                 if (config.role === 'meta') return;
+                if (config.role === 'target') return;
                 if (config.imputationStrategy === 'drop') return;
 
-                const strategy = config.imputationStrategy;
+                let strategy = config.imputationStrategy;
                 const colType = config.type;
 
                 // Collect valid values from workingRows
@@ -316,6 +405,11 @@
 
                 let fillValue = null;
 
+                // Mean/median/KNN need numbers: text-valued columns fall back to the most frequent value
+                if ((strategy === 'mean' || strategy === 'median' || strategy === 'knn') && validNumbers.length < validValues.length) {
+                    strategy = 'mode';
+                }
+
                 if (strategy === 'mean') {
                     if (validNumbers.length > 0) {
                         const sum = validNumbers.reduce((a, b) => a + b, 0);
@@ -327,7 +421,12 @@
                     if (validNumbers.length > 0) {
                         const sorted = [...validNumbers].sort((a, b) => a - b);
                         const mid = Math.floor(sorted.length / 2);
-                        fillValue = sorted.length % 2 === 0 ? Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(4)) : sorted[mid];
+                        if (colType === 'ordinal') {
+                            // Lower median keeps the fill value on an observed ordinal level
+                            fillValue = sorted[Math.floor((sorted.length - 1) / 2)];
+                        } else {
+                            fillValue = sorted.length % 2 === 0 ? Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(4)) : sorted[mid];
+                        }
                     } else {
                         fillValue = 0;
                     }
@@ -363,25 +462,37 @@
                 let imputedCount = 0;
                 if (strategy === 'knn') {
                     // Precompute continuous reference columns
-                    const numericCols = Object.keys(columnConfigs).filter(c => columnConfigs[c].type === 'continuous' && c !== col);
+                    const numericCols = Object.keys(columnConfigs).filter(c =>
+                        columnConfigs[c].type === 'continuous' && columnConfigs[c].role === 'feature' && c !== col);
+                    // Standardise reference columns so no single unit/scale dominates the distance
+                    const refScale = {};
+                    numericCols.forEach(nCol => {
+                        const vals = workingRows.map(r => r[nCol]).filter(v => !this.isMissing(v)).map(Number).filter(n => !isNaN(n));
+                        const m = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+                        const sd = vals.length ? Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length) : 0;
+                        refScale[nCol] = sd > 0 ? sd : 1;
+                    });
                     workingRows.forEach((row, rowIdx) => {
                         if (this.isMissing(row[col])) {
                             // Find k nearest rows that have non-missing col
                             const k = 3;
                             const distances = [];
                             workingRows.forEach((otherRow, otherIdx) => {
-                                if (otherIdx === rowIdx || this.isMissing(otherRow[col])) return;
+                                if (otherIdx === rowIdx || this.isMissing(otherRow[col]) || isNaN(Number(otherRow[col]))) return;
                                 let distSq = 0;
                                 let matchedFeatures = 0;
                                 numericCols.forEach(nCol => {
                                     if (!this.isMissing(row[nCol]) && !this.isMissing(otherRow[nCol])) {
-                                        const d = Number(row[nCol]) - Number(otherRow[nCol]);
-                                        distSq += d * d;
-                                        matchedFeatures++;
+                                        const d = (Number(row[nCol]) - Number(otherRow[nCol])) / refScale[nCol];
+                                        if (!isNaN(d)) {
+                                            distSq += d * d;
+                                            matchedFeatures++;
+                                        }
                                     }
                                 });
                                 if (matchedFeatures > 0) {
-                                    distances.push({ val: Number(otherRow[col]), dist: Math.sqrt(distSq) });
+                                    // Mean squared distance over shared features, so rows sharing fewer features are not favoured
+                                    distances.push({ val: Number(otherRow[col]), dist: Math.sqrt(distSq / matchedFeatures) });
                                 }
                             });
 
@@ -417,7 +528,7 @@
                         column: col,
                         strategy,
                         imputedCount,
-                        filledValue: fillValue === 'knn_dynamic' ? 'KNN Distance Weighted' : fillValue
+                        filledValue: fillValue === 'knn_dynamic' ? 'KNN: mean of 3 nearest neighbours (standardised distance)' : fillValue
                     });
                 }
             });
@@ -485,6 +596,17 @@
             const targetConf = columnConfigs[targetCol];
             const isClassification = targetConf.type === 'nominal' || targetConf.type === 'ordinal';
 
+            // Rows without a usable outcome cannot be used for training (outcomes are never imputed)
+            const droppedMissingTarget = rows.filter(r => this.isMissing(r[targetCol]) ||
+                (!isClassification && isNaN(Number(r[targetCol])))).length;
+            if (droppedMissingTarget > 0) {
+                rows = rows.filter(r => !this.isMissing(r[targetCol]) &&
+                    (isClassification || !isNaN(Number(r[targetCol]))));
+            }
+            if (rows.length === 0) {
+                throw new Error(`No rows with a valid value for the target '${targetCol}'.`);
+            }
+
             // 1. Build Target Encoder
             let targetClasses = [];
             let targetClassToIdx = {};
@@ -514,8 +636,8 @@
                 targetStats = {
                     mean,
                     std: Math.sqrt(variance) || 1,
-                    min: Math.min(...nums),
-                    max: Math.max(...nums)
+                    min: arrayMin(nums),
+                    max: arrayMax(nums)
                 };
             }
 
@@ -531,11 +653,19 @@
                 const conf = columnConfigs[col];
                 if (conf.type === 'nominal') {
                     const catSet = new Set();
-                    rows.forEach(r => catSet.add(String(r[col])));
+                    const catFreq = {};
+                    rows.forEach(r => {
+                        const c = String(r[col]);
+                        catSet.add(c);
+                        catFreq[c] = (catFreq[c] || 0) + 1;
+                    });
                     const categories = Array.from(catSet).sort();
+                    let modeCat = categories[0];
+                    categories.forEach(c => { if (catFreq[c] > catFreq[modeCat]) modeCat = c; });
                     featureMetadata[col] = {
                         type: 'nominal',
                         categories,
+                        mode: modeCat,
                         startIndex: totalEncodedFeatures,
                         length: categories.length
                     };
@@ -544,25 +674,16 @@
                     });
                     totalEncodedFeatures += categories.length;
                 } else if (conf.type === 'ordinal') {
-                    // Ordinal mapping: map distinct values to integers 0, 1, 2...
-                    // Check if already numeric or string
-                    const valSet = new Set();
-                    rows.forEach(r => valSet.add(r[col]));
-                    let ranks = Array.from(valSet);
-                    const allNum = ranks.every(v => !isNaN(Number(v)));
-                    if (allNum) {
-                        ranks.sort((a, b) => Number(a) - Number(b));
-                    } else {
-                        ranks.sort();
-                    }
-                    const rankMap = {};
-                    ranks.forEach((val, rk) => {
-                        rankMap[String(val)] = rk;
-                    });
+                    // Ordinal mapping: map ordered distinct levels to integers 0, 1, 2...
+                    const { ranks, rankMap } = this.buildOrdinalRankMap(rows.map(r => r[col]));
+                    // Median rank of the training rows: fallback for missing / unseen levels at prediction time
+                    const rankVals = rows.map(r => rankMap[String(r[col])]).filter(v => v !== undefined).sort((a, b) => a - b);
+                    const defaultRank = rankVals.length ? rankVals[Math.floor((rankVals.length - 1) / 2)] : 0;
                     featureMetadata[col] = {
                         type: 'ordinal',
                         ranks,
                         rankMap,
+                        defaultRank,
                         startIndex: totalEncodedFeatures,
                         length: 1
                     };
@@ -579,8 +700,8 @@
                         type: 'continuous',
                         mean,
                         std,
-                        min: Math.min(...nums),
-                        max: Math.max(...nums),
+                        min: nums.length ? arrayMin(nums) : 0,
+                        max: nums.length ? arrayMax(nums) : 0,
                         startIndex: totalEncodedFeatures,
                         length: 1
                     };
@@ -605,11 +726,11 @@
                             xRow[meta.startIndex + catIdx] = 1;
                         }
                     } else if (meta.type === 'ordinal') {
-                        const rankVal = meta.rankMap[String(val)] !== undefined ? meta.rankMap[String(val)] : 0;
+                        const rankVal = meta.rankMap[String(val)] !== undefined ? meta.rankMap[String(val)] : meta.defaultRank;
                         xRow[meta.startIndex] = rankVal;
                     } else {
-                        // Continuous: standardized
-                        const num = Number(val);
+                        // Continuous: standardized (missing -> training mean, i.e. 0 after scaling)
+                        const num = this.isMissing(val) ? NaN : Number(val);
                         const scaled = (num - meta.mean) / meta.std;
                         xRow[meta.startIndex] = isNaN(scaled) ? 0 : Number(scaled.toFixed(5));
                     }
@@ -638,33 +759,57 @@
                 targetStats,
                 featureMetadata,
                 encodedFeatureNames,
-                totalDimensions: totalEncodedFeatures
+                totalDimensions: totalEncodedFeatures,
+                droppedMissingTarget,
+                // Binary metrics (AUC, sensitivity, TP/FN) treat class index 1 as the positive class
+                positiveClass: isClassification && targetClasses.length === 2 ? targetClasses[1] : null
             };
         },
 
         /**
-         * Transform a single arbitrary row (for single-case or batch inference)
+         * Transform a single arbitrary row (for single-case or batch inference).
+         * Missing or unrecognised values are replaced with training-derived values
+         * (continuous: training mean; ordinal: median training rank; nominal: most frequent
+         * training category). If an `issues` array is supplied, each substitution is recorded
+         * so the caller can warn the user.
          */
-        transformSingleRow(inputRow, prepMeta) {
+        transformSingleRow(inputRow, prepMeta, issues = null) {
             const { featureCols, featureMetadata, totalDimensions } = prepMeta;
             const xRow = new Array(totalDimensions).fill(0);
+            const note = (col, kind, rawVal) => {
+                if (issues) issues.push({ column: col, kind, value: rawVal });
+            };
 
             featureCols.forEach(col => {
                 const meta = featureMetadata[col];
                 const rawVal = inputRow[col];
+                const missing = this.isMissing(rawVal);
 
                 if (meta.type === 'nominal') {
-                    const catIdx = meta.categories.indexOf(String(rawVal));
+                    let catIdx = missing ? -1 : meta.categories.indexOf(String(rawVal).trim());
+                    if (catIdx === -1) {
+                        note(col, missing ? 'missing' : 'unseen', rawVal);
+                        catIdx = meta.categories.indexOf(meta.mode !== undefined ? meta.mode : meta.categories[0]);
+                    }
                     if (catIdx !== -1) {
                         xRow[meta.startIndex + catIdx] = 1;
                     }
                 } else if (meta.type === 'ordinal') {
-                    const rankVal = meta.rankMap[String(rawVal)] !== undefined ? meta.rankMap[String(rawVal)] : 0;
+                    let rankVal = missing ? undefined : meta.rankMap[String(rawVal).trim()];
+                    if (rankVal === undefined && !missing && !isNaN(Number(rawVal))) {
+                        rankVal = meta.rankMap[String(Number(rawVal))];
+                    }
+                    if (rankVal === undefined) {
+                        note(col, missing ? 'missing' : 'unseen', rawVal);
+                        rankVal = meta.defaultRank !== undefined ? meta.defaultRank : 0;
+                    }
                     xRow[meta.startIndex] = rankVal;
                 } else {
-                    const num = Number(rawVal);
+                    // Note: Number('') === 0, so blanks must be detected explicitly
+                    const num = missing ? NaN : Number(rawVal);
                     if (isNaN(num)) {
-                        xRow[meta.startIndex] = 0; // fallback to mean (which is 0 after standardisation)
+                        note(col, missing ? 'missing' : 'non-numeric', rawVal);
+                        xRow[meta.startIndex] = 0; // training mean (0 after standardisation)
                     } else {
                         const scaled = (num - meta.mean) / meta.std;
                         xRow[meta.startIndex] = isNaN(scaled) ? 0 : Number(scaled.toFixed(5));
@@ -756,6 +901,7 @@
             const validRows = [];
             let missingTargetCount = 0;
             let unknownClassCount = 0;
+            const featureIssues = [];
 
             testRows.forEach(row => {
                 const rawTarget = row[targetCol];
@@ -780,7 +926,7 @@
                     }
                 }
 
-                const xRow = this.transformSingleRow(row, prepMeta);
+                const xRow = this.transformSingleRow(row, prepMeta, featureIssues);
                 X_test.push(xRow);
                 y_test.push(targetVal);
                 validRows.push(row);
@@ -793,7 +939,9 @@
                 totalEvaluated: X_test.length,
                 totalProvided: testRows.length,
                 missingTargetCount,
-                unknownClassCount
+                unknownClassCount,
+                // Predictor cells that were missing/unrecognised and filled from training statistics
+                imputedFeatureCells: featureIssues.length
             };
         },
 
@@ -812,8 +960,9 @@
             const fillValues = {};
             const columnStats = {};
 
-            const allCols = [...featureCols];
-            if (targetCol && !allCols.includes(targetCol)) allCols.push(targetCol);
+            // Predictors only: the outcome (targetCol) is never imputed. Rows with a missing
+            // outcome must be excluded before calling this (see executePipelineStep1).
+            const allCols = featureCols.filter(c => c !== targetCol);
 
             allCols.forEach(col => {
                 const conf = columnConfigs[col] || { type: 'continuous' };
@@ -830,7 +979,8 @@
                 });
 
                 let fillVal = 0;
-                if (conf.type === 'nominal') {
+                const isTextOrdinal = conf.type === 'ordinal' && validVals.length > 0 && validNums.length < validVals.length;
+                if (conf.type === 'nominal' || isTextOrdinal) {
                     // Mode for nominal
                     const freq = {};
                     let maxCount = 0;
@@ -846,7 +996,7 @@
                     fillVal = topVal;
                     columnStats[col] = { mode: topVal, distinctCount: Object.keys(freq).length };
                 } else {
-                    // Continuous / Ordinal: Median or Mean
+                    // Continuous / numeric Ordinal: Median or Mean (ordinal always uses the median, rounded to a valid level)
                     if (validNums.length > 0) {
                         const sum = validNums.reduce((a, b) => a + b, 0);
                         const mean = sum / validNums.length;
@@ -854,7 +1004,12 @@
                         const mid = Math.floor(sorted.length / 2);
                         const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
                         
-                        fillVal = (strategy === 'mean') ? Number(mean.toFixed(4)) : Number(median.toFixed(4));
+                        if (conf.type === 'ordinal') {
+                            // Lower median keeps the fill value on an observed ordinal level
+                            fillVal = sorted[Math.floor((sorted.length - 1) / 2)];
+                        } else {
+                            fillVal = (strategy === 'mean') ? Number(mean.toFixed(4)) : Number(median.toFixed(4));
+                        }
                         const variance = validNums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / validNums.length;
                         columnStats[col] = {
                             mean: Number(mean.toFixed(4)),
@@ -1348,6 +1503,53 @@
         runUnivariateTesting(rows, survivingCols, targetCol, columnConfigs) {
             const isTargetContinuous = columnConfigs[targetCol]?.type === 'continuous';
             const results = [];
+            // Exclude rows with a missing outcome from every test
+            rows = rows.filter(r => !this.isMissing(r[targetCol]) && (!isTargetContinuous || !isNaN(Number(r[targetCol]))));
+
+            // One-way ANOVA on numeric values grouped by a categorical key
+            const oneWayAnova = (pairs) => {
+                const groups = {};
+                pairs.forEach(({ g, v }) => {
+                    if (!groups[g]) groups[g] = [];
+                    groups[g].push(v);
+                });
+                const groupKeys = Object.keys(groups).filter(k => groups[k].length > 0);
+                const K = groupKeys.length;
+                const N = pairs.length;
+                const grandMean = N > 0 ? pairs.reduce((a, p) => a + p.v, 0) / N : 0;
+                let ssBetween = 0;
+                let ssWithin = 0;
+                groupKeys.forEach(k => {
+                    const grp = groups[k];
+                    const grpMean = grp.reduce((a, b) => a + b, 0) / grp.length;
+                    ssBetween += grp.length * Math.pow(grpMean - grandMean, 2);
+                    grp.forEach(v => { ssWithin += Math.pow(v - grpMean, 2); });
+                });
+                const df1 = K - 1;
+                const df2 = N - K;
+                if (df1 < 1 || df2 < 1) {
+                    return { fStat: 0, pVal: 1, df1: Math.max(0, df1), df2: Math.max(0, df2) };
+                }
+                const msBetween = ssBetween / df1;
+                const msWithin = ssWithin / df2;
+                const fStat = msWithin > 0 ? (msBetween / msWithin) : (msBetween > 0 ? Infinity : 0);
+                const pVal = fStat === Infinity ? 0 : this.fTestPValue(fStat, df1, df2);
+                return { fStat, pVal, df1, df2 };
+            };
+
+            // Numeric value of a feature cell (ordinal text levels are converted to their ordered rank)
+            const numericValueFn = (col) => {
+                const conf = columnConfigs[col] || {};
+                const vals = rows.map(r => r[col]).filter(v => !this.isMissing(v));
+                const isTextOrdinal = conf.type === 'ordinal' && vals.some(v => isNaN(Number(v)));
+                if (isTextOrdinal) {
+                    const { rankMap } = this.buildOrdinalRankMap(vals);
+                    return (v) => (this.isMissing(v) || rankMap[String(v)] === undefined ? NaN : rankMap[String(v)]);
+                }
+                return (v) => (this.isMissing(v) ? NaN : Number(v));
+            };
+
+            const fmtStat = (v) => (v === Infinity ? Infinity : Number(v.toFixed(3)));
 
             survivingCols.forEach(col => {
                 const isFeatureContinuous = columnConfigs[col]?.type === 'continuous' || columnConfigs[col]?.type === 'ordinal';
@@ -1358,54 +1560,29 @@
                     const K = targetClasses.length;
 
                     if (isFeatureContinuous) {
-                        // One-Way ANOVA F-test
-                        const groups = {};
-                        targetClasses.forEach(c => groups[c] = []);
+                        // One-Way ANOVA F-test (equivalent to the two-sample t-test when K = 2: F = t²)
+                        const toNum = numericValueFn(col);
+                        const pairs = [];
                         rows.forEach(r => {
-                            const val = Number(r[col]);
-                            if (!isNaN(val)) groups[String(r[targetCol])].push(val);
+                            const v = toNum(r[col]);
+                            if (!isNaN(v)) pairs.push({ g: String(r[targetCol]), v });
                         });
-
-                        const N = rows.length;
-                        let grandSum = 0;
-                        let totalValid = 0;
-                        targetClasses.forEach(c => {
-                            groups[c].forEach(v => { grandSum += v; totalValid++; });
-                        });
-                        const grandMean = grandSum / (totalValid || 1);
-
-                        let ssBetween = 0;
-                        let ssWithin = 0;
-                        targetClasses.forEach(c => {
-                            const grp = groups[c];
-                            const n_c = grp.length;
-                            if (n_c > 0) {
-                                const grpMean = grp.reduce((a, b) => a + b, 0) / n_c;
-                                ssBetween += n_c * Math.pow(grpMean - grandMean, 2);
-                                grp.forEach(v => { ssWithin += Math.pow(v - grpMean, 2); });
-                            }
-                        });
-
-                        const df1 = K - 1;
-                        const df2 = Math.max(1, totalValid - K);
-                        const msBetween = ssBetween / (df1 || 1);
-                        const msWithin = ssWithin / (df2 || 1);
-                        const fStat = msWithin > 0 ? (msBetween / msWithin) : 0;
-                        const pVal = this.fTestPValue(fStat, df1, df2);
+                        const a = oneWayAnova(pairs);
 
                         results.push({
                             feature: col,
-                            scale: 'Continuous / Ordinal',
-                            testName: K === 2 ? "Two-Sample t-test / ANOVA (F)" : "One-Way ANOVA (F-test)",
+                            scale: columnConfigs[col]?.type === 'ordinal' ? 'Ordinal (ranks)' : 'Continuous',
+                            testName: K === 2 ? "Two-Sample t-test (as ANOVA F = t²)" : "One-Way ANOVA (F-test)",
                             statisticLabel: 'F-stat',
-                            statisticValue: Number(fStat.toFixed(3)),
-                            df: `${df1}, ${df2}`,
-                            pValue: Number(pVal.toFixed(5)),
-                            significant: pVal < 0.05
+                            statisticValue: fmtStat(a.fStat),
+                            df: `${a.df1}, ${a.df2}`,
+                            pValue: Number(a.pVal.toPrecision(4)),
+                            significant: a.pVal < 0.05
                         });
                     } else {
                         // Categorical vs Categorical: Chi-Square Test
-                        const categories = Array.from(new Set(rows.map(r => String(r[col])))).sort();
+                        const validRows = rows.filter(r => !this.isMissing(r[col]));
+                        const categories = Array.from(new Set(validRows.map(r => String(r[col])))).sort();
                         const R = categories.length;
 
                         // Contingency Table
@@ -1414,7 +1591,7 @@
                         const colTotals = new Array(K).fill(0);
                         let totalN = 0;
 
-                        rows.forEach(r => {
+                        validRows.forEach(r => {
                             const rIdx = categories.indexOf(String(r[col]));
                             const cIdx = targetClasses.indexOf(String(r[targetCol]));
                             if (rIdx !== -1 && cIdx !== -1) {
@@ -1426,92 +1603,88 @@
                         });
 
                         let chiSq = 0;
+                        let lowExpected = 0;
                         for (let i = 0; i < R; i++) {
                             for (let j = 0; j < K; j++) {
                                 const expected = (rowTotals[i] * colTotals[j]) / (totalN || 1);
+                                if (expected < 5) lowExpected++;
                                 if (expected > 0) {
                                     chiSq += Math.pow(obs[i][j] - expected, 2) / expected;
                                 }
                             }
                         }
 
-                        const df = Math.max(1, (R - 1) * (K - 1));
-                        const pVal = this.chiSquarePValue(chiSq, df);
+                        const df = (R - 1) * (K - 1);
+                        const pVal = df >= 1 ? this.chiSquarePValue(chiSq, df) : 1;
+                        const cells = R * K;
 
                         results.push({
                             feature: col,
                             scale: 'Nominal Categorical',
-                            testName: "Pearson Chi-Square (χ²)",
+                            testName: "Pearson Chi-Square (χ²)" + (lowExpected > 0 && cells > 0 && lowExpected / cells > 0.2
+                                ? ' ⚠️ >20% of expected counts < 5: approximation unreliable' : ''),
                             statisticLabel: 'χ² stat',
                             statisticValue: Number(chiSq.toFixed(3)),
                             df: `${df}`,
-                            pValue: Number(pVal.toFixed(5)),
+                            pValue: Number(pVal.toPrecision(4)),
                             significant: pVal < 0.05
                         });
                     }
                 } else {
                     // Continuous Target (Regression)
                     if (isFeatureContinuous) {
-                        const valsX = rows.map(r => Number(r[col]));
-                        const valsY = rows.map(r => Number(r[targetCol]));
+                        const toNum = numericValueFn(col);
+                        const valsX = [];
+                        const valsY = [];
+                        rows.forEach(r => {
+                            const x = toNum(r[col]);
+                            const y = Number(r[targetCol]);
+                            if (!isNaN(x) && !isNaN(y)) {
+                                valsX.push(x);
+                                valsY.push(y);
+                            }
+                        });
+                        const n = valsX.length;
                         const rCoeff = this.calculatePearson(valsX, valsY);
-                        const n = rows.length;
-                        const tStat = Math.abs(rCoeff) < 1 ? rCoeff * Math.sqrt((n - 2) / (1 - rCoeff * rCoeff)) : 999;
-                        const fEquiv = tStat * tStat;
-                        const pVal = this.fTestPValue(fEquiv, 1, n - 2);
+                        let pVal = 1;
+                        let tStat = 0;
+                        if (n > 2) {
+                            if (Math.abs(rCoeff) >= 1) {
+                                tStat = rCoeff > 0 ? Infinity : -Infinity;
+                                pVal = 0;
+                            } else {
+                                tStat = rCoeff * Math.sqrt((n - 2) / (1 - rCoeff * rCoeff));
+                                pVal = this.fTestPValue(tStat * tStat, 1, n - 2);
+                            }
+                        }
 
                         results.push({
                             feature: col,
-                            scale: 'Continuous',
+                            scale: columnConfigs[col]?.type === 'ordinal' ? 'Ordinal (ranks)' : 'Continuous',
                             testName: "Pearson Linear Correlation (t-test)",
-                            statisticLabel: 'r / t-stat',
+                            statisticLabel: `r (t = ${Number.isFinite(tStat) ? tStat.toFixed(2) : '∞'})`,
                             statisticValue: Number(rCoeff.toFixed(3)),
-                            df: `${n - 2}`,
-                            pValue: Number(pVal.toFixed(5)),
+                            df: `${Math.max(0, n - 2)}`,
+                            pValue: Number(pVal.toPrecision(4)),
                             significant: pVal < 0.05
                         });
                     } else {
-                        // Categorical feature vs Continuous Target: ANOVA
-                        const categories = Array.from(new Set(rows.map(r => String(r[col])))).sort();
-                        const K = categories.length;
-                        const groups = {};
-                        categories.forEach(c => groups[c] = []);
+                        // Categorical feature vs Continuous Target: One-Way ANOVA
+                        const pairs = [];
                         rows.forEach(r => {
-                            const y = Number(r[targetCol]);
-                            if (!isNaN(y)) groups[String(r[col])].push(y);
+                            if (!this.isMissing(r[col])) pairs.push({ g: String(r[col]), v: Number(r[targetCol]) });
                         });
-
-                        const N = rows.length;
-                        const grandMean = rows.reduce((a, b) => a + Number(b[targetCol]), 0) / N;
-                        let ssBetween = 0;
-                        let ssWithin = 0;
-
-                        categories.forEach(c => {
-                            const grp = groups[c];
-                            const n_c = grp.length;
-                            if (n_c > 0) {
-                                const grpMean = grp.reduce((a, b) => a + b, 0) / n_c;
-                                ssBetween += n_c * Math.pow(grpMean - grandMean, 2);
-                                grp.forEach(v => { ssWithin += Math.pow(v - grpMean, 2); });
-                            }
-                        });
-
-                        const df1 = K - 1;
-                        const df2 = Math.max(1, N - K);
-                        const msBetween = ssBetween / (df1 || 1);
-                        const msWithin = ssWithin / (df2 || 1);
-                        const fStat = msWithin > 0 ? (ssBetween / msWithin) : 0;
-                        const pVal = this.fTestPValue(fStat, df1, df2);
+                        const a = oneWayAnova(pairs);
 
                         results.push({
                             feature: col,
                             scale: 'Nominal Categorical',
-                            testName: "One-Way ANOVA (F-test)",
+                            testName: a.df1 === 1 ? "Two-Sample t-test (as ANOVA F = t²)" : "One-Way ANOVA (F-test)",
                             statisticLabel: 'F-stat',
-                            statisticValue: Number(fStat.toFixed(3)),
-                            df: `${df1}, ${df2}`,
-                            pValue: Number(pVal.toFixed(5)),
-                            significant: pVal < 0.05
+                            statisticValue: fmtStat(a.fStat),
+                            df: `${a.df1}, ${a.df2}`,
+                            pValue: Number(a.pVal.toPrecision(4)),
+                            significant: a.pVal < 0.05
                         });
                     }
                 }
@@ -1524,7 +1697,11 @@
 
         /**
          * Step 5: Imbalance Handling using SMOTENC
-         * Applied strictly to the Training set ONLY if minority class < 30%
+         * Applied strictly to the Training set ONLY when the cohort is imbalanced:
+         * the smallest class is < 30% of the training set for a binary outcome, or, for
+         * multi-class outcomes, smaller than 30/70 (≈ 43%) of the largest class (the same
+         * ratio as the binary 30% rule). Every under-represented class is oversampled up to
+         * the size of the largest class.
          */
         applySMOTENC(trainRows, featureCols, targetCol, columnConfigs, seed = 42) {
             const isClassification = columnConfigs[targetCol]?.type !== 'continuous';
@@ -1547,6 +1724,7 @@
                 return {
                     balancedRows: trainRows,
                     applied: false,
+                    classCounts,
                     reason: 'Single class present in training data.'
                 };
             }
@@ -1569,136 +1747,160 @@
             });
 
             const minorityPct = minCount / total;
-            const threshold = 0.30;
+            const isBinary = classes.length === 2;
+            const ratioThreshold = 0.30 / 0.70;
+            const imbalanced = isBinary ? minorityPct < 0.30 : (minCount / maxCount) < ratioThreshold;
+            const ruleText = isBinary
+                ? '30% minority-share threshold'
+                : `minority/majority ratio threshold of ${(ratioThreshold * 100).toFixed(0)}%`;
 
-            if (minorityPct >= threshold) {
+            if (!imbalanced) {
                 return {
                     balancedRows: trainRows,
                     applied: false,
                     minorityClass,
                     minorityPct: Number((minorityPct * 100).toFixed(1)),
                     classCounts,
-                    reason: `Minority class is ${(minorityPct * 100).toFixed(1)}% (>= 30% threshold). Cohort is sufficiently balanced.`
+                    reason: isBinary
+                        ? `Minority class is ${(minorityPct * 100).toFixed(1)}% (≥ 30% threshold). No synthetic resampling applied.`
+                        : `Smallest class (${minCount}) is ${((minCount / maxCount) * 100).toFixed(0)}% of the largest (${maxCount}), within the ${ruleText}. No synthetic resampling applied.`
                 };
             }
 
-            // Identify continuous and categorical columns
-            const contCols = featureCols.filter(c => columnConfigs[c]?.type === 'continuous' || columnConfigs[c]?.type === 'ordinal');
-            const catCols = featureCols.filter(c => columnConfigs[c]?.type === 'nominal');
+            // Continuous features and numeric ordinals are interpolated (ordinals then snapped to an observed level);
+            // nominal features and text ordinals are treated as categorical.
+            const isNumericCol = (c) => trainRows.every(r => !isNaN(Number(r[c])) && String(r[c]).trim() !== '');
+            const contCols = featureCols.filter(c => columnConfigs[c]?.type === 'continuous' ||
+                (columnConfigs[c]?.type === 'ordinal' && isNumericCol(c)));
+            const catCols = featureCols.filter(c => !contCols.includes(c));
+            const ordinalLevels = {};
+            contCols.forEach(c => {
+                if (columnConfigs[c]?.type === 'ordinal') {
+                    ordinalLevels[c] = Array.from(new Set(trainRows.map(r => Number(r[c])))).sort((a, b) => a - b);
+                }
+            });
 
-            // Extract minority samples
-            const minorityRows = trainRows.filter(r => String(r[targetCol]) === minorityClass);
-            const m = minorityRows.length;
+            const rng = this.createPRNG(seed);
+            const syntheticRows = [];
+            const generatedPerClass = {};
+            const skippedClasses = [];
 
-            if (m < 2) {
+            classes.forEach(cls => {
+                const needed = maxCount - classCounts[cls];
+                if (needed <= 0) return;
+                const minorityRows = trainRows.filter(r => String(r[targetCol]) === cls);
+                const m = minorityRows.length;
+                if (m < 2) {
+                    skippedClasses.push(cls);
+                    return;
+                }
+
+                // Standard deviations of continuous features within this class; distances use standardised units
+                const stdMap = {};
+                contCols.forEach(col => {
+                    const vals = minorityRows.map(r => Number(r[col])).filter(n => !isNaN(n));
+                    const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
+                    const v = vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (vals.length || 1);
+                    const s = Math.sqrt(v);
+                    stdMap[col] = s > 0 ? s : 1.0;
+                });
+                // SMOTENC penalises a categorical mismatch by the squared median std of the continuous features.
+                // Because continuous differences are already divided by their std, that median std is 1 on this scale.
+                const catPenalty = 1.0;
+
+                const k = Math.min(5, m - 1);
+                for (let sIdx = 0; sIdx < needed; sIdx++) {
+                    const i = Math.floor(rng() * m);
+                    const baseRow = minorityRows[i];
+
+                    const dists = [];
+                    for (let j = 0; j < m; j++) {
+                        if (j === i) continue;
+                        const otherRow = minorityRows[j];
+                        let distSq = 0;
+                        contCols.forEach(col => {
+                            const diff = (Number(baseRow[col]) - Number(otherRow[col])) / stdMap[col];
+                            if (!isNaN(diff)) distSq += diff * diff;
+                        });
+                        catCols.forEach(col => {
+                            if (String(baseRow[col]) !== String(otherRow[col])) distSq += catPenalty;
+                        });
+                        dists.push({ row: otherRow, dist: Math.sqrt(distSq) });
+                    }
+
+                    dists.sort((a, b) => a.dist - b.dist);
+                    const neighbors = dists.slice(0, k);
+                    const chosenNeighbor = neighbors[Math.floor(rng() * neighbors.length)].row;
+
+                    const newRow = {};
+                    const lambda = rng();
+                    contCols.forEach(col => {
+                        const v1 = Number(baseRow[col]);
+                        const v2 = Number(chosenNeighbor[col]);
+                        let v = v1 + lambda * (v2 - v1);
+                        if (ordinalLevels[col]) {
+                            // Snap to the nearest observed ordinal level
+                            v = ordinalLevels[col].reduce((best, lvl) => (Math.abs(lvl - v) < Math.abs(best - v) ? lvl : best), ordinalLevels[col][0]);
+                            newRow[col] = v;
+                        } else {
+                            newRow[col] = Number(v.toFixed(4));
+                        }
+                    });
+
+                    // Categorical features: mode among the k neighbours (ties -> the base sample's value)
+                    catCols.forEach(col => {
+                        const votes = {};
+                        neighbors.forEach(nbr => {
+                            const v = String(nbr.row[col]);
+                            votes[v] = (votes[v] || 0) + 1;
+                        });
+                        let bestCat = String(baseRow[col]);
+                        let topVotes = votes[bestCat] || 0;
+                        Object.keys(votes).forEach(v => {
+                            if (votes[v] > topVotes) {
+                                topVotes = votes[v];
+                                bestCat = v;
+                            }
+                        });
+                        newRow[col] = bestCat;
+                    });
+
+                    newRow[targetCol] = cls;
+                    syntheticRows.push(newRow);
+                }
+                generatedPerClass[cls] = needed;
+            });
+
+            const syntheticCount = syntheticRows.length;
+            if (syntheticCount === 0) {
                 return {
                     balancedRows: trainRows,
                     applied: false,
-                    reason: 'Insufficient minority samples for SMOTENC neighbor search.'
+                    minorityClass,
+                    minorityPct: Number((minorityPct * 100).toFixed(1)),
+                    classCounts,
+                    reason: `Imbalance detected (${ruleText}) but too few minority samples (< 2) for SMOTENC neighbour search. No resampling applied.`
                 };
             }
 
-            // Compute standard deviations for continuous features among minority class
-            const stdMap = {};
-            const stdList = [];
-            contCols.forEach(col => {
-                const vals = minorityRows.map(r => Number(r[col])).filter(n => !isNaN(n));
-                const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
-                const v = vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (vals.length || 1);
-                const s = Math.sqrt(v);
-                stdMap[col] = s > 0 ? s : 1.0;
-                stdList.push(s);
-            });
-
-            // Median of standard deviations for categorical difference weighting
-            stdList.sort((a, b) => a - b);
-            const mid = Math.floor(stdList.length / 2);
-            const medianStd = stdList.length > 0 ? (stdList.length % 2 === 0 ? (stdList[mid - 1] + stdList[mid]) / 2 : stdList[mid]) : 1.0;
-            const catPenalty = Math.pow(medianStd || 1.0, 2);
-
-            // Compute number of synthetic samples needed to bring minority to majority (balanced)
-            const numSynthNeeded = maxCount - minCount;
-            const rng = this.createPRNG(seed);
-            const k = Math.min(5, m - 1);
-            const syntheticRows = [];
-
-            for (let sIdx = 0; sIdx < numSynthNeeded; sIdx++) {
-                // Randomly pick a minority sample
-                const i = Math.floor(rng() * m);
-                const baseRow = minorityRows[i];
-
-                // Find k-nearest minority neighbors
-                const dists = [];
-                for (let j = 0; j < m; j++) {
-                    if (j === i) continue;
-                    const otherRow = minorityRows[j];
-                    let distSq = 0;
-
-                    contCols.forEach(col => {
-                        const diff = (Number(baseRow[col]) - Number(otherRow[col])) / (stdMap[col] || 1);
-                        distSq += diff * diff;
-                    });
-
-                    catCols.forEach(col => {
-                        if (String(baseRow[col]) !== String(otherRow[col])) {
-                            distSq += catPenalty;
-                        }
-                    });
-
-                    dists.push({ row: otherRow, dist: Math.sqrt(distSq) });
-                }
-
-                dists.sort((a, b) => a.dist - b.dist);
-                const neighbors = dists.slice(0, k);
-
-                // Pick one neighbor at random
-                const chosenNeighbor = neighbors[Math.floor(rng() * neighbors.length)].row;
-
-                // Synthesize new row
-                const newRow = {};
-                // Continuous features: interpolation
-                const lambda = rng();
-                contCols.forEach(col => {
-                    const v1 = Number(baseRow[col]);
-                    const v2 = Number(chosenNeighbor[col]);
-                    newRow[col] = Number((v1 + lambda * (v2 - v1)).toFixed(4));
-                });
-
-                // Categorical features: mode among the k neighbors
-                catCols.forEach(col => {
-                    const votes = {};
-                    neighbors.forEach(nbr => {
-                        const v = String(nbr.row[col]);
-                        votes[v] = (votes[v] || 0) + 1;
-                    });
-                    let bestCat = String(baseRow[col]);
-                    let topVotes = 0;
-                    Object.keys(votes).forEach(v => {
-                        if (votes[v] > topVotes) {
-                            topVotes = votes[v];
-                            bestCat = v;
-                        }
-                    });
-                    newRow[col] = bestCat;
-                });
-
-                newRow[targetCol] = minorityClass;
-                syntheticRows.push(newRow);
-            }
-
             const balancedRows = [...trainRows, ...syntheticRows];
-            const newCounts = { ...classCounts, [minorityClass]: minCount + numSynthNeeded };
+            const newCounts = { ...classCounts };
+            Object.keys(generatedPerClass).forEach(c => { newCounts[c] += generatedPerClass[c]; });
 
+            const classList = Object.keys(generatedPerClass).map(c => `${c} (+${generatedPerClass[c]})`).join(', ');
             return {
                 balancedRows,
                 applied: true,
                 minorityClass,
                 minorityPctBefore: Number((minorityPct * 100).toFixed(1)),
-                minorityPctAfter: Number(((minCount + numSynthNeeded) / balancedRows.length * 100).toFixed(1)),
+                minorityPctAfter: Number((newCounts[minorityClass] / balancedRows.length * 100).toFixed(1)),
                 originalCounts: classCounts,
                 balancedCounts: newCounts,
-                syntheticCountGenerated: numSynthNeeded,
-                reason: `Minority class was ${(minorityPct * 100).toFixed(1)}% (< 30%). SMOTENC synthesized ${numSynthNeeded} balanced training instances.`
+                classCounts,
+                syntheticCountGenerated: syntheticCount,
+                skippedClasses,
+                reason: `Smallest class was ${(minorityPct * 100).toFixed(1)}% of the training set (${ruleText} breached). SMOTENC synthesised ${syntheticCount} training instance(s): ${classList}.` +
+                    (skippedClasses.length ? ` Classes with < 2 samples could not be oversampled: ${skippedClasses.join(', ')}.` : '')
             };
         }
     };

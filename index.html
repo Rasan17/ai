@@ -315,7 +315,7 @@
                                         <input type="number" id="nn-card-seed-input" class="control-input card-seed-input" data-model="nn" placeholder="Custom seed" value="42">
                                         <button type="button" class="btn-roll-seed card-btn-roll-seed" data-model="nn" title="Generate random seed">🎲</button>
                                     </div>
-                                    <span class="seed-hint">Custom integer seed for exact reproducibility.</span>
+                                    <span class="seed-hint">Custom integer seed (reproducible on the same browser &amp; TF.js backend; GPU arithmetic can differ slightly across devices).</span>
                                 </div>
                             </div>
                         </div>
@@ -365,7 +365,7 @@
                                 <span class="pill pill-continuous">Generalized Linear</span>
                             </div>
                             <div class="model-card-desc">
-                                L2-regularized linear/softmax regression providing interpretable odds ratios and regression coefficients.
+                                L2-regularized linear (ridge) or logistic/softmax regression fitted by gradient descent on standardised features.
                             </div>
                             <!-- Model Seed Control -->
                             <div class="model-seed-box" data-model="glm" onclick="event.stopPropagation()">
@@ -946,7 +946,7 @@
                                 <label>Ensemble Combination Strategy</label>
                                 <select id="ensemble-voting-select" class="control-select">
                                     <option value="soft">Soft Voting (Calibrated Probability Blending - Recommended)</option>
-                                    <option value="weighted" selected>Performance-Weighted (Auto-weights by validation score)</option>
+                                    <option value="weighted" selected>Performance-Weighted (weights from an internal validation split of the training data)</option>
                                     <option value="hard">Hard Majority Voting (Discrete class vote count)</option>
                                 </select>
                             </div>
@@ -1162,7 +1162,7 @@
 
             <!-- ===================================================================
                  STANDALONE TAB: 7-STEP CLINICAL ML PIPELINE
-                 Strictly ordered leak-free pipeline with internal sub-stepper
+                 Strictly ordered pipeline with training-only preprocessing
                  Conceived & designed by Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)
                  =================================================================== -->
             <section class="step-content" data-step="pipeline" id="step-pipeline-content">
@@ -1173,10 +1173,10 @@
                                 <span>🔬</span>
                                 <span style="background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Strictly Ordered 7-Step Clinical ML Pipeline</span>
                             </h2>
-                            <p>End-to-end leak-free clinical ML protocol: 80/20 train/test split with strict training-only imputation, normality & correlation testing (Pearson vs Spearman), VIF multicollinearity elimination, univariate baselines, SMOTENC balancing, Random Forest feature scout, and algorithm-constrained final evaluation.</p>
+                            <p>Clinical ML protocol with training-only preprocessing: 80/20 train/test split (rows with a missing outcome excluded), imputation fitted on the training split only, skewness screen & correlation review (Pearson vs Spearman), VIF multicollinearity review, univariate baselines, SMOTENC balancing of the training split, Random Forest feature scout, and algorithm-constrained final evaluation.</p>
                         </div>
                         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-                            <span class="pill pill-target" style="font-size: 11px;">🛡️ Zero Data Leakage</span>
+                            <span class="pill pill-target" style="font-size: 11px;">🛡️ Train-Only Preprocessing</span>
                             <span class="pill pill-feature" style="font-size: 11px;">⚙️ Algorithm-Constrained</span>
                             <span class="pill pill-continuous" style="font-size: 11px;">🏥 Clinical Metrics</span>
                         </div>
@@ -1190,7 +1190,7 @@
                         </button>
                         <button class="pipeline-step-pill" data-substep="2" id="subpill-2">
                             <span class="sub-badge">2</span>
-                            <span>Normality & Correlation</span>
+                            <span>Skewness & Correlation</span>
                         </button>
                         <button class="pipeline-step-pill" data-substep="3" id="subpill-3">
                             <span class="sub-badge">3</span>
@@ -1238,7 +1238,7 @@
                             <div style="font-size: 18px;">ℹ️</div>
                             <div>
                                 <strong>Step 1: Train/Test Split & Strict Imputation</strong><br>
-                                Immediately splits the uploaded dataset into an 80% Training set and 20% Testing set. Missing values are identified and an imputer is fitted strictly on the Training set only. Both sets are then transformed using this fitted imputer to mathematically prevent data leakage.
+                                Rows with a missing outcome are excluded (outcomes are never imputed). The remaining rows are split into an 80% Training set and 20% Testing set (stratified by outcome class). An imputer for the predictors is fitted on the Training set only, and both sets are transformed with it, so no Testing-set information enters the imputation.
                             </div>
                         </div>
 
@@ -1291,14 +1291,14 @@
 
                             <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
                                 <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
-                                    🛡️ Strict Training Set Imputer Parameters (Zero Leakage Audit)
+                                    🛡️ Training-Set Imputer Parameters (Fitted on Train Only)
                                 </h4>
                                 <div id="pipeline-imputer-table-container" class="table-container"></div>
                             </div>
 
                             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                                 <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-emerald); font-weight: 600; font-size: 13px;">
-                                    <span>✅ Step 1 Complete: Train & Test sets prepared with zero data leakage.</span>
+                                    <span>✅ Step 1 Complete: Train & Test sets prepared; imputation fitted on the Training set only.</span>
                                 </div>
                                 <button id="pipeline-to-step2-btn" class="btn btn-emerald">
                                     Proceed to Step 2: Correlation Check &rarr;
@@ -1315,14 +1315,14 @@
                             <div style="font-size: 18px;">📊</div>
                             <div>
                                 <strong>Step 2: Continuous Variable Correlation Check (Pearson vs. Spearman)</strong><br>
-                                Continuous variables in the Training set are evaluated for normality via skewness within [-1, 1]. Pearson (r) is calculated when both variables are normal; Spearman (ρ) is calculated if one or both are skewed. High-collinearity pairs (|r| or |ρ| &ge; 0.8) are presented below to allow dropping one or keeping both.
+                                Continuous and ordinal variables in the Training set are screened for skewness using the rule of thumb |g₁| ≤ 1 (approximately symmetric). This is not a formal normality test. Pearson (r) is calculated when both variables pass the screen; Spearman (ρ) is calculated if one or both are skewed. High-collinearity pairs (|r| or |ρ| &ge; 0.8) are presented below to allow dropping one or keeping both.
                             </div>
                         </div>
 
-                        <!-- Continuous Normality Table -->
+                        <!-- Continuous Skewness Table -->
                         <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
                             <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
-                                📈 Training Continuous Variables Normality Assessment (Skewness Test)
+                                📈 Training Variables Skewness Screen (|g₁| ≤ 1 rule of thumb)
                             </h4>
                             <div id="pipeline-normality-table-container" class="table-container"></div>
                         </div>
@@ -1348,7 +1348,7 @@
 
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                             <button id="pipeline-run-corr-btn" class="btn btn-secondary">
-                                🔄 Refresh Normality & Correlation Check
+                                🔄 Refresh Skewness & Correlation Check
                             </button>
                             <button id="pipeline-to-step3-btn" class="btn btn-emerald">
                                 Proceed to Step 3: VIF Collinearity Check &rarr;
@@ -1463,7 +1463,7 @@
 
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                             <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-cyan); font-size: 12.5px; font-weight: 600;">
-                                🔒 Strict Leak Prevention: Testing set remains 100% unaltered to test true clinical prevalence.
+                                🔒 The Testing set is never resampled: it keeps the true outcome prevalence. (Its missing predictor values were filled in Step 1 using Training-set values only.)
                             </div>
                             <button id="pipeline-to-step6-btn" class="btn btn-emerald">
                                 Proceed to Step 6: RF Feature Scout &rarr;
@@ -1518,12 +1518,12 @@
                                 <strong>Step 7: Algorithm-Specific Training & Constraints</strong><br>
                                 Applies strict stability constraints to each algorithm:
                                 <ul style="margin: 6px 0 0 20px; font-size: 12.5px;">
-                                    <li><strong>k-NN & Gaussian Naive Bayes:</strong> Automatically drop bottom 30% features (combat curse of dimensionality).</li>
+                                    <li><strong>k-NN & Gaussian Naive Bayes:</strong> Use only the top 70% of features by Step 6 RF importance (fewer noisy inputs for distance- and likelihood-based models).</li>
                                     <li><strong>Deep Neural Network (DNN):</strong> Enforces L2 Regularization (weight decay) + Dropout layers against overfitting.</li>
                                     <li><strong>Logistic / Ridge Regression:</strong> Applies L2 penalization to stabilize any remaining minor collinearity.</li>
-                                    <li><strong>Super Learner (Ensemble):</strong> Fits StandardScaler strictly on Training set and applies to Testing set with one-hot encoding.</li>
+                                    <li><strong>Super Learner (Ensemble):</strong> Equal-weight soft vote of its base models; scaling and one-hot encoding fitted on the Training set only (as for every model).</li>
                                 </ul>
-                                All models are evaluated strictly on the unaltered Testing set emphasizing clinical metrics (F1-Score, Precision, Recall, AUC-ROC, Accuracy).
+                                All models are evaluated on the held-out Testing set (never resampled) and ranked by macro F1-Score (regression: R²). Because the top model is chosen on this same Testing set, its score is optimistically biased; confirm it on an independent cohort.
                             </div>
                         </div>
 
@@ -1652,8 +1652,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=6"></script>
-    <script src="models.js?v=6"></script>
-    <script src="app.js?v=6"></script>
+    <script src="data-engine.js?v=11"></script>
+    <script src="models.js?v=11"></script>
+    <script src="app.js?v=11"></script>
 </body>
 </html>

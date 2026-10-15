@@ -38,31 +38,10 @@
         allTestedResults: null,
         deployedModelId: 'nn',
         // 7-Step Clinical ML Pipeline State
-        pipeline: {
-            substep: 1,
-            seed: 42,
-            evalSeed: 42,
-            imputeStrategy: 'median',
-            trainRows: null,
-            testRows: null,
-            balancedTrainRows: null,
-            imputer: null,
-            featureCols: [],
-            targetCol: null,
-            columnConfigs: {},
-            droppedFeatures: new Set(),
-            normalityMap: {},
-            corrPairs: [],
-            vifResults: [],
-            univariateResults: [],
-            smotencResult: null,
-            rfScout: null,
-            rfImportance: [],
-            top70Features: [],
-            bottom30Features: [],
-            benchmarkResults: []
-        }
+        pipeline: null // initialised below via createEmptyPipelineState()
     };
+
+    AppState.pipeline = createEmptyPipelineState(42);
 
     // Model Metadata & Lookup
     const MODEL_INFO = {
@@ -74,6 +53,37 @@
         ensemble: { name: 'Ensemble Super Learner', short: 'Ensemble Meta-Learner', tag: 'Meta-Ensemble', pillClass: 'pill-target', icon: '⚡' }
     };
     const ALL_MODEL_IDS = ['nn', 'rf', 'glm', 'knn', 'nb', 'ensemble'];
+
+    // Escapes text for safe insertion into HTML (column names and cell values come from user CSVs)
+    function escapeHtml(value) {
+        return String(value === undefined || value === null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // Encodes a value as a JS literal for use inside an inline onclick="..." attribute
+    function jsArg(value) {
+        return escapeHtml(JSON.stringify(String(value)));
+    }
+
+    function cssEscape(value) {
+        return (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
+    }
+
+    // Ranks classification results by macro-F1 (robust to class imbalance), then ROC-AUC, then accuracy;
+    // regression results by R², then lower RMSE.
+    function compareEvalResults(a, b, isClassification) {
+        if (isClassification) {
+            return ((b.macroF1 || 0) - (a.macroF1 || 0)) ||
+                ((b.rocAuc || 0) - (a.rocAuc || 0)) ||
+                ((b.accuracy || 0) - (a.accuracy || 0));
+        }
+        return ((b.r2 !== undefined ? b.r2 : -Infinity) - (a.r2 !== undefined ? a.r2 : -Infinity)) ||
+            ((a.rmse || 0) - (b.rmse || 0));
+    }
 
     // =========================================================================
     // EXECUTION WATCHDOG: LIVE MONITOR, LOOP DETECTOR & STALL SENTINEL
@@ -116,6 +126,7 @@
             this.currentStep = 1;
             this.transitionHistory = [];
             this.loopCount = 0;
+            this.consecutiveRepeats = 0;
 
             if (this.container) this.container.style.display = 'block';
             if (this.badge) {
@@ -168,7 +179,7 @@
                 }
                 if (this.stuckHint) {
                     this.stuckHint.style.color = 'var(--accent-rose)';
-                    this.stuckHint.innerText = 'Calculations taking longer than expected. Click Force Stop if frozen.';
+                    this.stuckHint.innerText = 'Calculations taking longer than expected. Force Stop takes effect at the next checkpoint (between epochs or models); a single tree/regression fit cannot be interrupted mid-computation.';
                 }
             } else if (gap > 5) {
                 // Elevated compute
@@ -203,23 +214,23 @@
             this.lastTickTime = Date.now();
             this.currentStep = stepIndex;
 
-            // 1. Loop detection check
+            // 1. Repetition monitor (advisory only). Identical progress messages are normal during
+            // multi-epoch training, so repetition is reported but never used to abort a run. Every
+            // training loop in this app has a fixed iteration limit; genuine hangs are surfaced by the
+            // heartbeat stall indicator instead.
             const transitionKey = `${stepIndex}:${taskDescription}`;
+            const last = this.transitionHistory[this.transitionHistory.length - 1];
+            this.consecutiveRepeats = (last && last.key === transitionKey) ? (this.consecutiveRepeats || 0) + 1 : 0;
             this.transitionHistory.push({ key: transitionKey, time: this.lastTickTime });
+            if (this.transitionHistory.length > 200) this.transitionHistory.shift();
 
-            // Check if same transition occurred more than 3 times in recent history
-            const occurrences = this.transitionHistory.filter(t => t.key === transitionKey).length;
-            if (occurrences > 4) {
+            if (this.consecutiveRepeats >= 50) {
                 this.loopCount++;
                 if (this.loopStatus) this.loopStatus.className = 'monitor-loop-status loop-detected';
-                if (this.loopText) this.loopText.innerText = `🚨 Loop Guard: Repetitive Cycle (${this.loopCount}x)! Auto-mitigating...`;
-                console.warn(`[Watchdog Loop Guard] Repetitive cycling detected on key: ${transitionKey}`);
-                if (occurrences > 8) {
-                    this.forceAbort("Infinite recursion loop automatically prevented by Loop Guard.");
-                    throw new Error("Infinite loop broken by Watchdog Loop Guard.");
-                }
+                if (this.loopText) this.loopText.innerText = `⚠️ Progress message unchanged for ${this.consecutiveRepeats} updates (still running)`;
             } else {
-                if (this.loopText) this.loopText.innerText = `Loop Guard: Normal (${this.loopCount} cycles)`;
+                if (this.loopStatus) this.loopStatus.className = 'monitor-loop-status';
+                if (this.loopText) this.loopText.innerText = 'Loop Guard: Normal (bounded iterations)';
             }
 
             // 2. Update UI
@@ -263,12 +274,12 @@
             if (this.taskName) this.taskName.innerText = reason;
             if (this.stuckHint) {
                 this.stuckHint.style.color = 'var(--accent-rose)';
-                this.stuckHint.innerText = 'State safely restored & computations cancelled.';
+                this.stuckHint.innerText = 'Cancellation requested: remaining work is skipped at the next checkpoint.';
             }
 
             if (typeof this.onCancelCallback === 'function') {
                 try {
-                    this.onCancelCallback();
+                    this.onCancelCallback(reason);
                 } catch (e) {
                     console.error("Cancel callback error:", e);
                 }
@@ -864,6 +875,9 @@
         DOM.sampleBatchBtn.addEventListener('click', loadSampleBatchDataset);
         DOM.runBatchPredictBtn.addEventListener('click', executeBatchPrediction);
         DOM.downloadBatchCsvBtn.addEventListener('click', downloadBatchCSV);
+
+        // Initial model-scope sync (setModelScope is local to this function)
+        setModelScope('single');
     }
 
     function syncTrainTestSplit(trainVal) {
@@ -947,11 +961,12 @@
         if (AppState.imputedData && AppState.columnConfigs) {
             const targetCol = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
             const targetCfg = targetCol ? AppState.columnConfigs[targetCol] : null;
-            const isClf = targetCfg ? (targetCfg.type === 'binary' || targetCfg.type === 'multiclass') : true;
+            // Step 2 types are 'continuous' | 'ordinal' | 'nominal'; only a continuous target is regression
+            const isClf = targetCfg ? targetCfg.type !== 'continuous' : true;
             DOM.optBTrainSummary.innerHTML = `
-                <div><strong>Source:</strong> ${AppState.fileName || 'Active Dataset'}</div>
+                <div><strong>Source:</strong> ${escapeHtml(AppState.fileName || 'Active Dataset')}</div>
                 <div><strong>Training Cases:</strong> ${AppState.imputedData.imputedRows.length} patients (100% used for model parameter fitting)</div>
-                <div><strong>Target:</strong> <span style="color: var(--accent-cyan); font-weight: 700;">${targetCol || 'Unspecified'}</span> (${isClf ? 'Classification' : 'Continuous Regression'})</div>
+                <div><strong>Target:</strong> <span style="color: var(--accent-cyan); font-weight: 700;">${escapeHtml(targetCol || 'Unspecified')}</span> (${isClf ? 'Classification' : 'Continuous Regression'})</div>
             `;
         } else {
             DOM.optBTrainSummary.innerHTML = `
@@ -968,8 +983,8 @@
                 if (targetCol) {
                     const hasTarget = AppState.separateTestRawRows[0] && (targetCol in AppState.separateTestRawRows[0]);
                     targetStatus = hasTarget 
-                        ? `<span style="color: var(--accent-emerald); font-weight: 600;">✓ Target '${targetCol}' found</span>`
-                        : `<span style="color: var(--accent-amber); font-weight: 600;">⚠️ Target '${targetCol}' not in header!</span>`;
+                        ? `<span style="color: var(--accent-emerald); font-weight: 600;">✓ Target '${escapeHtml(targetCol)}' found</span>`
+                        : `<span style="color: var(--accent-amber); font-weight: 600;">⚠️ Target '${escapeHtml(targetCol)}' not in header!</span>`;
                 }
             }
 
@@ -984,11 +999,11 @@
             if (DOM.optBTestSummary) {
                 DOM.optBTestSummary.innerHTML = `
                     <div style="background: var(--bg-surface); padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; flex-direction: column; gap: 4px;">
-                        <div><strong>Testing File:</strong> ${AppState.separateTestFileName || 'Testing Cohort CSV'}</div>
+                        <div><strong>Testing File:</strong> ${escapeHtml(AppState.separateTestFileName || 'Testing Cohort CSV')}</div>
                         <div><strong>Total Test Cases:</strong> ${testValidCount} external patients</div>
                         <div><strong>Target Verification:</strong> ${targetStatus}</div>
                         <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">
-                            🔒 Test data will be transformed strictly using training metadata with zero data leakage.
+                            🔒 Test data are encoded and scaled using training-cohort parameters only. Rows with a missing outcome are excluded; missing predictor values are filled from training statistics.
                         </div>
                     </div>
                 `;
@@ -1114,9 +1129,77 @@
         }
     }
 
+    function createEmptyPipelineState(seed = 42) {
+        return {
+            substep: 1,
+            seed,
+            evalSeed: seed,
+            imputeStrategy: 'median',
+            trainRows: null,
+            testRows: null,
+            balancedTrainRows: null,
+            imputer: null,
+            featureCols: [],
+            targetCol: null,
+            columnConfigs: {},
+            droppedFeatures: new Set(),
+            normalityMap: {},
+            corrPairs: [],
+            vifResults: [],
+            univariateResults: [],
+            smotencResult: null,
+            rfScout: null,
+            rfImportance: [],
+            top70Features: [],
+            bottom30Features: [],
+            benchmarkResults: [],
+            excludedMissingTarget: 0
+        };
+    }
+
+    // Clears every result derived from a previous dataset so nothing stale can be trained or predicted on
+    function resetDerivedState() {
+        AppState.imputedData = null;
+        AppState.prepMeta = null;
+        AppState.trainTestData = null;
+        AppState.trainedModel = null;
+        AppState.evalResults = null;
+        AppState.allTestedResults = null;
+        AppState.separateTestData = null;
+        AppState.batchPredictions = null;
+        AppState.deployedSource = null;
+        AppState.deployedPipelineModel = null;
+        AppState.pipeline = createEmptyPipelineState(AppState.pipeline ? AppState.pipeline.seed : 42);
+
+        if (DOM.imputeAuditBox) DOM.imputeAuditBox.innerHTML = '';
+        if (DOM.toStep4Btn) DOM.toStep4Btn.disabled = true;
+        if (DOM.toStep5Btn) DOM.toStep5Btn.disabled = true;
+        if (DOM.toStep6Btn) DOM.toStep6Btn.disabled = true;
+        if (DOM.resultsDashboard) DOM.resultsDashboard.style.display = 'none';
+        if (DOM.trainStatus) DOM.trainStatus.innerHTML = '';
+        if (DOM.singleResultBanner) DOM.singleResultBanner.style.display = 'none';
+        if (DOM.predictFormGrid) DOM.predictFormGrid.innerHTML = '';
+        if (DOM.batchResultsCard) DOM.batchResultsCard.style.display = 'none';
+        if (DOM.downloadBatchCsvBtn) DOM.downloadBatchCsvBtn.disabled = true;
+        if (DOM.pipelineStep1Results) DOM.pipelineStep1Results.style.display = 'none';
+        if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
+        if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.style.display = 'none';
+        if (DOM.pipelineRfImportanceContainer) DOM.pipelineRfImportanceContainer.innerHTML = '';
+        if (DOM.pipelineSmotencContainer) DOM.pipelineSmotencContainer.innerHTML = '';
+        if (DOM.pipelineToStep7Btn) DOM.pipelineToStep7Btn.disabled = true;
+        if (DOM.pipelineSubPills) DOM.pipelineSubPills.forEach(p => p.classList.remove('completed'));
+        if (DOM.singlePredictProvenanceBar) DOM.singlePredictProvenanceBar.style.display = 'none';
+        if (DOM.batchPredictProvenanceBar) DOM.batchPredictProvenanceBar.style.display = 'none';
+        if (DOM.pipelineActiveDeploymentStatus) {
+            DOM.pipelineActiveDeploymentStatus.innerHTML = 'Select any model from the leaderboard to deploy for real-time patient predictions.';
+        }
+        if (DOM.stepTabs) DOM.stepTabs.forEach(t => t.classList.remove('completed'));
+    }
+
     function processCSVContent(csvText, name) {
         try {
             const parsed = DataEngine.parseCSV(csvText);
+            resetDerivedState();
             AppState.parsedData = parsed;
             AppState.fileName = name;
 
@@ -1147,6 +1230,7 @@
             }
             if (AppState.currentStep === 'pipeline') {
                 initPipelineUI();
+                goToPipelineSubstep(1);
             }
         } catch (e) {
             alert(`Failed to parse CSV: ${e.message}`);
@@ -1169,7 +1253,7 @@
         DOM.dataStatsGrid.innerHTML = `
             <div class="stat-card">
                 <span class="stat-label">File Name</span>
-                <span class="stat-value" style="font-size: 16px; overflow:hidden; text-overflow:ellipsis;">${AppState.fileName}</span>
+                <span class="stat-value" style="font-size: 16px; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(AppState.fileName)}</span>
                 <span class="stat-desc">Active dataset</span>
             </div>
             <div class="stat-card">
@@ -1195,7 +1279,7 @@
             <table class="data-table">
                 <thead>
                     <tr>
-                        ${headers.map(h => `<th>${h}</th>`).join('')}
+                        ${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}
                     </tr>
                 </thead>
                 <tbody>
@@ -1204,7 +1288,7 @@
                             ${headers.map(h => {
                                 const val = r[h];
                                 const isMiss = DataEngine.isMissing(val);
-                                return `<td style="${isMiss ? 'color: var(--accent-rose); font-style: italic;' : ''}">${isMiss ? '∅ (Empty)' : val}</td>`;
+                                return `<td style="${isMiss ? 'color: var(--accent-rose); font-style: italic;' : ''}">${isMiss ? '∅ (Empty)' : escapeHtml(val)}</td>`;
                             }).join('')}
                         </tr>
                     `).join('')}
@@ -1227,19 +1311,19 @@
             const cfg = AppState.columnConfigs[col];
 
             gridHtml += `
-                <div class="var-card ${cfg.role === 'target' ? 'is-target' : (cfg.role === 'meta' ? 'is-meta' : '')}" id="card-col-${col}">
+                <div class="var-card ${cfg.role === 'target' ? 'is-target' : (cfg.role === 'meta' ? 'is-meta' : '')}" id="card-col-${escapeHtml(col)}">
                     <div class="var-header">
-                        <span class="var-name" title="${col}">${col}</span>
+                        <span class="var-name" title="${escapeHtml(col)}">${escapeHtml(col)}</span>
                         ${a.missingCount > 0 ? `<span class="pill pill-missing">${a.missingCount} missing (${a.missingPercent}%)</span>` : `<span class="pill" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">Complete</span>`}
                     </div>
 
                     <div style="font-size: 11.5px; color: var(--text-muted);">
-                        ${a.isNumeric ? `Numeric (range: ${a.stats.min} to ${a.stats.max})` : `Distinct values: ${a.distinctCount} (e.g. ${a.distinctValues.slice(0, 3).join(', ')})`}
+                        ${a.isNumeric ? `Numeric (range: ${a.stats.min} to ${a.stats.max})` : `Distinct values: ${a.distinctCount} (e.g. ${escapeHtml(a.distinctValues.slice(0, 3).join(', '))})`}
                     </div>
 
                     <div class="var-row-control">
                         <label>Variable Role</label>
-                        <select class="control-select var-role-select" data-col="${col}">
+                        <select class="control-select var-role-select" data-col="${escapeHtml(col)}">
                             <option value="feature" ${cfg.role === 'feature' ? 'selected' : ''}>Predictor Feature</option>
                             <option value="target" ${cfg.role === 'target' ? 'selected' : ''}>Target (Outcome to Predict)</option>
                             <option value="meta" ${cfg.role === 'meta' ? 'selected' : ''}>Meta / ID (Ignore from Model)</option>
@@ -1248,7 +1332,7 @@
 
                     <div class="var-row-control">
                         <label>Variable Type</label>
-                        <select class="control-select var-type-select" data-col="${col}">
+                        <select class="control-select var-type-select" data-col="${escapeHtml(col)}">
                             <option value="continuous" ${cfg.type === 'continuous' ? 'selected' : ''}>Continuous (Numerical / Scale)</option>
                             <option value="ordinal" ${cfg.type === 'ordinal' ? 'selected' : ''}>Ordinal (Ranked Categorical)</option>
                             <option value="nominal" ${cfg.type === 'nominal' ? 'selected' : ''}>Nominal (Unordered Categorical)</option>
@@ -1323,6 +1407,22 @@
 
             missingColCount++;
 
+            if (cfg.role === 'target') {
+                // Outcomes are never imputed: rows with a missing outcome are always excluded
+                rowsHtml += `
+                    <tr>
+                        <td style="font-weight: 600;">${escapeHtml(col)}</td>
+                        <td><span class="pill pill-target">target</span></td>
+                        <td><span class="pill pill-${cfg.type}">${cfg.type}</span></td>
+                        <td><span class="pill pill-missing">${a.missingCount} / ${a.total} (${a.missingPercent}%)</span></td>
+                        <td colspan="2" style="font-size: 12px; color: var(--text-secondary);">
+                            Rows with a missing outcome are <strong>excluded</strong> (an outcome is never imputed).
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
             let strategyOptionsHtml = '';
             if (cfg.type === 'continuous') {
                 strategyOptionsHtml = `
@@ -1335,14 +1435,14 @@
                 `;
             } else if (cfg.type === 'ordinal') {
                 strategyOptionsHtml = `
-                    <option value="mode" ${cfg.imputationStrategy === 'mode' ? 'selected' : ''}>Mode / Most Frequent (${a.stats.mode})</option>
-                    <option value="median" ${cfg.imputationStrategy === 'median' ? 'selected' : ''}>Median Rank (${a.stats.median})</option>
+                    <option value="mode" ${cfg.imputationStrategy === 'mode' ? 'selected' : ''}>Mode / Most Frequent (${escapeHtml(a.stats.mode)})</option>
+                    <option value="median" ${cfg.imputationStrategy === 'median' ? 'selected' : ''}>${a.isNumeric ? `Median Rank (${a.stats.median})` : 'Median Rank (text levels: falls back to mode)'}</option>
                     <option value="constant" ${cfg.imputationStrategy === 'constant' ? 'selected' : ''}>Constant Rank...</option>
                     <option value="drop" ${cfg.imputationStrategy === 'drop' ? 'selected' : ''}>Drop Rows with Missing</option>
                 `;
             } else {
                 strategyOptionsHtml = `
-                    <option value="mode" ${cfg.imputationStrategy === 'mode' ? 'selected' : ''}>Mode / Most Frequent ("${a.stats.mode}")</option>
+                    <option value="mode" ${cfg.imputationStrategy === 'mode' ? 'selected' : ''}>Mode / Most Frequent ("${escapeHtml(a.stats.mode)}")</option>
                     <option value="constant" ${cfg.imputationStrategy === 'constant' ? 'selected' : ''}>New Category ("Missing" / "Unknown")</option>
                     <option value="drop" ${cfg.imputationStrategy === 'drop' ? 'selected' : ''}>Drop Rows with Missing</option>
                 `;
@@ -1350,17 +1450,17 @@
 
             rowsHtml += `
                 <tr>
-                    <td style="font-weight: 600;">${col}</td>
+                    <td style="font-weight: 600;">${escapeHtml(col)}</td>
                     <td><span class="pill pill-${cfg.role}">${cfg.role}</span></td>
                     <td><span class="pill pill-${cfg.type}">${cfg.type}</span></td>
                     <td><span class="pill pill-missing">${a.missingCount} / ${a.total} (${a.missingPercent}%)</span></td>
                     <td>
-                        <select class="control-select impute-strat-select" data-col="${col}" style="min-width: 200px;">
+                        <select class="control-select impute-strat-select" data-col="${escapeHtml(col)}" style="min-width: 200px;">
                             ${strategyOptionsHtml}
                         </select>
                     </td>
                     <td>
-                        <input type="text" class="control-input impute-custom-val" data-col="${col}" placeholder="${cfg.type === 'continuous' ? '0' : 'Missing'}" value="${cfg.customImputeVal || ''}" style="${cfg.imputationStrategy === 'constant' ? 'display:inline-block; width: 110px;' : 'display:none; width: 110px;'}">
+                        <input type="text" class="control-input impute-custom-val" data-col="${escapeHtml(col)}" placeholder="${cfg.type === 'continuous' ? '0' : 'Missing'}" value="${escapeHtml(cfg.customImputeVal || '')}" style="${cfg.imputationStrategy === 'constant' ? 'display:inline-block; width: 110px;' : 'display:none; width: 110px;'}">
                     </td>
                 </tr>
             `;
@@ -1384,7 +1484,7 @@
                 const col = e.target.dataset.col;
                 const strat = e.target.value;
                 AppState.columnConfigs[col].imputationStrategy = strat;
-                const customInput = document.querySelector(`.impute-custom-val[data-col="${col}"]`);
+                const customInput = document.querySelector(`.impute-custom-val[data-col="${cssEscape(col)}"]`);
                 if (customInput) {
                     customInput.style.display = strat === 'constant' ? 'inline-block' : 'none';
                 }
@@ -1412,7 +1512,9 @@
                     </h4>
                     <ul style="margin: 10px 0 0 20px; font-size: 13px; color: var(--text-secondary);">
                         ${res.audit.length === 0 ? '<li>No missing cells required imputation.</li>' : res.audit.map(a => `
-                            <li><strong>${a.column || 'Rows'}</strong>: ${a.strategy || a.type} &rarr; ${a.imputedCount || ''} values imputed (${a.filledValue || a.description || ''})</li>
+                            <li>${a.type === 'drop_rows'
+                                ? `<strong>Rows</strong>: ${escapeHtml(a.description)}`
+                                : `<strong>${escapeHtml(a.column)}</strong>: ${escapeHtml(a.strategy)} &rarr; ${a.imputedCount} value(s) imputed (fill: ${escapeHtml(a.filledValue)})`}</li>
                         `).join('')}
                     </ul>
                 </div>
@@ -1612,7 +1714,8 @@
             const h3El = document.getElementById('nn-h3-input');
             const h3 = h3El ? (parseInt(h3El.value, 10) || 0) : 0;
             hp.hiddenLayers = h3 > 0 ? [h1, h2, h3] : [h1, h2];
-            hp.dropoutRate = parseFloat(document.getElementById('nn-dropout-input')?.value) || 0.1;
+            const dropoutVal = parseFloat(document.getElementById('nn-dropout-input')?.value);
+            hp.dropoutRate = isNaN(dropoutVal) ? 0.1 : Math.min(0.9, Math.max(0, dropoutVal)); // 0 is a valid choice
             hp.activation = document.getElementById('nn-act-select')?.value || 'relu';
             const optEl = document.getElementById('nn-optimizer-select');
             hp.optimizer = optEl ? optEl.value : 'adam';
@@ -1715,10 +1818,10 @@
             if (modelsToTest.length === 0) modelsToTest = ['nn'];
 
             if (watchdog) {
-                watchdog.start(`Initializing tournament for ${modelsToTest.length} model(s)...`, modelsToTest.length, () => {
-                    console.warn("Step 4 Model Training cancelled by user watchdog.");
+                watchdog.start(`Initializing tournament for ${modelsToTest.length} model(s)...`, modelsToTest.length, (reason) => {
+                    console.warn("Step 4 Model Training stopped:", reason);
                     DOM.trainModelBtn.disabled = false;
-                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">⚠️ Model training interrupted by user.</span>`;
+                    DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">⚠️ Model training stopped: ${escapeHtml(reason || 'cancelled')}</span>`;
                 });
             }
 
@@ -1811,6 +1914,10 @@
                     evalRes.totalCount = prep.X.length;
                     evalRes.splitSeed = splitSeed;
                     evalRes.seed = hyperparams.seed;
+                    if (valModel.usedFallback) {
+                        evalRes.fallbackNote = `TensorFlow.js training failed (${valModel.fallbackReason}); a linear (logistic/ridge) fallback model was evaluated instead of a neural network.`;
+                    }
+                    if (valModel.weightingNote) evalRes.weightingNote = valModel.weightingNote;
 
                     let activeModelInstance = valModel;
 
@@ -1839,9 +1946,9 @@
                         } else if (mId === 'ensemble') {
                             await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
                                 if (watchdog && watchdog.aborted) return;
-                                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Base ${curr}/${total}...</span>`;
+                                DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Base ${curr}/${total} (${info.stage || ''})...</span>`;
                                 if (watchdog) {
-                                    watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Base ${curr}/${total}`);
+                                    watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Base ${curr}/${total} (${info.stage || ''})`);
                                 }
                             });
                         } else {
@@ -1942,7 +2049,12 @@
                     evalRes.testProvided = testPrep.totalProvided;
                     evalRes.missingTargetCount = testPrep.missingTargetCount;
                     evalRes.unknownClassCount = testPrep.unknownClassCount;
+                    evalRes.imputedFeatureCells = testPrep.imputedFeatureCells;
                     evalRes.seed = hyperparams.seed;
+                    if (model.usedFallback) {
+                        evalRes.fallbackNote = `TensorFlow.js training failed (${model.fallbackReason}); a linear (logistic/ridge) fallback model was evaluated instead of a neural network.`;
+                    }
+                    if (model.weightingNote) evalRes.weightingNote = model.weightingNote;
 
                     testedResults.push({
                         modelId: mId,
@@ -1955,12 +2067,8 @@
                 }
             }
 
-            // Sort tested models by out-of-sample diagnostic performance (highest accuracy / R² first)
-            if (prep.isClassification) {
-                testedResults.sort((a, b) => (b.evalRes.accuracy - a.evalRes.accuracy) || ((b.evalRes.rocAuc || 0) - (a.evalRes.rocAuc || 0)));
-            } else {
-                testedResults.sort((a, b) => (b.evalRes.r2 - a.evalRes.r2) || (a.evalRes.rmse - b.evalRes.rmse));
-            }
+            // Sort tested models by out-of-sample performance (macro-F1 then AUC for classification; R² for regression)
+            testedResults.sort((a, b) => compareEvalResults(a.evalRes, b.evalRes, prep.isClassification));
 
             AppState.allTestedResults = testedResults;
             // Designate top-performing model as champion
@@ -1978,7 +2086,7 @@
             if (testedResults.length === 1) {
                 const singleRes = champion.evalRes;
                 const accText = singleRes.isClassification
-                    ? `Test Accuracy: ${(singleRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${singleRes.rocAuc !== null ? singleRes.rocAuc.toFixed(3) : 'N/A'})`
+                    ? `Test Accuracy: ${(singleRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${singleRes.rocAuc !== null && singleRes.rocAuc !== undefined ? singleRes.rocAuc.toFixed(3) : 'N/A'})`
                     : `Test R²: ${singleRes.r2.toFixed(3)} (RMSE: ${singleRes.rmse.toFixed(3)})`;
                 DOM.trainStatus.innerHTML = `
                     <div style="display: flex; flex-direction: column; gap: 3px;">
@@ -1992,15 +2100,18 @@
                 `;
             } else {
                 const topAccText = champion.evalRes.isClassification
-                    ? `Top Accuracy: ${(champion.evalRes.accuracy * 100).toFixed(1)}%`
-                    : `Top R²: ${champion.evalRes.r2.toFixed(3)}`;
+                    ? `Macro F1: ${(champion.evalRes.macroF1 * 100).toFixed(1)}%, Accuracy: ${(champion.evalRes.accuracy * 100).toFixed(1)}%`
+                    : `R²: ${champion.evalRes.r2.toFixed(3)}`;
                 DOM.trainStatus.innerHTML = `
                     <div style="display: flex; flex-direction: column; gap: 3px;">
                         <span style="color: var(--accent-emerald); font-weight: 700;">
                             🏆 Tournament Complete: Tested &amp; Evaluated ${testedResults.length} Models!
                         </span>
                         <span style="font-size: 11.5px; color: var(--text-secondary);">
-                            Leader: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds preserved for exact reproduction below.
+                            Leader: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds are listed below.
+                        </span>
+                        <span style="font-size: 11px; color: var(--accent-amber);">
+                            ⚠️ The leader was chosen using the same test cases it is scored on, so its test score is optimistically biased. Confirm the chosen model on an independent cohort (Option B).
                         </span>
                     </div>
                 `;
@@ -2017,7 +2128,7 @@
             }
             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-rose);">Training halted: ${e.message}</span>`;
             DOM.trainModelBtn.disabled = false;
-            if (e.message !== "Training aborted by user.") {
+            if (e.message !== "Training aborted by user." && e.message !== "Operation halted by user.") {
                 alert(`Training error: ${e.message}`);
             }
         }
@@ -2202,6 +2313,35 @@
             }
         }
 
+        // Methodological notes that affect how the metrics should be read
+        if (DOM.retrainStatusBanner) {
+            const notes = [];
+            const resultsForNotes = allResults.length ? allResults.map(r => r.evalRes) : [evalRes];
+            if (prep && prep.isClassification && prep.positiveClass !== null && prep.positiveClass !== undefined) {
+                notes.push(`Binary metrics (ROC-AUC, sensitivity, TP/FN) treat <strong>${escapeHtml(prep.positiveClass)}</strong> as the positive class (second label in sorted order).`);
+            }
+            if (isOptionB && evalRes.imputedFeatureCells > 0) {
+                notes.push(`${evalRes.imputedFeatureCells} missing/unrecognised predictor cell(s) in Dataset (ii) were filled from training-cohort statistics.`);
+            }
+            if (isOptionB && (evalRes.missingTargetCount > 0 || evalRes.unknownClassCount > 0)) {
+                notes.push(`Dataset (ii) rows excluded: ${evalRes.missingTargetCount || 0} with a missing outcome, ${evalRes.unknownClassCount || 0} with an outcome class not seen in training.`);
+            }
+            if (!isOptionB) {
+                notes.push('Option A: imputation and feature scaling were fitted on the whole cohort before splitting, so the held-out estimate is mildly optimistic. Use the 7-Step Pipeline or Option B for a strictly separated estimate.');
+            }
+            resultsForNotes.forEach(r => {
+                if (r && r.fallbackNote) notes.push(`⚠️ ${escapeHtml(r.fallbackNote)}`);
+                if (r && r.weightingNote) notes.push(`Ensemble: ${escapeHtml(r.weightingNote)}`);
+            });
+            if (notes.length > 0) {
+                DOM.retrainStatusBanner.innerHTML += `
+                    <div style="font-size: 11.5px; color: var(--text-secondary); margin: -6px 0 14px 0; padding: 8px 12px; border-left: 3px solid var(--accent-amber); background: var(--bg-surface-subtle); border-radius: var(--radius-sm);">
+                        ${Array.from(new Set(notes)).map(n => `<div>• ${n}</div>`).join('')}
+                    </div>
+                `;
+            }
+        }
+
         const cohortDesc = isOptionB ? `External Testing Cohort (Dataset ii: ${testCount} Patients)` : `Held-out ${testPct}% Test Cohort (${testCount} Patients)`;
 
         // RENDER BASED ON NUMBER OF TESTED MODELS
@@ -2282,7 +2422,7 @@
                                     <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked
                                 </h3>
                                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                                    Comparative diagnostic performance on ${cohortDesc}. Top-performing model (${allResults[0].info.name}) is auto-designated as active predictor. Click any seed pill to copy its reproducible reference.
+                                    Comparative performance on ${cohortDesc}, ranked by ${prep.isClassification ? 'macro F1 (then ROC-AUC)' : 'R² (then RMSE)'}. The top-ranked model (${allResults[0].info.name}) is set as the active predictor; because it was selected on these same test cases, its score is optimistically biased. Click any seed pill to copy it.
                                 </div>
                             </div>
                             <span class="pill pill-target" style="font-size: 12px; font-weight: 700;">
@@ -2298,7 +2438,7 @@
                                         <th>Paradigm</th>
                                         <th>${prep.isClassification ? 'Test Accuracy' : 'Test R²'}</th>
                                         <th>${prep.isClassification ? 'ROC-AUC' : 'RMSE'}</th>
-                                        <th>${prep.isClassification ? 'Macro F1' : 'MAE'}</th>
+                                        <th>${prep.isClassification ? 'Macro F1 (rank key)' : 'MAE'}</th>
                                         <th>${prep.isClassification ? 'Precision' : 'MSE'}</th>
                                         <th>${prep.isClassification ? 'Recall' : '-'}</th>
                                         <th>Seed (Ref)</th>
@@ -2334,13 +2474,13 @@
                                     <thead>
                                         <tr>
                                             <th style="padding: 6px 8px;">Actual \\ Pred</th>
-                                            ${classes.map(c => `<th style="padding: 6px 8px;">${c}</th>`).join('')}
+                                            ${classes.map(c => `<th style="padding: 6px 8px;">${escapeHtml(c)}</th>`).join('')}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${classes.map((actualClass, r) => `
                                             <tr>
-                                                <th style="text-align: left; padding: 6px 8px;">${actualClass}</th>
+                                                <th style="text-align: left; padding: 6px 8px;">${escapeHtml(actualClass)}</th>
                                                 ${classes.map((_, c) => {
                                                     const val = cm[r][c];
                                                     const isHit = r === c;
@@ -2369,13 +2509,13 @@
                                     <thead>
                                         <tr>
                                             <th style="padding: 6px 8px; font-size: 10px;">Actual \\ Pred</th>
-                                            ${regClasses.map(c => `<th style="padding: 6px 8px; font-size: 10.5px;">${c}</th>`).join('')}
+                                            ${regClasses.map(c => `<th style="padding: 6px 8px; font-size: 10.5px;">${escapeHtml(c)}</th>`).join('')}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${regClasses.map((actualClass, r) => `
                                             <tr>
-                                                <th style="text-align: left; padding: 6px 8px; font-size: 10.5px;">${actualClass}</th>
+                                                <th style="text-align: left; padding: 6px 8px; font-size: 10.5px;">${escapeHtml(actualClass)}</th>
                                                 ${regClasses.map((_, c) => {
                                                     const val = cm[r][c];
                                                     const isHit = r === c;
@@ -2526,13 +2666,13 @@
                                 <thead>
                                     <tr>
                                         <th>Actual \\ Predicted</th>
-                                        ${classes.map(c => `<th>${c}</th>`).join('')}
+                                        ${classes.map(c => `<th>${escapeHtml(c)}</th>`).join('')}
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${classes.map((actualClass, r) => `
                                         <tr>
-                                            <th style="text-align: left;">${actualClass}</th>
+                                            <th style="text-align: left;">${escapeHtml(actualClass)}</th>
                                             ${classes.map((_, c) => {
                                                 const val = cm[r][c];
                                                 const isHit = r === c;
@@ -2587,13 +2727,13 @@
                                     <thead>
                                         <tr>
                                             <th>Actual \\ Predicted</th>
-                                            ${regClasses.map(c => `<th>${c}</th>`).join('')}
+                                            ${regClasses.map(c => `<th>${escapeHtml(c)}</th>`).join('')}
                                         </tr>
                                     </thead>
                                     <tbody>
                                         ${regClasses.map((actualClass, r) => `
                                             <tr>
-                                                <th style="text-align: left;">${actualClass}</th>
+                                                <th style="text-align: left;">${escapeHtml(actualClass)}</th>
                                                 ${regClasses.map((_, c) => {
                                                     const val = cm[r][c];
                                                     const isHit = r === c;
@@ -2644,21 +2784,21 @@
                 formHtml += `
                     <div class="form-field">
                         <label>
-                            <span>${col}</span>
+                            <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Range: ${meta.min} &ndash; ${meta.max}</span>
                         </label>
-                        <input type="number" step="${step}" class="control-input single-input-field" data-col="${col}" value="${meta.mean.toFixed(2)}">
+                        <input type="number" step="any" class="control-input single-input-field" data-col="${escapeHtml(col)}" value="${meta.mean.toFixed(2)}">
                     </div>
                 `;
             } else if (meta.type === 'ordinal') {
                 formHtml += `
                     <div class="form-field">
                         <label>
-                            <span>${col}</span>
+                            <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Ordinal Rank</span>
                         </label>
-                        <select class="control-select single-input-field" data-col="${col}">
-                            ${meta.ranks.map(rk => `<option value="${rk}">${rk}</option>`).join('')}
+                        <select class="control-select single-input-field" data-col="${escapeHtml(col)}">
+                            ${meta.ranks.map(rk => `<option value="${escapeHtml(rk)}">${escapeHtml(rk)}</option>`).join('')}
                         </select>
                     </div>
                 `;
@@ -2667,11 +2807,11 @@
                 formHtml += `
                     <div class="form-field">
                         <label>
-                            <span>${col}</span>
+                            <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Categorical</span>
                         </label>
-                        <select class="control-select single-input-field" data-col="${col}">
-                            ${meta.categories.map(cat => `<option value="${cat}">${cat}</option>`).join('')}
+                        <select class="control-select single-input-field" data-col="${escapeHtml(col)}">
+                            ${meta.categories.map(cat => `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`).join('')}
                         </select>
                     </div>
                 `;
@@ -2693,9 +2833,15 @@
             inputRow[col] = field.value;
         });
 
-        const xVector = DataEngine.transformSingleRow(inputRow, AppState.prepMeta);
+        const inputIssues = [];
+        const xVector = DataEngine.transformSingleRow(inputRow, AppState.prepMeta, inputIssues);
         const result = AppState.trainedModel.predictSingle(xVector);
         const prep = AppState.prepMeta;
+        const inputWarningHtml = inputIssues.length > 0
+            ? `<div style="font-size: 11.5px; color: var(--accent-amber); margin-top: 6px; font-weight: 600;">
+                    ⚠️ Blank or unrecognised input(s) replaced with training-cohort values (mean / median rank / most frequent category): ${escapeHtml(inputIssues.map(i => i.column).join(', '))}
+               </div>`
+            : '';
 
         DOM.singleResultBanner.style.display = 'flex';
 
@@ -2718,17 +2864,18 @@
             : '';
 
         if (prep.isClassification) {
-            const predictedLabel = prep.targetIdxToClass[result.pred] || result.pred;
-            const confidencePercent = result.confidence ? (result.confidence * 100).toFixed(1) : '90.0';
+            const predictedLabel = prep.targetIdxToClass[result.pred] !== undefined ? prep.targetIdxToClass[result.pred] : result.pred;
+            const hasConfidence = typeof result.confidence === 'number' && !isNaN(result.confidence);
+            const confidencePercent = hasConfidence ? (result.confidence * 100).toFixed(1) : null;
 
             let probBarsHtml = '';
             if (result.probabilities) {
                 probBarsHtml = Object.keys(result.probabilities).map(clsIdx => {
-                    const clsLabel = prep.targetIdxToClass[clsIdx] || clsIdx;
+                    const clsLabel = prep.targetIdxToClass[clsIdx] !== undefined ? prep.targetIdxToClass[clsIdx] : clsIdx;
                     const p = (result.probabilities[clsIdx] * 100).toFixed(1);
                     return `
                         <div style="font-size: 12px; display: flex; justify-content: space-between; gap: 10px;">
-                            <span>${clsLabel}:</span>
+                            <span>${escapeHtml(clsLabel)}:</span>
                             <strong>${p}%</strong>
                         </div>
                     `;
@@ -2737,18 +2884,22 @@
 
             DOM.singleResultBanner.innerHTML = `
                 <div class="banner-left">
-                    <h3>Predicted ${prep.targetCol}</h3>
-                    <div class="pred-outcome-val">${predictedLabel}</div>
+                    <h3>Predicted ${escapeHtml(prep.targetCol)}</h3>
+                    <div class="pred-outcome-val">${escapeHtml(predictedLabel)}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${prep.targetCol}</em>${seedSnippet}
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
+                    ${inputWarningHtml}
+                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
+                        Model-estimated class probability (not a calibrated clinical risk). For research and educational use only.
+                    </div>
                 </div>
                 <div class="banner-confidence">
-                    <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Confidence</span>
-                    <span style="font-size: 26px; font-weight: 800; color: var(--accent-emerald);">${confidencePercent}%</span>
+                    <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Model Probability</span>
+                    <span style="font-size: 26px; font-weight: 800; color: var(--accent-emerald);">${hasConfidence ? `${confidencePercent}%` : 'N/A'}</span>
                     <div class="prob-meter-bar">
-                        <div class="prob-meter-fill" style="width: ${confidencePercent}%;"></div>
+                        <div class="prob-meter-fill" style="width: ${hasConfidence ? confidencePercent : 0}%;"></div>
                     </div>
                     <div style="margin-top: 8px;">
                         ${probBarsHtml}
@@ -2758,12 +2909,13 @@
         } else {
             DOM.singleResultBanner.innerHTML = `
                 <div class="banner-left">
-                    <h3>Predicted Continuous ${prep.targetCol}</h3>
+                    <h3>Predicted Continuous ${escapeHtml(prep.targetCol)}</h3>
                     <div class="pred-outcome-val">${result.pred}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${prep.targetCol}</em>${seedSnippet}
+                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
+                    ${inputWarningHtml}
                 </div>
             `;
         }
@@ -2819,23 +2971,46 @@
             ? AppState.trainedModel.seed
             : (AppState.evalResults?.seed !== null && AppState.evalResults?.seed !== undefined ? AppState.evalResults.seed : 'Auto');
 
+        // Predictor columns the model needs but the batch file lacks entirely
+        const absentCols = prep.featureCols.filter(c => !headers.includes(c));
+        let rowsWithImputation = 0;
+        let totalImputedCells = 0;
+
         rows.forEach(r => {
-            const xVector = DataEngine.transformSingleRow(r, prep);
+            const rowIssues = [];
+            const xVector = DataEngine.transformSingleRow(r, prep, rowIssues);
             const predRes = AppState.trainedModel.predictSingle(xVector);
 
             let predictedLabel = predRes.pred;
             let confidence = 'N/A';
             if (prep.isClassification) {
-                predictedLabel = prep.targetIdxToClass[predRes.pred] || predRes.pred;
-                confidence = predRes.confidence ? `${(predRes.confidence * 100).toFixed(1)}%` : '90.0%';
+                predictedLabel = prep.targetIdxToClass[predRes.pred] !== undefined ? prep.targetIdxToClass[predRes.pred] : predRes.pred;
+                confidence = (typeof predRes.confidence === 'number' && !isNaN(predRes.confidence))
+                    ? `${(predRes.confidence * 100).toFixed(1)}%` : 'N/A';
+            }
+            if (rowIssues.length > 0) {
+                rowsWithImputation++;
+                totalImputedCells += rowIssues.length;
             }
 
             const rowCopy = { ...r };
             rowCopy[`Predicted_${prep.targetCol}`] = predictedLabel;
-            rowCopy[`Prediction_Confidence`] = confidence;
+            rowCopy[`Prediction_Probability`] = confidence;
+            rowCopy[`Imputed_Inputs`] = rowIssues.length > 0 ? rowIssues.map(i => `${i.column}:${i.kind}`).join('; ') : '';
             rowCopy[`Model_Seed`] = activeSeed;
             results.push(rowCopy);
         });
+
+        if (results.length === 0) {
+            alert("The batch file contains no data rows.");
+            return;
+        }
+        if (rowsWithImputation > 0 || absentCols.length > 0) {
+            alert(`Batch prediction completed with substituted inputs:\n` +
+                (absentCols.length > 0 ? `• Columns missing from the file (filled for every row): ${absentCols.join(', ')}\n` : '') +
+                `• ${rowsWithImputation} of ${results.length} row(s) had ${totalImputedCells} blank or unrecognised predictor value(s) replaced with training-cohort values.\n` +
+                `See the 'Imputed_Inputs' column. Predictions for these rows are less reliable.`);
+        }
 
         AppState.batchPredictions = results;
         DOM.batchResultsCard.style.display = 'flex';
@@ -2849,14 +3024,14 @@
             <table class="data-table">
                 <thead>
                     <tr>
-                        ${resultHeaders.map(h => `<th style="${h.startsWith('Predicted_') ? 'color: var(--accent-cyan); background: rgba(6,182,212,0.1);' : ''}">${h}</th>`).join('')}
+                        ${resultHeaders.map(h => `<th style="${h.startsWith('Predicted_') ? 'color: var(--accent-cyan); background: rgba(6,182,212,0.1);' : ''}">${escapeHtml(h)}</th>`).join('')}
                     </tr>
                 </thead>
                 <tbody>
                     ${previewSlice.map(r => `
                         <tr>
                             ${resultHeaders.map(h => `
-                                <td style="${h.startsWith('Predicted_') ? 'font-weight: 700; color: var(--accent-cyan); background: rgba(6,182,212,0.05);' : ''}">${r[h]}</td>
+                                <td style="${h.startsWith('Predicted_') ? 'font-weight: 700; color: var(--accent-cyan); background: rgba(6,182,212,0.05);' : ''}">${escapeHtml(r[h])}</td>
                             `).join('')}
                         </tr>
                     `).join('')}
@@ -2871,12 +3046,14 @@
         if (!AppState.batchPredictions || AppState.batchPredictions.length === 0) return;
 
         const headers = Object.keys(AppState.batchPredictions[0]);
-        const lines = [headers.join(',')];
+        const lines = [headers.map(h => (/[",\r\n]/.test(h) ? `"${h.replace(/"/g, '""')}"` : h)).join(',')];
 
         AppState.batchPredictions.forEach(row => {
             const line = headers.map(h => {
                 let val = String(row[h] !== undefined ? row[h] : '');
-                if (val.includes(',') || val.includes('"')) {
+                // Prevent spreadsheet formula execution from cell contents
+                if (/^[=+\-@]/.test(val) && isNaN(Number(val))) val = `'${val}`;
+                if (/[",\r\n]/.test(val)) {
                     val = `"${val.replace(/"/g, '""')}"`;
                 }
                 return val;
@@ -2994,12 +3171,21 @@
         const imputeStrategy = DOM.pipelineImputeStrategy ? DOM.pipelineImputeStrategy.value : 'median';
         AppState.pipeline.imputeStrategy = imputeStrategy;
 
-        // Perform 80/20 Train/Test split
+        // Rows with a missing (or, for regression, non-numeric) outcome are excluded: outcomes are never imputed
         const isClassification = AppState.columnConfigs[targetCol]?.type !== 'continuous';
-        const targetVals = AppState.parsedData.rows.map(r => r[targetCol]);
+        const usableRows = AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol]) &&
+            (isClassification || !isNaN(Number(r[targetCol]))));
+        const excludedMissingTarget = AppState.parsedData.rows.length - usableRows.length;
+        if (usableRows.length < 5) {
+            alert(`Only ${usableRows.length} row(s) have a valid outcome for '${targetCol}'. At least 5 are needed for a train/test split.`);
+            return;
+        }
+
+        // Perform 80/20 Train/Test split (stratified by outcome class for classification)
+        const targetVals = usableRows.map(r => String(r[targetCol]).trim());
 
         const splitResult = DataEngine.trainTestSplit(
-            AppState.parsedData.rows,
+            usableRows,
             targetVals,
             0.8,
             isClassification,
@@ -3029,12 +3215,37 @@
         AppState.pipeline.featureCols = featureCols;
         AppState.pipeline.targetCol = targetCol;
         AppState.pipeline.columnConfigs = { ...AppState.columnConfigs };
+        AppState.pipeline.excludedMissingTarget = excludedMissingTarget;
+        // Re-running Step 1 invalidates every downstream result
         AppState.pipeline.droppedFeatures = new Set();
+        AppState.pipeline.normalityMap = {};
+        AppState.pipeline.corrPairs = [];
+        AppState.pipeline.vifResults = [];
+        AppState.pipeline.univariateResults = [];
+        AppState.pipeline.smotencResult = null;
+        AppState.pipeline.balancedTrainRows = null;
         AppState.pipeline.rfImportance = [];
         AppState.pipeline.top70Features = [];
         AppState.pipeline.bottom30Features = [];
+        AppState.pipeline.benchmarkResults = [];
+        if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
+        if (DOM.pipelineRfImportanceContainer) DOM.pipelineRfImportanceContainer.innerHTML = '';
+        if (DOM.pipelineToStep7Btn) DOM.pipelineToStep7Btn.disabled = true;
+        if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.style.display = 'none';
+        if (AppState.deployedSource === '7step') {
+            AppState.trainedModel = null;
+            AppState.prepMeta = null;
+            AppState.evalResults = null;
+            AppState.deployedSource = null;
+            AppState.deployedPipelineModel = null;
+            updatePipelineActiveDeploymentStatus();
+            updatePredictionProvenanceBar();
+        }
 
         renderPipelineStep1Results(trainTransformed.missingFilledCount, testTransformed.missingFilledCount);
+        if (excludedMissingTarget > 0) {
+            alert(`${excludedMissingTarget} row(s) with a missing outcome ('${targetCol}') were excluded before splitting. Outcomes are never imputed.`);
+        }
     }
 
     function renderPipelineStep1Results(trainMissing = 0, testMissing = 0) {
@@ -3069,24 +3280,29 @@
             const fillVal = imputer.fillValues[col];
 
             let statsStr = '';
-            if (conf.type === 'nominal') {
-                statsStr = `Mode: ${stats.mode || 'N/A'} (Distinct: ${stats.distinctCount || 0})`;
+            if (conf.type === 'nominal' || stats.mode !== undefined) {
+                statsStr = `Mode: ${escapeHtml(stats.mode || 'N/A')} (Distinct: ${stats.distinctCount || 0})`;
             } else {
                 statsStr = `Mean: ${stats.mean !== undefined ? stats.mean : 'N/A'}, Median: ${stats.median !== undefined ? stats.median : 'N/A'}, Std: ${stats.std !== undefined ? stats.std : 'N/A'}`;
             }
 
             tableHtml += `
                 <tr>
-                    <td><strong>${col}</strong></td>
+                    <td><strong>${escapeHtml(col)}</strong></td>
                     <td><span class="pill pill-${conf.role || 'feature'}">${conf.role || 'feature'}</span></td>
                     <td><span class="pill pill-${conf.type || 'continuous'}">${conf.type || 'continuous'}</span></td>
-                    <td><strong style="color: var(--accent-emerald);">${fillVal}</strong></td>
+                    <td><strong style="color: var(--accent-emerald);">${escapeHtml(fillVal)}</strong></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${statsStr}</td>
                 </tr>
             `;
         });
 
         tableHtml += `</tbody></table>`;
+        tableHtml += `<p style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+            Outcome '<strong>${escapeHtml(AppState.pipeline.targetCol)}</strong>' is never imputed${AppState.pipeline.excludedMissingTarget > 0
+                ? `: ${AppState.pipeline.excludedMissingTarget} row(s) with a missing outcome were excluded before the split.`
+                : '; no rows had a missing outcome.'}
+        </p>`;
 
         if (DOM.pipelineImputerTableContainer) {
             DOM.pipelineImputerTableContainer.innerHTML = tableHtml;
@@ -3132,8 +3348,8 @@
                         <th>Sample Mean</th>
                         <th>Std Deviation</th>
                         <th>Skewness (g₁)</th>
-                        <th>Normality Verdict</th>
-                        <th>Test Rule Applied</th>
+                        <th>Skewness Screen (rule of thumb)</th>
+                        <th>Correlation Method</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -3143,17 +3359,17 @@
             const norm = corrRes.normalityMap[col] || { mean: 0, std: 1, skewness: 0, isNormal: true };
             normHtml += `
                 <tr>
-                    <td><strong>${col}</strong></td>
+                    <td><strong>${escapeHtml(col)}</strong></td>
                     <td>${norm.mean}</td>
                     <td>${norm.std}</td>
                     <td><strong style="color: ${norm.isNormal ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">${norm.skewness}</strong></td>
                     <td>
                         <span class="pill" style="${norm.isNormal ? 'background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);' : 'background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.4);'}">
-                            ${norm.isNormal ? '✓ Normal (|g₁| ≤ 1.0)' : '⚠️ Skewed (|g₁| > 1.0)'}
+                            ${norm.isNormal ? '✓ Approx. symmetric (|g₁| ≤ 1.0)' : '⚠️ Skewed (|g₁| > 1.0)'}
                         </span>
                     </td>
                     <td style="font-size: 12px; color: var(--text-secondary);">
-                        ${norm.isNormal ? 'Use Pearson when paired with normal variables' : 'Requires Spearman Rank Correlation'}
+                        ${norm.isNormal ? 'Pearson if its partner is also approx. symmetric' : 'Spearman rank correlation for its pairs'}
                     </td>
                 </tr>
             `;
@@ -3186,23 +3402,23 @@
                     <div class="corr-pair-card high-corr ${var1Dropped || var2Dropped ? 'dropped' : ''}">
                         <div>
                             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
-                                <strong style="font-size: 14px; color: var(--text-primary);">${p.var1}</strong>
+                                <strong style="font-size: 14px; color: var(--text-primary);">${escapeHtml(p.var1)}</strong>
                                 <span style="color: var(--text-muted);">&harr;</span>
-                                <strong style="font-size: 14px; color: var(--text-primary);">${p.var2}</strong>
+                                <strong style="font-size: 14px; color: var(--text-primary);">${escapeHtml(p.var2)}</strong>
                                 <span class="vif-badge-danger">${p.method} = ${p.coeff}</span>
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary);">
-                                <strong>Collinearity Reason:</strong> ${p.bothNormal ? 'Both variables normal &rarr; Pearson product-moment correlation calculated.' : `Skewness detected (${p.norm1.isNormal ? '' : p.var1 + ' skewed '}${p.norm2.isNormal ? '' : p.var2 + ' skewed'}) &rarr; Spearman rank correlation applied.`}
+                                <strong>Method:</strong> ${p.bothNormal ? 'Both variables approximately symmetric (|g₁| ≤ 1) &rarr; Pearson product-moment correlation.' : `Skewness detected (${escapeHtml([p.norm1.isNormal ? '' : p.var1, p.norm2.isNormal ? '' : p.var2].filter(Boolean).join(', '))}) &rarr; Spearman rank correlation.`}
                             </div>
                         </div>
                         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature('${p.var1}')" ${var1Dropped ? 'disabled' : ''}>
-                                ${var1Dropped ? `✓ Dropped ${p.var1}` : `🗑️ Drop ${p.var1}`}
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature(${jsArg(p.var1)})" ${var1Dropped ? 'disabled' : ''}>
+                                ${var1Dropped ? `✓ Dropped ${escapeHtml(p.var1)}` : `🗑️ Drop ${escapeHtml(p.var1)}`}
                             </button>
-                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature('${p.var2}')" ${var2Dropped ? 'disabled' : ''}>
-                                ${var2Dropped ? `✓ Dropped ${p.var2}` : `🗑️ Drop ${p.var2}`}
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature(${jsArg(p.var2)})" ${var2Dropped ? 'disabled' : ''}>
+                                ${var2Dropped ? `✓ Dropped ${escapeHtml(p.var2)}` : `🗑️ Drop ${escapeHtml(p.var2)}`}
                             </button>
-                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineKeepBothPairs('${p.var1}', '${p.var2}')">
+                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineKeepBothPairs(${jsArg(p.var1)}, ${jsArg(p.var2)})">
                                 🤝 Keep Both
                             </button>
                         </div>
@@ -3220,7 +3436,7 @@
     };
 
     window.pipelineKeepBothPairs = function (var1, var2) {
-        alert(`Pair [${var1}] and [${var2}] retained with clinical justification.`);
+        alert(`Pair [${var1}] and [${var2}] retained. Record the clinical justification for keeping both in your study protocol.`);
     };
 
     // =========================================================================
@@ -3259,9 +3475,9 @@
             tableHtml += `
                 <tr style="${isHigh ? 'background: rgba(244, 63, 94, 0.04);' : ''}">
                     <td style="text-align: center;">
-                        <input type="checkbox" class="pipeline-vif-checkbox" data-feature="${item.feature}" ${isHigh && !isDropped ? 'checked' : ''} ${isDropped ? 'disabled' : ''}>
+                        <input type="checkbox" class="pipeline-vif-checkbox" data-feature="${escapeHtml(item.feature)}" ${isHigh && !isDropped ? 'checked' : ''} ${isDropped ? 'disabled' : ''}>
                     </td>
-                    <td><strong>${item.feature}</strong> ${isDropped ? '<span class="pill pill-meta" style="font-size: 10px;">Dropped</span>' : ''}</td>
+                    <td><strong>${escapeHtml(item.feature)}</strong> ${isDropped ? '<span class="pill pill-meta" style="font-size: 10px;">Dropped</span>' : ''}</td>
                     <td><span class="pill pill-${item.type}">${item.type}</span></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${item.dummyCount}</td>
                     <td>${item.rSquared}</td>
@@ -3295,7 +3511,7 @@
             }
         });
 
-        alert(`Permanently eliminated ${droppedNames.length} feature(s) from both Train and Test sets: ${droppedNames.join(', ')}`);
+        alert(`Excluded ${droppedNames.length} feature(s) from the pipeline (Train and Test): ${droppedNames.join(', ')}. They can be restored in Step 4.`);
         renderPipelineStep3();
     }
 
@@ -3356,16 +3572,16 @@
             tableHtml += `
                 <tr style="${isDropped ? 'opacity: 0.55; background: rgba(244, 63, 94, 0.04);' : (isSig ? 'background: rgba(16, 185, 129, 0.02);' : '')}">
                     <td style="text-align: center;">
-                        <input type="checkbox" class="pipeline-univ-checkbox" data-feature="${r.feature}" data-sig="${isSig}" ${!isDropped ? 'checked' : ''}>
+                        <input type="checkbox" class="pipeline-univ-checkbox" data-feature="${escapeHtml(r.feature)}" data-sig="${isSig}" ${!isDropped ? 'checked' : ''}>
                     </td>
                     <td style="font-weight: 700; color: var(--accent-cyan);">#${idx + 1}</td>
                     <td>
-                        <strong style="${isDropped ? 'text-decoration: line-through;' : ''}">${r.feature}</strong>
+                        <strong style="${isDropped ? 'text-decoration: line-through;' : ''}">${escapeHtml(r.feature)}</strong>
                         ${isDropped ? '<span class="pill pill-meta" style="font-size: 10px; margin-left: 6px;">Excluded</span>' : ''}
                     </td>
                     <td><span class="pill pill-${r.scale.toLowerCase().includes('nominal') ? 'nominal' : 'continuous'}">${r.scale}</span></td>
-                    <td style="font-weight: 600;">${r.testName}</td>
-                    <td>${r.statisticLabel}: <strong>${r.statisticValue}</strong></td>
+                    <td style="font-weight: 600;">${escapeHtml(r.testName)}</td>
+                    <td>${escapeHtml(r.statisticLabel)}: <strong>${r.statisticValue === Infinity ? '∞' : r.statisticValue}</strong></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${r.df}</td>
                     <td><strong style="color: ${isSig ? 'var(--accent-emerald)' : 'var(--text-muted)'}; font-size: 13.5px;">${r.pValue < 0.0001 ? '< 0.0001' : r.pValue}</strong></td>
                     <td>
@@ -3375,11 +3591,11 @@
                     </td>
                     <td style="text-align: right;">
                         ${isDropped ? `
-                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineRestoreFeatureStep4('${r.feature}')" title="Restore variable into modeling pipeline">
+                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineRestoreFeatureStep4(${jsArg(r.feature)})" title="Restore variable into modeling pipeline">
                                 ↩️ Include
                             </button>
                         ` : `
-                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeatureStep4('${r.feature}')" title="Exclude this variable from modeling">
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeatureStep4(${jsArg(r.feature)})" title="Exclude this variable from modeling">
                                 🗑️ Exclude
                             </button>
                         `}
@@ -3514,9 +3730,10 @@
                 <div class="pipeline-alert pipeline-alert-warning" style="margin-bottom: 20px;">
                     <div style="font-size: 20px;">⚠️</div>
                     <div>
-                        <strong>Minority Class Imbalance Detected:</strong><br>
-                        Minority class <code>${smotencRes.minorityClass}</code> represented only <strong>${smotencRes.minorityPctBefore}%</strong> of the training set (&lt; 30% clinical threshold).<br>
-                        SMOTENC synthesized <strong>${smotencRes.syntheticCountGenerated}</strong> new training instances to achieve <strong>${smotencRes.minorityPctAfter}%</strong> class balance.
+                        <strong>Class Imbalance Detected:</strong><br>
+                        ${escapeHtml(smotencRes.reason)}<br>
+                        Smallest class <code>${escapeHtml(smotencRes.minorityClass)}</code>: ${smotencRes.minorityPctBefore}% of training rows before &rarr; ${smotencRes.minorityPctAfter}% after resampling.
+                        Synthetic rows are used for training only; all test-set metrics are computed on real patients at their true prevalence.
                     </div>
                 </div>
 
@@ -3525,7 +3742,7 @@
                         <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--text-secondary);">Original Training Class Distribution</h5>
                         ${Object.keys(smotencRes.originalCounts).map(c => `
                             <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
-                                <span>Class <strong>${c}</strong>:</span>
+                                <span>Class <strong>${escapeHtml(c)}</strong>:</span>
                                 <strong>${smotencRes.originalCounts[c]} cases</strong>
                             </div>
                         `).join('')}
@@ -3534,7 +3751,7 @@
                         <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--accent-emerald);">Post-SMOTENC Training Class Distribution</h5>
                         ${Object.keys(smotencRes.balancedCounts).map(c => `
                             <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
-                                <span>Class <strong>${c}</strong>:</span>
+                                <span>Class <strong>${escapeHtml(c)}</strong>:</span>
                                 <strong style="color: var(--accent-emerald);">${smotencRes.balancedCounts[c]} cases</strong>
                             </div>
                         `).join('')}
@@ -3546,15 +3763,15 @@
                 <div class="pipeline-alert pipeline-alert-success" style="margin-bottom: 20px;">
                     <div style="font-size: 20px;">✅</div>
                     <div>
-                        <strong>Balanced Training Distribution:</strong><br>
-                        ${smotencRes.reason || 'Minority class represents ≥ 30% of the training cohort. No synthetic resampling needed.'}
+                        <strong>No Synthetic Resampling Applied:</strong><br>
+                        ${escapeHtml(smotencRes.reason || 'No synthetic resampling needed.')}
                     </div>
                 </div>
                 <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
                     <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--text-secondary);">Training Class Distribution</h5>
                     ${Object.keys(smotencRes.classCounts || {}).map(c => `
                         <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
-                            <span>Class <strong>${c}</strong>:</span>
+                            <span>Class <strong>${escapeHtml(c)}</strong>:</span>
                             <strong>${smotencRes.classCounts[c]} cases</strong>
                         </div>
                     `).join('')}
@@ -3583,11 +3800,14 @@
     }
 
     function executePipelineStep6() {
-        if (!AppState.pipeline.balancedTrainRows) {
-            renderPipelineStep5();
-        }
+        // Always recompute Step 5 from the current split & feature set so the scout never uses stale rows
+        renderPipelineStep5();
 
         const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        if (activeCols.length === 0) {
+            alert("No active predictor features remain. Restore at least one feature in Step 4.");
+            return;
+        }
         const subConfigs = {};
         activeCols.forEach(c => subConfigs[c] = AppState.pipeline.columnConfigs[c]);
         subConfigs[AppState.pipeline.targetCol] = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol];
@@ -3647,7 +3867,7 @@
                 chartHtml += `
                     <div class="cutoff-line-notice">
                         <span>✂️</span>
-                        <span><strong>Bottom 30% Dimensionality Cutoff:</strong> Features below this threshold are automatically pruned specifically for k-NN and Gaussian Naive Bayes in Step 7.</span>
+                        <span><strong>Bottom 30% Cutoff:</strong> Features below this line are removed for k-NN and Gaussian Naive Bayes only in Step 7 (other models use all surviving features). MDI importance is computed on the SMOTENC-balanced training set and can favour features with many distinct values.</span>
                     </div>
                 `;
             }
@@ -3655,7 +3875,7 @@
             chartHtml += `
                 <div class="rf-importance-row">
                     <div>
-                        <strong style="color: ${isBottomTier ? 'var(--accent-amber)' : 'var(--text-primary)'};">#${idx + 1} ${r.name}</strong>
+                        <strong style="color: ${isBottomTier ? 'var(--accent-amber)' : 'var(--text-primary)'};">#${idx + 1} ${escapeHtml(r.name)}</strong>
                     </div>
                     <div class="rf-meter-track">
                         <div class="rf-meter-fill ${isBottomTier ? 'bottom-tier' : 'top-tier'}" style="width: ${barWidth}%;"></div>
@@ -3694,8 +3914,8 @@
 
         const watchdog = AppState.watchdogs ? AppState.watchdogs.pipeline : null;
         if (watchdog) {
-            watchdog.start("Initializing constrained clinical pipeline...", 5, () => {
-                console.warn("Pipeline Step 7 training halted by user watchdog abort.");
+            watchdog.start("Initializing constrained clinical pipeline...", 5, (reason) => {
+                console.warn("Pipeline Step 7 training stopped:", reason);
                 if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = false;
             });
         } else if (DOM.pipelineTrainStatus) {
@@ -3705,15 +3925,16 @@
         try {
             await new Promise(r => setTimeout(r, 60));
 
-            // Ensure balancedTrainRows is populated
+            // Recompute Step 5 so the balanced rows match the current split and feature set
+            renderPipelineStep5();
             if (!AppState.pipeline.balancedTrainRows) {
-                renderPipelineStep5();
-            }
-            if (!AppState.pipeline.balancedTrainRows) {
-                AppState.pipeline.balancedTrainRows = AppState.pipeline.trainRows || (AppState.parsedData && AppState.parsedData.rows);
+                throw new Error("Training rows are unavailable. Please re-run Step 1.");
             }
 
             const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+            if (activeCols.length === 0) {
+                throw new Error("No active predictor features remain. Restore at least one feature in Step 4.");
+            }
             
             // Top 70% features with safe fallback
             let top70Cols = AppState.pipeline.top70Features;
@@ -3766,7 +3987,7 @@
             knn.fit(top70Prep.X, top70Prep.y);
             const knnEval = ModelEngine.evaluate(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
             knnEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
-            knnEval.constraintNote = "Pruned bottom 30% features to combat curse of dimensionality.";
+            knnEval.constraintNote = "Bottom 30% RF-importance features removed to reduce distance noise in high dimensions.";
             benchmarkList.push({ id: 'knn', name: 'k-Nearest Neighbors (k-NN)', model: knn, prep: top70Prep, eval: knnEval });
 
             // B. Gaussian Naive Bayes (Strict constraint: Bottom 30% features dropped)
@@ -3777,7 +3998,7 @@
                 nb.fit(top70Prep.X, top70Prep.y);
                 const nbEval = ModelEngine.evaluate(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
                 nbEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
-                nbEval.constraintNote = "Pruned bottom 30% features to prevent conditional independence violation.";
+                nbEval.constraintNote = "Bottom 30% RF-importance features removed (fewer noisy inputs; does not make features conditionally independent).";
                 benchmarkList.push({ id: 'nb', name: 'Gaussian Naive Bayes', model: nb, prep: top70Prep, eval: nbEval });
             }
 
@@ -3803,7 +4024,9 @@
             });
             const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
             dnnEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
-            dnnEval.constraintNote = "Enforced L2 Weight Decay (0.001) and Dropout (0.15) against overfitting.";
+            dnnEval.constraintNote = dnn.usedFallback
+                ? `⚠️ TensorFlow.js failed (${dnn.fallbackReason}); a linear fallback model was trained instead of a neural network.`
+                : "L2 weight decay (0.001) and dropout (0.15) to limit overfitting.";
             benchmarkList.push({ id: 'nn', name: 'Deep Neural Network (DNN / MLP)', model: dnn, prep: fullPrep, eval: dnnEval });
 
             // D. Logistic / Ridge Regression (Strict constraint: L2 penalization against collinearity)
@@ -3841,9 +4064,12 @@
             });
             const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
             ensEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
-            ensEval.constraintNote = "StandardScaler fitted on Train and applied to Test; base models soft-blended.";
+            ensEval.constraintNote = `Equal-weight soft vote of ${ensembleConfig.baseModels.map(b => b.toUpperCase()).join(', ')}; scaling fitted on Train only.`;
             benchmarkList.push({ id: 'ensemble', name: 'Ensemble Super Learner', model: ensemble, prep: fullPrep, eval: ensEval });
 
+            // Store ranked best-first (macro-F1 then AUC for classification; R² for regression),
+            // so benchmarkResults[0] is genuinely the top model everywhere it is used
+            benchmarkList.sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
             AppState.pipeline.benchmarkResults = benchmarkList;
 
             // Render Leaderboard & Confusion Matrices
@@ -3867,23 +4093,24 @@
     function renderPipelineLeaderboardOnly() {
         if (!AppState.pipeline.benchmarkResults || !DOM.pipelineLeaderboardContainer) return;
         const isClassification = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
-        const sorted = [...AppState.pipeline.benchmarkResults].sort((a, b) => {
-            const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
-            const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
-            return f1B - f1A;
-        });
+        const sorted = [...AppState.pipeline.benchmarkResults].sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
 
         let tableHtml = `
+            <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+                Ranked by ${isClassification ? 'macro F1 (then ROC-AUC)' : 'R² (then RMSE)'} on the held-out 20% test split.
+                The top model is selected on these same test cases, so its score is optimistically biased; confirm on an independent cohort.
+            </p>`;
+        tableHtml += `
             <table class="data-table">
                 <thead>
                     <tr>
                         <th>Algorithm</th>
                         <th>Features Subset</th>
-                        <th>F1-Score (Macro)</th>
-                        <th>Precision</th>
-                        <th>Recall</th>
+                        <th>${isClassification ? 'F1-Score (Macro)' : 'R²'}</th>
+                        <th>${isClassification ? 'Precision' : 'MAE'}</th>
+                        <th>${isClassification ? 'Recall' : 'RMSE'}</th>
                         <th>AUC-ROC</th>
-                        <th>Test Accuracy</th>
+                        <th>${isClassification ? 'Test Accuracy' : 'MSE'}</th>
                         <th>Algorithm Constraint</th>
                         <th style="text-align: right; width: 140px;">Deployment</th>
                     </tr>
@@ -3893,24 +4120,24 @@
 
         sorted.forEach(item => {
             const ev = item.eval;
-            const f1 = isClassification ? (ev.macroF1 !== undefined ? (ev.macroF1 * 100).toFixed(1) + '%' : 'N/A') : `R²: ${ev.r2}`;
-            const prec = isClassification ? (ev.macroPrecision !== undefined ? (ev.macroPrecision * 100).toFixed(1) + '%' : 'N/A') : `MAE: ${ev.mae}`;
-            const rec = isClassification ? (ev.macroRecall !== undefined ? (ev.macroRecall * 100).toFixed(1) + '%' : 'N/A') : `RMSE: ${ev.rmse}`;
+            const f1 = isClassification ? (ev.macroF1 !== undefined ? (ev.macroF1 * 100).toFixed(1) + '%' : 'N/A') : `${ev.r2}`;
+            const prec = isClassification ? (ev.macroPrecision !== undefined ? (ev.macroPrecision * 100).toFixed(1) + '%' : 'N/A') : `${ev.mae}`;
+            const rec = isClassification ? (ev.macroRecall !== undefined ? (ev.macroRecall * 100).toFixed(1) + '%' : 'N/A') : `${ev.rmse}`;
             const auc = isClassification ? (ev.rocAuc !== null && ev.rocAuc !== undefined ? ev.rocAuc.toFixed(3) : 'N/A') : 'N/A';
-            const acc = isClassification ? (ev.accuracy !== undefined ? (ev.accuracy * 100).toFixed(1) + '%' : 'N/A') : `MSE: ${ev.mse}`;
+            const acc = isClassification ? (ev.accuracy !== undefined ? (ev.accuracy * 100).toFixed(1) + '%' : 'N/A') : `${ev.mse}`;
 
             const isDeployed = AppState.deployedSource === '7step' && AppState.deployedModelId === item.id;
 
             tableHtml += `
                 <tr style="${isDeployed ? 'background: rgba(16, 185, 129, 0.05);' : ''}">
-                    <td><strong>${item.name}</strong></td>
+                    <td><strong>${escapeHtml(item.name)}</strong></td>
                     <td><span class="pill pill-target" style="font-size: 11px;">${ev.featuresUsed}</span></td>
                     <td><strong style="color: var(--accent-emerald); font-size: 13.5px;">${f1}</strong></td>
                     <td>${prec}</td>
                     <td>${rec}</td>
                     <td><strong style="color: var(--accent-cyan);">${auc}</strong></td>
                     <td><strong>${acc}</strong></td>
-                    <td style="font-size: 11.5px; color: var(--text-secondary);">${ev.constraintNote}</td>
+                    <td style="font-size: 11.5px; color: var(--text-secondary);">${escapeHtml(ev.constraintNote)}</td>
                     <td style="text-align: right;">
                         ${isDeployed ? `
                             <span class="pill" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); font-weight: 700; border-color: rgba(16, 185, 129, 0.3);">
@@ -3931,12 +4158,8 @@
     }
 
     function renderPipelineBenchmarkResults(benchmarkList, targetClasses, isClassification) {
-        // Sort descending by F1 or Accuracy
-        const sorted = [...benchmarkList].sort((a, b) => {
-            const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
-            const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
-            return f1B - f1A;
-        });
+        // Sort best-first (same criterion as the leaderboard)
+        const sorted = [...benchmarkList].sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
 
         // 1. Leaderboard Table
         renderPipelineLeaderboardOnly();
@@ -3947,42 +4170,64 @@
             const ev = item.eval;
             const cm = ev.confMatrix;
 
-            if (cm && cm.length === 2) {
+            if (!isClassification) {
+                // Regression: report error metrics (a median-split 2×2 table is shown in Step 4 only as a descriptive aid)
+                cmHtml += `
+                    <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <strong style="font-size: 13.5px; color: var(--text-primary);">${escapeHtml(item.name)}</strong>
+                            <span class="pill pill-continuous" style="font-size: 10.5px;">R²: ${ev.r2}</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                            ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; font-size: 11px; text-align: center;">
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">RMSE: <strong>${ev.rmse}</strong></div>
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">MAE: <strong>${ev.mae}</strong></div>
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">MSE: <strong>${ev.mse}</strong></div>
+                        </div>
+                    </div>
+                `;
+            } else if (cm && cm.length === 2) {
                 const tn = cm[0][0];
                 const fp = cm[0][1];
                 const fn = cm[1][0];
                 const tp = cm[1][1];
-                const sens = (tp + fn) > 0 ? ((tp / (tp + fn)) * 100).toFixed(1) + '%' : '0.0%';
-                const spec = (tn + fp) > 0 ? ((tn / (tn + fp)) * 100).toFixed(1) + '%' : '0.0%';
-                const ppv = (tp + fp) > 0 ? ((tp / (tp + fp)) * 100).toFixed(1) + '%' : '0.0%';
-                const npv = (tn + fn) > 0 ? ((tn / (tn + fn)) * 100).toFixed(1) + '%' : '0.0%';
+                // Undefined ratios (zero denominator) are shown as N/A rather than 0%
+                const sens = (tp + fn) > 0 ? ((tp / (tp + fn)) * 100).toFixed(1) + '%' : 'N/A';
+                const spec = (tn + fp) > 0 ? ((tn / (tn + fp)) * 100).toFixed(1) + '%' : 'N/A';
+                const ppv = (tp + fp) > 0 ? ((tp / (tp + fp)) * 100).toFixed(1) + '%' : 'N/A';
+                const npv = (tn + fn) > 0 ? ((tn / (tn + fn)) * 100).toFixed(1) + '%' : 'N/A';
 
                 cmHtml += `
                     <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                            <strong style="font-size: 13.5px; color: var(--text-primary);">${item.name}</strong>
+                            <strong style="font-size: 13.5px; color: var(--text-primary);">${escapeHtml(item.name)}</strong>
                             <span class="pill pill-continuous" style="font-size: 10.5px;">Acc: ${(ev.accuracy * 100).toFixed(1)}%</span>
                         </div>
                         <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
-                            ${ev.featuresUsed} &bull; ${ev.constraintNote}
+                            ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
+                        </div>
+                        <div style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 6px;">
+                            "Positive" = <strong>${escapeHtml(targetClasses[1])}</strong> (second label in sorted order); check this matches your clinical event of interest.
                         </div>
                         <div class="cm-table-wrapper" style="margin-bottom: 10px;">
                             <table class="cm-table">
                                 <thead>
                                     <tr>
                                         <th>Actual \\ Pred</th>
-                                        <th>Negative (${targetClasses[0]})</th>
-                                        <th>Positive (${targetClasses[1]})</th>
+                                        <th>Negative (${escapeHtml(targetClasses[0])})</th>
+                                        <th>Positive (${escapeHtml(targetClasses[1])})</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td><strong>Negative (${targetClasses[0]})</strong></td>
+                                        <td><strong>Negative (${escapeHtml(targetClasses[0])})</strong></td>
                                         <td class="cm-cell-tn">TN: <strong>${tn}</strong></td>
                                         <td class="cm-cell-fp">FP: <strong>${fp}</strong></td>
                                     </tr>
                                     <tr>
-                                        <td><strong>Positive (${targetClasses[1]})</strong></td>
+                                        <td><strong>Positive (${escapeHtml(targetClasses[1])})</strong></td>
                                         <td class="cm-cell-fn">FN: <strong>${fn}</strong></td>
                                         <td class="cm-cell-tp">TP: <strong>${tp}</strong></td>
                                     </tr>
@@ -4050,11 +4295,7 @@
     function autoDeployBestPipelineModel() {
         if (!AppState.pipeline.benchmarkResults || AppState.pipeline.benchmarkResults.length === 0) return;
         const isClassification = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
-        const sorted = [...AppState.pipeline.benchmarkResults].sort((a, b) => {
-            const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
-            const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
-            return f1B - f1A;
-        });
+        const sorted = [...AppState.pipeline.benchmarkResults].sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
         deployPipelineModel(sorted[0].id, false);
     }
 
@@ -4062,13 +4303,26 @@
         if (!DOM.pipelineActiveDeploymentStatus) return;
         if (AppState.deployedPipelineModel) {
             DOM.pipelineActiveDeploymentStatus.innerHTML = `
-                Currently Active Deployed Model: <strong style="color: var(--accent-emerald);">${AppState.deployedPipelineModel.name}</strong> 
-                (${AppState.deployedPipelineModel.eval.featuresUsed}). 
-                Certified 0% Data Leakage, SMOTENC Balanced &bull; Ready for live single-case and batch predictions.
+                Currently Active Deployed Model: <strong style="color: var(--accent-emerald);">${escapeHtml(AppState.deployedPipelineModel.name)}</strong> 
+                (${escapeHtml(AppState.deployedPipelineModel.eval.featuresUsed)}). 
+                ${pipelineProvenanceSummary()} &bull; Ready for single-case and batch predictions (research use).
             `;
         } else {
             DOM.pipelineActiveDeploymentStatus.innerHTML = `Select any model from the leaderboard to deploy for real-time patient predictions.`;
         }
+    }
+
+    // Factual one-line summary of what the 7-step pipeline actually did
+    function pipelineProvenanceSummary() {
+        const p = AppState.pipeline;
+        const parts = ['Imputation & scaling fitted on training split only'];
+        const vifDropped = (p.vifResults || []).filter(v => v.highVIF && p.droppedFeatures.has(v.feature)).length;
+        parts.push(p.droppedFeatures.size > 0 ? `${p.droppedFeatures.size} feature(s) excluded (correlation/VIF/univariate review)` : 'no features excluded');
+        if (vifDropped > 0) parts.push(`${vifDropped} with VIF > 5`);
+        if (p.smotencResult) {
+            parts.push(p.smotencResult.applied ? `SMOTENC applied (+${p.smotencResult.syntheticCountGenerated} synthetic training rows)` : 'SMOTENC not applied');
+        }
+        return parts.join(' &bull; ');
     }
 
     function updatePredictionProvenanceBar() {
@@ -4088,10 +4342,10 @@
                     <span style="font-size: 22px;">🔬</span>
                     <div>
                         <div style="font-size: 13.5px; font-weight: 700; color: var(--accent-emerald);">
-                            Active Predictor: ${m.name} &bull; Trained via 7-Step Clinical Pipeline
+                            Active Predictor: ${escapeHtml(m.name)} &bull; Trained via 7-Step Clinical Pipeline
                         </div>
                         <div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 2px;">
-                            Zero Data Leakage Certified &bull; VIF Filtered &bull; SMOTENC Balanced &bull; RF Pruned (${featCount} Active Features)
+                            ${pipelineProvenanceSummary()} &bull; ${featCount} active features
                         </div>
                     </div>
                 </div>
@@ -4121,7 +4375,7 @@
                             Active Predictor: ${mInfo.name} &bull; Trained via Pre-existing Standard Workflow
                         </div>
                         <div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 2px;">
-                            Standard Workflow &bull; Full Raw Cohort (${featCount} Features)
+                            Standard Workflow &bull; Imputation & scaling fitted on the full cohort &bull; ${featCount} features
                         </div>
                     </div>
                 </div>
@@ -4220,7 +4474,7 @@
             return;
         }
 
-        const pipeBest = AppState.pipeline.benchmarkResults[0]; // sorted descending
+        const pipeBest = AppState.pipeline.benchmarkResults[0]; // stored best-first in executePipelineStep7
         const pEv = pipeBest.eval;
 
         if (!hasBaseline) {
@@ -4237,7 +4491,7 @@
                     <div style="font-size: 20px;">💡</div>
                     <div>
                         <strong>Baseline Benchmark Not Run Yet:</strong><br>
-                        You have successfully completed the 7-Step Pipeline with <strong>${pipeBest.name}</strong> (${metricSummary}).<br>
+                        You have successfully completed the 7-Step Pipeline with <strong>${escapeHtml(pipeBest.name)}</strong> (${metricSummary}).<br>
                         To see if the 7-Step Pipeline improved predictions compared to the standard pre-existing workflow on this exact cohort, run Step 4 (Model Training) or click below to launch the standard baseline:
                         <div style="margin-top: 10px;">
                             <button class="btn btn-primary btn-sm" onclick="window.trainStandardBaselineFromPipeline && window.trainStandardBaselineFromPipeline()">
@@ -4250,109 +4504,114 @@
             return;
         }
 
-        // Both baseline and pipeline exist! Compute side-by-side empirical metrics!
+        // Both baseline and pipeline exist: side-by-side (unpaired) comparison
         const baseBest = AppState.allTestedResults[0];
         const bEv = baseBest.evalRes;
+        const isClassification = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
 
-        const baseAcc = bEv.accuracy !== undefined ? (bEv.accuracy * 100) : 0;
-        const pipeAcc = pEv.accuracy !== undefined ? (pEv.accuracy * 100) : 0;
-        const deltaAcc = pipeAcc - baseAcc;
+        if (Boolean(bEv.isClassification) !== Boolean(isClassification)) {
+            DOM.pipelineVsBaselineContent.innerHTML = `
+                <div class="pipeline-alert pipeline-alert-info">
+                    <div style="font-size: 20px;">ℹ️</div>
+                    <div>The Step 4 baseline and the 7-Step Pipeline were run with different outcome types (classification vs regression), so they cannot be compared. Re-run one of them with the same target configuration.</div>
+                </div>`;
+            return;
+        }
 
-        const baseF1 = bEv.macroF1 !== undefined ? (bEv.macroF1 * 100) : 0;
-        const pipeF1 = pEv.macroF1 !== undefined ? (pEv.macroF1 * 100) : 0;
-        const deltaF1 = pipeF1 - baseF1;
+        const fmtDelta = (d, digits, unit) => {
+            if (d === null || isNaN(d)) return '—';
+            const sign = d > 0 ? '+' : '';
+            return `<strong style="color: ${d > 0 ? 'var(--accent-emerald)' : (d < 0 ? 'var(--accent-rose)' : 'var(--text-secondary)')};">${sign}${d.toFixed(digits)}${unit}</strong>`;
+        };
+        const row = (label, bVal, pVal, delta) => `
+            <tr>
+                <td><strong>${label}</strong></td>
+                <td>${bVal}</td>
+                <td><strong>${pVal}</strong></td>
+                <td>${delta}</td>
+            </tr>`;
 
-        const baseAuc = bEv.rocAuc !== null && bEv.rocAuc !== undefined ? bEv.rocAuc : null;
-        const pipeAuc = pEv.rocAuc !== null && pEv.rocAuc !== undefined ? pEv.rocAuc : null;
-        const deltaAuc = (pipeAuc !== null && baseAuc !== null) ? (pipeAuc - baseAuc) : null;
+        let metricRows = '';
+        let headlineDelta = null;
+        let headlineLabel = '';
+        if (isClassification) {
+            const pct = v => (typeof v === 'number' && !isNaN(v) ? v * 100 : null);
+            const bF1 = pct(bEv.macroF1), pF1 = pct(pEv.macroF1);
+            const bAcc = pct(bEv.accuracy), pAcc = pct(pEv.accuracy);
+            const bAuc = typeof bEv.rocAuc === 'number' ? bEv.rocAuc : null;
+            const pAuc = typeof pEv.rocAuc === 'number' ? pEv.rocAuc : null;
+            const dF1 = (bF1 !== null && pF1 !== null) ? pF1 - bF1 : null;
+            headlineDelta = dF1;
+            headlineLabel = 'macro F1';
+            metricRows += row('Macro F1-Score', bF1 !== null ? `${bF1.toFixed(1)}%` : 'N/A', pF1 !== null ? `${pF1.toFixed(1)}%` : 'N/A', fmtDelta(dF1, 1, ' pp'));
+            metricRows += row('Test Accuracy', bAcc !== null ? `${bAcc.toFixed(1)}%` : 'N/A', pAcc !== null ? `${pAcc.toFixed(1)}%` : 'N/A',
+                fmtDelta((bAcc !== null && pAcc !== null) ? pAcc - bAcc : null, 1, ' pp'));
+            if (bAuc !== null && pAuc !== null) {
+                metricRows += row('ROC-AUC (binary)', bAuc.toFixed(3), pAuc.toFixed(3), fmtDelta(pAuc - bAuc, 3, ''));
+            }
+        } else {
+            const num = v => (typeof v === 'number' && !isNaN(v) ? v : null);
+            const bR2 = num(bEv.r2), pR2 = num(pEv.r2);
+            const bRmse = num(bEv.rmse), pRmse = num(pEv.rmse);
+            const bMae = num(bEv.mae), pMae = num(pEv.mae);
+            headlineDelta = (bR2 !== null && pR2 !== null) ? pR2 - bR2 : null;
+            headlineLabel = 'R²';
+            metricRows += row('R²', bR2 !== null ? bR2.toFixed(3) : 'N/A', pR2 !== null ? pR2.toFixed(3) : 'N/A', fmtDelta(headlineDelta, 3, ''));
+            // Lower error is better: show (baseline − pipeline) so positive means the pipeline is better
+            metricRows += row('RMSE (lower is better)', bRmse !== null ? bRmse.toFixed(3) : 'N/A', pRmse !== null ? pRmse.toFixed(3) : 'N/A',
+                fmtDelta((bRmse !== null && pRmse !== null) ? bRmse - pRmse : null, 3, ' reduction'));
+            metricRows += row('MAE (lower is better)', bMae !== null ? bMae.toFixed(3) : 'N/A', pMae !== null ? pMae.toFixed(3) : 'N/A',
+                fmtDelta((bMae !== null && pMae !== null) ? bMae - pMae : null, 3, ' reduction'));
+        }
 
-        let compHtml = `
+        const sm = AppState.pipeline.smotencResult;
+        const baseProtocol = bEv.protocol === 'option-b'
+            ? `external Dataset (ii) (${bEv.testCount} cases)`
+            : `${bEv.testPct || 20}% random split (${bEv.testCount} cases, split seed ${bEv.splitSeed})`;
+        const pipeTestCount = AppState.pipeline.testRows ? AppState.pipeline.testRows.length : '?';
+
+        let headline;
+        if (headlineDelta === null) {
+            headline = 'The headline metric could not be compared.';
+        } else if (Math.abs(headlineDelta) < 1e-9) {
+            headline = `Both workflows obtained the same ${headlineLabel}.`;
+        } else {
+            const unit = isClassification ? ' percentage points' : '';
+            headline = `The 7-Step Pipeline's top model scored ${Math.abs(headlineDelta).toFixed(isClassification ? 1 : 3)}${unit} ${headlineDelta > 0 ? 'higher' : 'lower'} ${headlineLabel} than the Step 4 baseline.`;
+        }
+
+        const compHtml = `
             <div style="margin-bottom: 14px; font-size: 13px; color: var(--text-secondary);">
-                Direct empirical comparison on the held-out test split of cohort <strong>${AppState.fileName || 'Cohort'}</strong>:
+                Side-by-side results for cohort <strong>${escapeHtml(AppState.fileName || 'Cohort')}</strong>.
+                <span style="color: var(--accent-amber);">This is not a paired comparison:</span> the baseline was scored on a ${baseProtocol},
+                the pipeline on its own 80/20 split (${pipeTestCount} test cases, seed ${AppState.pipeline.seed}). Both "top" models were chosen on their own test sets.
+                Differences of a few points can arise from split variation alone; no significance test has been applied.
             </div>
 
             <table class="data-table" style="margin-bottom: 16px;">
                 <thead>
                     <tr>
-                        <th>Metric / Clinical Dimension</th>
-                        <th style="color: var(--accent-cyan);">Pre-existing Standard Workflow</th>
-                        <th style="color: var(--accent-emerald);">🔬 7-Step Clinical Pipeline</th>
-                        <th>Empirical Delta / Clinical Advantage</th>
+                        <th>Metric</th>
+                        <th style="color: var(--accent-cyan);">Step 4 Standard Workflow</th>
+                        <th style="color: var(--accent-emerald);">🔬 7-Step Pipeline</th>
+                        <th>Difference (Pipeline − Baseline)</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td><strong>Top Performing Model</strong></td>
-                        <td>${MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()}</td>
-                        <td><strong style="color: var(--accent-emerald);">${pipeBest.name}</strong></td>
-                        <td><span class="pill pill-target" style="font-size: 10px;">Algorithm-Constrained</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Macro F1-Score</strong></td>
-                        <td><strong>${baseF1.toFixed(1)}%</strong></td>
-                        <td><strong style="color: var(--accent-emerald); font-size: 14px;">${pipeF1.toFixed(1)}%</strong></td>
-                        <td>
-                            <strong style="color: ${deltaF1 >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)'}; font-size: 13.5px;">
-                                ${deltaF1 >= 0 ? `+${deltaF1.toFixed(1)}%` : `${deltaF1.toFixed(1)}%`}
-                            </strong>
-                            ${deltaF1 > 0 ? ' 🏆 Improved' : (deltaF1 === 0 ? ' 🤝 Parity' : '')}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td><strong>Test Accuracy</strong></td>
-                        <td><strong>${baseAcc.toFixed(1)}%</strong></td>
-                        <td><strong style="color: var(--accent-emerald); font-size: 14px;">${pipeAcc.toFixed(1)}%</strong></td>
-                        <td>
-                            <strong style="color: ${deltaAcc >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)'}; font-size: 13.5px;">
-                                ${deltaAcc >= 0 ? `+${deltaAcc.toFixed(1)}%` : `${deltaAcc.toFixed(1)}%`}
-                            </strong>
-                            ${deltaAcc > 0 ? ' 🏆 Improved' : (deltaAcc === 0 ? ' 🤝 Parity' : '')}
-                        </td>
-                    </tr>
-                    ${baseAuc !== null && pipeAuc !== null ? `
-                    <tr>
-                        <td><strong>AUC-ROC (Binary Discrimination)</strong></td>
-                        <td>${baseAuc.toFixed(3)}</td>
-                        <td><strong style="color: var(--accent-cyan); font-size: 14px;">${pipeAuc.toFixed(3)}</strong></td>
-                        <td>
-                            <strong style="color: ${deltaAuc >= 0 ? 'var(--accent-emerald)' : 'var(--accent-rose)'}; font-size: 13.5px;">
-                                ${deltaAuc >= 0 ? `+${deltaAuc.toFixed(3)}` : `${deltaAuc.toFixed(3)}`}
-                            </strong>
-                        </td>
-                    </tr>` : ''}
-                    <tr>
-                        <td><strong>Data Leakage Risk</strong></td>
-                        <td style="color: var(--text-muted);">⚠️ Imputer fitted across cohort</td>
-                        <td><strong style="color: var(--accent-emerald);">🔒 Certified Zero Leakage (Split First)</strong></td>
-                        <td><span class="vif-badge-ok">Clinically Validated</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Multicollinearity Control</strong></td>
-                        <td style="color: var(--text-muted);">⚠️ Raw Collinear Features</td>
-                        <td><strong style="color: var(--accent-emerald);">🛡️ VIF > 5.0 Pruned</strong></td>
-                        <td><span class="vif-badge-ok">Variance Stabilized</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Class Imbalance Mitigation</strong></td>
-                        <td style="color: var(--text-muted);">⚠️ Raw Distribution</td>
-                        <td><strong style="color: var(--accent-emerald);">⚖️ SMOTENC (Train Only)</strong></td>
-                        <td><span class="vif-badge-ok">Minority Bias Eliminated</span></td>
-                    </tr>
-                    <tr>
-                        <td><strong>Dimensionality & Noise</strong></td>
-                        <td style="color: var(--text-muted);">All Variables Retained</td>
-                        <td><strong style="color: var(--accent-emerald);">🎯 Bottom 30% MDI Pruned</strong></td>
-                        <td><span class="vif-badge-ok">Curse of Dim. Averted</span></td>
-                    </tr>
+                    ${row('Top-ranked model', escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()), escapeHtml(pipeBest.name), '')}
+                    ${metricRows}
+                    ${row('Imputation / scaling', '<span style="color: var(--text-muted);">Fitted on the full cohort before splitting</span>', 'Fitted on the training split only', '')}
+                    ${row('Collinearity handling', '<span style="color: var(--text-muted);">None (all features kept)</span>', `Correlation & VIF review; ${AppState.pipeline.droppedFeatures.size} feature(s) excluded overall`, '')}
+                    ${row('Class imbalance', '<span style="color: var(--text-muted);">Original distribution</span>',
+                        isClassification ? (sm && sm.applied ? `SMOTENC on training split (+${sm.syntheticCountGenerated} synthetic rows)` : 'SMOTENC not applied (not imbalanced)') : 'Not applicable (regression)', '')}
+                    ${row('Feature pruning', '<span style="color: var(--text-muted);">All features</span>', 'Bottom 30% RF-importance features removed for k-NN & Naive Bayes only', '')}
                 </tbody>
             </table>
 
-            <div class="pipeline-alert pipeline-alert-success" style="margin-top: 10px;">
+            <div class="pipeline-alert pipeline-alert-info" style="margin-top: 10px;">
                 <div style="font-size: 20px;">🔬</div>
                 <div>
-                    <strong>Summary & Recommendation:</strong> The 7-Step Pipeline delivers 
-                    <strong>${deltaF1 >= 0 ? `+${deltaF1.toFixed(1)}% higher F1-score` : 'robust generalizability'}</strong> 
-                    with complete data leakage elimination, non-linear SMOTENC minority synthesis, and multicollinearity suppression.
+                    <strong>Summary:</strong> ${headline} To establish a genuine difference, compare both workflows on the same independent validation cohort or with repeated cross-validation.
                 </div>
             </div>
         `;
@@ -4377,23 +4636,27 @@
                 step_1_split_and_strict_imputation: {
                     train_records: AppState.pipeline.trainRows.length,
                     test_records: AppState.pipeline.testRows.length,
+                    rows_excluded_missing_outcome: AppState.pipeline.excludedMissingTarget || 0,
+                    split_seed: AppState.pipeline.seed,
                     imputation_strategy: AppState.pipeline.imputeStrategy,
                     leak_free_audit: AppState.pipeline.imputer.fillValues
                 },
-                step_2_normality_and_correlation: {
+                step_2_skewness_and_correlation: {
                     continuous_features_analyzed: Object.keys(AppState.pipeline.normalityMap),
-                    normality_assessment: AppState.pipeline.normalityMap,
+                    skewness_screen_rule: '|g1| <= 1 treated as approximately symmetric (rule of thumb, not a formal normality test)',
+                    skewness_assessment: AppState.pipeline.normalityMap,
                     high_correlation_pairs: AppState.pipeline.corrPairs.filter(p => p.isHigh)
                 },
                 step_3_vif_check: {
                     vif_scores: AppState.pipeline.vifResults,
-                    permanently_dropped_features: Array.from(AppState.pipeline.droppedFeatures)
+                    excluded_features_all_steps: Array.from(AppState.pipeline.droppedFeatures)
                 },
                 step_4_univariate_testing: {
                     baseline_rankings: AppState.pipeline.univariateResults
                 },
                 step_5_smotenc_imbalance_handling: {
                     applied: AppState.pipeline.smotencResult?.applied,
+                    reason: AppState.pipeline.smotencResult?.reason,
                     minority_percentage_before: AppState.pipeline.smotencResult?.minorityPctBefore,
                     minority_percentage_after: AppState.pipeline.smotencResult?.minorityPctAfter,
                     synthetic_instances_generated: AppState.pipeline.smotencResult?.syntheticCountGenerated || 0
@@ -4403,17 +4666,24 @@
                     top_70_features: AppState.pipeline.top70Features,
                     bottom_30_features: AppState.pipeline.bottom30Features
                 },
+                step_7_model_selection_note: 'Models are ranked best-first on the held-out test split; the top model is selected on that same split, so its score is optimistically biased.',
                 step_7_constrained_model_benchmark: AppState.pipeline.benchmarkResults.map(b => ({
                     model_id: b.id,
                     model_name: b.name,
                     features_used: b.eval.featuresUsed,
                     constraint_note: b.eval.constraintNote,
-                    metrics: {
-                        f1_score: b.eval.macroF1,
-                        precision: b.eval.macroPrecision,
-                        recall: b.eval.macroRecall,
+                    metrics: b.eval.isClassification ? {
+                        f1_score_macro: b.eval.macroF1,
+                        precision_macro: b.eval.macroPrecision,
+                        recall_macro: b.eval.macroRecall,
                         auc_roc: b.eval.rocAuc,
-                        accuracy: b.eval.accuracy
+                        accuracy: b.eval.accuracy,
+                        positive_class: b.eval.positiveClass
+                    } : {
+                        r2: b.eval.r2,
+                        rmse: b.eval.rmse,
+                        mae: b.eval.mae,
+                        mse: b.eval.mse
                     },
                     confusion_matrix: b.eval.confMatrix
                 }))
@@ -4435,7 +4705,6 @@
     document.addEventListener('DOMContentLoaded', () => {
         initDOM();
         setupEventListeners();
-        setModelScope('single');
     });
 
 })();
