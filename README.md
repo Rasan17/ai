@@ -191,14 +191,17 @@ The benchmark runs the app's own engine (with the real TensorFlow.js network) on
 
 ## 🚀 How to Run
 
-Because the application is built entirely with client-side web technologies, no server installation, node packages, or build steps are required:
-1. Double-click `index.html` to open directly in any modern web browser (Safari, Chrome, Edge, Firefox).
-2. Alternatively, serve via any local web server:
+**Online:** open **https://rasan17.github.io/ai/** in any modern browser (Safari, Chrome, Edge, Firefox). Everything runs in your browser; uploaded data never leaves your computer.
+
+**Locally:** the application is built entirely with client-side web technologies, so no installation, node packages or build steps are required.
+1. Download the repository (`git clone https://github.com/Rasan17/ai.git`, or *Code → Download ZIP* on GitHub).
+2. Serve the folder with any local web server and open it in the browser:
    ```bash
-   cd "universal-medical-ml-predictor"
+   cd ai
    python3 -m http.server 8080
    ```
    Then navigate to `http://localhost:8080`.
+3. Double-clicking `index.html` also opens the app and works with your own uploaded CSV files, but browsers block the built-in sample cohorts from loading over `file://`, so use a local server (or the online version) for those.
 
 ---
 
