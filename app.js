@@ -520,15 +520,7 @@
         if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.addEventListener('click', executePipelineStep7);
         if (DOM.pipelineDownloadReportBtn) DOM.pipelineDownloadReportBtn.addEventListener('click', downloadPipelineProtocolReport);
         if (DOM.pipelineDirectLaunchBtn) {
-            DOM.pipelineDirectLaunchBtn.addEventListener('click', () => {
-                if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
-                    alert("Please select a sample medical cohort (e.g. 🫀 Cardiometabolic Risk or 🧠 Neurosurgical Shunt Response) or upload a clinical CSV first.");
-                    return;
-                }
-                goToStep('pipeline');
-                initPipelineUI();
-                goToPipelineSubstep(AppState.pipeline && AppState.pipeline.substep ? AppState.pipeline.substep : 1);
-            });
+            DOM.pipelineDirectLaunchBtn.addEventListener('click', (e) => window.launch7StepPipeline(e));
         }
         if (DOM.pipelineToSinglePredictBtn) {
             DOM.pipelineToSinglePredictBtn.addEventListener('click', () => {
@@ -1025,6 +1017,28 @@
         if (AppState.charts.loss) AppState.charts.loss.update();
     }
 
+    window.launch7StepPipeline = async function(event) {
+        if (event) {
+            try {
+                if (typeof event.preventDefault === 'function') event.preventDefault();
+                if (typeof event.stopPropagation === 'function') event.stopPropagation();
+            } catch (err) {}
+        }
+
+        // If dataset is not loaded yet, auto-load the default clinical cohort so the user is never blocked
+        if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
+            try {
+                await loadSampleDataset('medical_shunt_cohort.csv', 'Neurosurgical Shunt Response Cohort');
+            } catch (err) {
+                console.warn("Auto-load shunt cohort error:", err);
+            }
+        }
+
+        goToStep('pipeline');
+        initPipelineUI();
+        goToPipelineSubstep(AppState.pipeline && AppState.pipeline.substep ? AppState.pipeline.substep : 1);
+    };
+
     function goToStep(stepNum) {
         // Enforce prerequisites
         if (stepNum !== 'pipeline') {
@@ -1058,7 +1072,9 @@
 
         DOM.stepContents.forEach(content => {
             const s = content.dataset.step;
-            content.classList.toggle('active', String(s) === String(stepNum));
+            const isActive = String(s) === String(stepNum);
+            content.classList.toggle('active', isActive);
+            content.style.display = isActive ? 'flex' : 'none';
         });
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2922,7 +2938,9 @@
 
         if (DOM.pipelinePanels) {
             DOM.pipelinePanels.forEach(panel => {
-                panel.classList.toggle('active', panel.id === `pipeline-panel-${substepNum}`);
+                const isActive = panel.id === `pipeline-panel-${substepNum}`;
+                panel.classList.toggle('active', isActive);
+                panel.style.display = isActive ? 'block' : 'none';
             });
         }
 

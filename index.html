@@ -6,7 +6,7 @@
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Deep Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 
@@ -126,7 +126,7 @@
                         <button id="to-step-2-btn" class="btn btn-secondary">
                             Standard Workflow: Variable Roles (Step 2) &rarr;
                         </button>
-                        <button id="pipeline-direct-launch-btn" class="btn btn-emerald">
+                        <button id="pipeline-direct-launch-btn" class="btn btn-emerald" onclick="window.launch7StepPipeline && window.launch7StepPipeline(event)">
                             🔬 Launch 7-Step Clinical Pipeline &rarr;
                         </button>
                     </div>
@@ -1652,8 +1652,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js"></script>
-    <script src="models.js?v=2"></script>
-    <script src="app.js?v=2"></script>
+    <script src="data-engine.js?v=5"></script>
+    <script src="models.js?v=5"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>
