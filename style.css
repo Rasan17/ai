@@ -1201,3 +1201,217 @@ body {
     animation: fadeInSlide 0.25s ease-out;
 }
 
+/* ==========================================================================
+   7-STEP CLINICAL ML PIPELINE STYLES
+   ========================================================================== */
+.pipeline-subnav {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 10px 14px;
+    background: var(--bg-surface-subtle);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+.pipeline-step-pill {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: var(--transition-fast);
+}
+
+.pipeline-step-pill:hover {
+    color: var(--text-primary);
+    border-color: var(--accent-cyan);
+}
+
+.pipeline-step-pill.active {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(6, 182, 212, 0.2));
+    border-color: var(--accent-emerald);
+    color: var(--accent-emerald);
+    box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+}
+
+.pipeline-step-pill.completed {
+    border-color: rgba(16, 185, 129, 0.4);
+    color: var(--text-primary);
+}
+
+.pipeline-step-pill.completed .sub-badge {
+    background: var(--accent-emerald);
+    color: #ffffff;
+}
+
+.pipeline-step-pill .sub-badge {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--bg-surface-elevated);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.pipeline-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--card-radius);
+    padding: 24px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow-soft);
+}
+
+.pipeline-step-panel {
+    display: none;
+    animation: fadeIn 0.25s ease-out;
+}
+
+.pipeline-step-panel.active {
+    display: block;
+}
+
+.pipeline-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 18px;
+    border-radius: var(--radius-md);
+    margin-bottom: 18px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.pipeline-alert-info {
+    background: rgba(6, 182, 212, 0.08);
+    border: 1px solid rgba(6, 182, 212, 0.3);
+    color: var(--text-primary);
+}
+
+.pipeline-alert-success {
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: var(--text-primary);
+}
+
+.pipeline-alert-warning {
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: var(--text-primary);
+}
+
+.pipeline-alert-danger {
+    background: rgba(244, 63, 94, 0.08);
+    border: 1px solid rgba(244, 63, 94, 0.3);
+    color: var(--text-primary);
+}
+
+.corr-pair-card {
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 14px;
+    transition: var(--transition-fast);
+}
+
+.corr-pair-card.high-corr {
+    border-color: rgba(244, 63, 94, 0.4);
+    background: rgba(244, 63, 94, 0.04);
+}
+
+.corr-pair-card.dropped {
+    opacity: 0.55;
+    border-style: dashed;
+}
+
+.vif-badge-danger {
+    background: rgba(244, 63, 94, 0.15);
+    color: var(--accent-rose);
+    border: 1px solid rgba(244, 63, 94, 0.3);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    font-weight: 700;
+    font-size: 11px;
+}
+
+.vif-badge-ok {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--accent-emerald);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    font-weight: 700;
+    font-size: 11px;
+}
+
+.rf-importance-bar-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 20px 0;
+}
+
+.rf-importance-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 70px 100px;
+    align-items: center;
+    gap: 12px;
+    font-size: 12.5px;
+}
+
+.rf-meter-track {
+    background: var(--bg-surface-elevated);
+    height: 18px;
+    border-radius: 9px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--border-color);
+}
+
+.rf-meter-fill {
+    height: 100%;
+    border-radius: 9px;
+    transition: width 0.5s ease-out;
+}
+
+.rf-meter-fill.top-tier {
+    background: linear-gradient(90deg, var(--accent-emerald), var(--accent-cyan));
+}
+
+.rf-meter-fill.bottom-tier {
+    background: linear-gradient(90deg, var(--accent-amber), var(--accent-rose));
+}
+
+.cutoff-line-notice {
+    padding: 10px 14px;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px dashed var(--accent-amber);
+    border-radius: var(--radius-md);
+    margin: 14px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-amber);
+}
+

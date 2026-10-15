@@ -67,6 +67,10 @@
                 <span class="badge">6</span>
                 <span>Batch Prediction</span>
             </button>
+            <button class="step-tab" data-step="pipeline" id="tab-step-pipeline" style="border: 1px solid rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.08);">
+                <span class="badge" style="background: linear-gradient(135deg, #10b981, #06b6d4); color: white;">🔬</span>
+                <span style="font-weight: 700; color: var(--accent-emerald);">7-Step Pipeline</span>
+            </button>
         </nav>
 
         <!-- ===================================================================
@@ -1113,6 +1117,398 @@
 
                         <div id="batch-table-container" class="table-container"></div>
                     </div>
+                </div>
+            </section>
+
+            <!-- ===================================================================
+                 STANDALONE TAB: 7-STEP CLINICAL ML PIPELINE
+                 Strictly ordered leak-free pipeline with internal sub-stepper
+                 Conceived & designed by Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)
+                 =================================================================== -->
+            <section class="step-content" data-step="pipeline" id="step-pipeline-content">
+                <div class="card" style="border: 1px solid rgba(16, 185, 129, 0.35);">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <h2 style="display: flex; align-items: center; gap: 10px;">
+                                <span>🔬</span>
+                                <span style="background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Strictly Ordered 7-Step Clinical ML Pipeline</span>
+                            </h2>
+                            <p>End-to-end leak-free clinical ML protocol: 80/20 train/test split with strict training-only imputation, normality & correlation testing (Pearson vs Spearman), VIF multicollinearity elimination, univariate baselines, SMOTENC balancing, Random Forest feature scout, and algorithm-constrained final evaluation.</p>
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                            <span class="pill pill-target" style="font-size: 11px;">🛡️ Zero Data Leakage</span>
+                            <span class="pill pill-feature" style="font-size: 11px;">⚙️ Algorithm-Constrained</span>
+                            <span class="pill pill-continuous" style="font-size: 11px;">🏥 Clinical Metrics</span>
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Sub-stepper Nav -->
+                    <div class="pipeline-subnav" id="pipeline-subnav">
+                        <button class="pipeline-step-pill active" data-substep="1" id="subpill-1">
+                            <span class="sub-badge">1</span>
+                            <span>Split & Impute</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="2" id="subpill-2">
+                            <span class="sub-badge">2</span>
+                            <span>Normality & Correlation</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="3" id="subpill-3">
+                            <span class="sub-badge">3</span>
+                            <span>VIF Collinearity</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="4" id="subpill-4">
+                            <span class="sub-badge">4</span>
+                            <span>Univariate Baseline</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="5" id="subpill-5">
+                            <span class="sub-badge">5</span>
+                            <span>SMOTENC Balancing</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="6" id="subpill-6">
+                            <span class="sub-badge">6</span>
+                            <span>RF Feature Scout</span>
+                        </button>
+                        <button class="pipeline-step-pill" data-substep="7" id="subpill-7">
+                            <span class="sub-badge">7</span>
+                            <span>Constrained Benchmark</span>
+                        </button>
+                    </div>
+
+                    <!-- Dataset Status Bar in Pipeline -->
+                    <div id="pipeline-dataset-status-bar" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 16px; background: var(--bg-surface-elevated); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-bottom: 20px;">
+                        <div style="font-size: 13px;">
+                            <span style="color: var(--text-muted); font-weight: 600;">Active Pipeline Dataset:</span>
+                            <strong id="pipeline-dataset-name" style="color: var(--accent-cyan); margin-left: 6px;">No dataset loaded yet</strong>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button id="pipeline-load-cardio-btn" class="dataset-pill" style="font-size: 11.5px; padding: 4px 10px;">
+                                🫀 Cardiometabolic Cohort
+                            </button>
+                            <button id="pipeline-load-shunt-btn" class="dataset-pill" style="font-size: 11.5px; padding: 4px 10px;">
+                                🧠 Neurosurgical Shunt Cohort
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 1 PANEL: Train/Test Split & Strict Imputation
+                         ======================================================= -->
+                    <div class="pipeline-step-panel active" id="pipeline-panel-1">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">ℹ️</div>
+                            <div>
+                                <strong>Step 1: Train/Test Split & Strict Imputation</strong><br>
+                                Immediately splits the uploaded dataset into an 80% Training set and 20% Testing set. Missing values are identified and an imputer is fitted strictly on the Training set only. Both sets are then transformed using this fitted imputer to mathematically prevent data leakage.
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;">
+                            <div class="form-group">
+                                <label class="form-label">Train / Test Split Ratio:</label>
+                                <select id="pipeline-split-ratio" class="form-select" disabled>
+                                    <option value="0.8" selected>80% Training / 20% Testing (Standard Protocol)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Continuous Imputation Strategy:</label>
+                                <select id="pipeline-impute-strategy" class="form-select">
+                                    <option value="median" selected>Median (Recommended for Clinical Data)</option>
+                                    <option value="mean">Mean</option>
+                                </select>
+                                <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Categorical variables strictly imputed via Training Mode.</span>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Reproducibility Seed:</label>
+                                <div style="display: flex; gap: 8px;">
+                                    <input type="number" id="pipeline-seed-input" class="form-input" value="42" placeholder="42">
+                                    <button id="pipeline-seed-random-btn" class="btn btn-secondary btn-sm" title="Generate New Seed">🎲</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: flex-end; margin-bottom: 20px;">
+                            <button id="pipeline-step1-run-btn" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent-emerald), #059669);">
+                                ⚡ Run Step 1: Split & Impute (Strictly on Train)
+                            </button>
+                        </div>
+
+                        <!-- Step 1 Results Box -->
+                        <div id="pipeline-step1-results" style="display: none;">
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 20px;">
+                                <div class="stat-card" style="border-left: 4px solid var(--accent-cyan);">
+                                    <div class="stat-value" id="pipeline-train-count">-</div>
+                                    <div class="stat-label">Training Records (80%)</div>
+                                </div>
+                                <div class="stat-card" style="border-left: 4px solid var(--accent-indigo);">
+                                    <div class="stat-value" id="pipeline-test-count">-</div>
+                                    <div class="stat-label">Testing Records (20%)</div>
+                                </div>
+                                <div class="stat-card" style="border-left: 4px solid var(--accent-emerald);">
+                                    <div class="stat-value" id="pipeline-missing-imputed-count">-</div>
+                                    <div class="stat-label">Missing Values Imputed</div>
+                                </div>
+                            </div>
+
+                            <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
+                                <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
+                                    🛡️ Strict Training Set Imputer Parameters (Zero Leakage Audit)
+                                </h4>
+                                <div id="pipeline-imputer-table-container" class="table-container"></div>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                                <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-emerald); font-weight: 600; font-size: 13px;">
+                                    <span>✅ Step 1 Complete: Train & Test sets prepared with zero data leakage.</span>
+                                </div>
+                                <button id="pipeline-to-step2-btn" class="btn btn-emerald">
+                                    Proceed to Step 2: Correlation Check &rarr;
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 2 PANEL: Continuous Variable Correlation Check
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-2">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">📊</div>
+                            <div>
+                                <strong>Step 2: Continuous Variable Correlation Check (Pearson vs. Spearman)</strong><br>
+                                Continuous variables in the Training set are evaluated for normality via skewness within [-1, 1]. Pearson (r) is calculated when both variables are normal; Spearman (ρ) is calculated if one or both are skewed. High-collinearity pairs (|r| or |ρ| &ge; 0.8) are presented below to allow dropping one or keeping both.
+                            </div>
+                        </div>
+
+                        <!-- Continuous Normality Table -->
+                        <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
+                            <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
+                                📈 Training Continuous Variables Normality Assessment (Skewness Test)
+                            </h4>
+                            <div id="pipeline-normality-table-container" class="table-container"></div>
+                        </div>
+
+                        <!-- High Correlation Pairs Section -->
+                        <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary);">
+                                        ⚠️ Collinear Variable Pairs (|Correlation| &ge; 0.8)
+                                    </h4>
+                                    <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                                        Select which redundant variable to drop from both Train and Test sets, or choose to keep both.
+                                    </p>
+                                </div>
+                                <span id="pipeline-corr-pair-counter" class="pill pill-target" style="font-size: 11px;">0 High Pairs</span>
+                            </div>
+
+                            <div id="pipeline-corr-pairs-container">
+                                <p style="padding: 16px; color: var(--text-muted); text-align: center;">Click "Analyze Correlations" below to evaluate continuous pairs.</p>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <button id="pipeline-run-corr-btn" class="btn btn-secondary">
+                                🔄 Refresh Normality & Correlation Check
+                            </button>
+                            <button id="pipeline-to-step3-btn" class="btn btn-emerald">
+                                Proceed to Step 3: VIF Collinearity Check &rarr;
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 3 PANEL: Variance Inflation Factor (VIF) Check
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-3">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">📐</div>
+                            <div>
+                                <strong>Step 3: Variance Inflation Factor (VIF) Check</strong><br>
+                                Categorical variables are one-hot encoded (dropping reference category to eliminate dummy trap) and continuous variables standardized. VIF is computed for all surviving features. Features with VIF &gt; 5 indicate severe multicollinearity and can be permanently eliminated from both Train and Test sets.
+                            </div>
+                        </div>
+
+                        <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 10px;">
+                                <div>
+                                    <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary);">
+                                        Features Multicollinearity Table (VIF & R²)
+                                    </h4>
+                                    <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                                        VIF &gt; 5 indicates high multicollinearity ($R^2 &gt; 0.80$). Check variables to drop and click 'Drop Selected Features'.
+                                    </p>
+                                </div>
+                                <button id="pipeline-drop-vif-btn" class="btn btn-rose btn-sm" disabled>
+                                    🗑️ Drop Selected High-VIF Features
+                                </button>
+                            </div>
+
+                            <div id="pipeline-vif-table-container" class="table-container"></div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <button id="pipeline-run-vif-btn" class="btn btn-secondary">
+                                🔄 Recompute VIF Scores
+                            </button>
+                            <button id="pipeline-to-step4-btn" class="btn btn-emerald">
+                                Proceed to Step 4: Univariate Testing &rarr;
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 4 PANEL: Univariate Statistical Testing Check
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-4">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">🧪</div>
+                            <div>
+                                <strong>Step 4: Univariate Statistical Testing Check</strong><br>
+                                Informational baseline testing of surviving original variables against the Target: One-Way ANOVA (or t-test) for continuous features and Pearson Chi-Square (χ²) for categorical features. Variables are sorted from lowest p-value to highest. Variables are NOT automatically dropped at this step.
+                            </div>
+                        </div>
+
+                        <div class="card" style="background: var(--bg-surface-elevated); padding: 16px; margin-bottom: 20px;">
+                            <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px;">
+                                📑 Univariate Statistical Screening Baseline (Sorted by p-value Ascending)
+                            </h4>
+                            <div id="pipeline-univariate-table-container" class="table-container"></div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <span style="font-size: 12px; color: var(--text-muted);">
+                                ℹ️ Purely informational baseline to screen predictor-target associations before model training.
+                            </span>
+                            <button id="pipeline-to-step5-btn" class="btn btn-emerald">
+                                Proceed to Step 5: SMOTENC Imbalance Handling &rarr;
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 5 PANEL: Imbalance Handling (SMOTENC)
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-5">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">⚖️</div>
+                            <div>
+                                <strong>Step 5: Imbalance Handling (SMOTENC)</strong><br>
+                                Evaluates target variable distribution strictly in the Training set. If the minority class represents &lt; 30% of the training cohort, SMOTENC is applied to synthesize minority samples while preserving categorical feature indices. The Testing set is strictly NEVER resampled or altered.
+                            </div>
+                        </div>
+
+                        <div id="pipeline-smotenc-container" class="card" style="background: var(--bg-surface-elevated); padding: 20px; margin-bottom: 20px;">
+                            <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                                Evaluating Training set class balance...
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <div style="display: flex; align-items: center; gap: 8px; color: var(--accent-cyan); font-size: 12.5px; font-weight: 600;">
+                                🔒 Strict Leak Prevention: Testing set remains 100% unaltered to test true clinical prevalence.
+                            </div>
+                            <button id="pipeline-to-step6-btn" class="btn btn-emerald">
+                                Proceed to Step 6: RF Feature Scout &rarr;
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 6 PANEL: Model-Driven Feature Ranking (Random Forest Scout)
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-6">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">🌲</div>
+                            <div>
+                                <strong>Step 6: Model-Driven Feature Ranking (Random Forest Scout)</strong><br>
+                                Trains a Random Forest scout on the SMOTENC-balanced Training set. Mean Decrease in Impurity (MDI) importance scores are extracted for all surviving features. A 30% cutoff threshold is identified to prune features for dimensionality-sensitive algorithms (k-NN & Naive Bayes) in Step 7.
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: flex-end; margin-bottom: 16px;">
+                            <button id="pipeline-run-rf-scout-btn" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent-purple), var(--accent-indigo));">
+                                🌲 Run Random Forest Scout & Feature Ranking
+                            </button>
+                        </div>
+
+                        <div class="card" style="background: var(--bg-surface-elevated); padding: 20px; margin-bottom: 20px;">
+                            <h4 style="font-size: 13.5px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px;">
+                                📊 Ranked Feature Importance (Random Forest Impurity Reduction)
+                            </h4>
+                            <div id="pipeline-rf-importance-container">
+                                <p style="padding: 20px; color: var(--text-muted); text-align: center;">Click 'Run Random Forest Scout' above to compute feature rankings.</p>
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                            <div style="font-size: 12.5px; color: var(--text-secondary);">
+                                💡 k-NN & Gaussian Naive Bayes will automatically train only on the Top 70% features.
+                            </div>
+                            <button id="pipeline-to-step7-btn" class="btn btn-emerald" disabled>
+                                Proceed to Step 7: Train Constrained Models &rarr;
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- =======================================================
+                         SUB-STEP 7 PANEL: Algorithm-Specific Training & Constraints
+                         ======================================================= -->
+                    <div class="pipeline-step-panel" id="pipeline-panel-7">
+                        <div class="pipeline-alert pipeline-alert-info">
+                            <div style="font-size: 18px;">🎯</div>
+                            <div>
+                                <strong>Step 7: Algorithm-Specific Training & Constraints</strong><br>
+                                Applies strict stability constraints to each algorithm:
+                                <ul style="margin: 6px 0 0 20px; font-size: 12.5px;">
+                                    <li><strong>k-NN & Gaussian Naive Bayes:</strong> Automatically drop bottom 30% features (combat curse of dimensionality).</li>
+                                    <li><strong>Deep Neural Network (DNN):</strong> Enforces L2 Regularization (weight decay) + Dropout layers against overfitting.</li>
+                                    <li><strong>Logistic / Ridge Regression:</strong> Applies L2 penalization to stabilize any remaining minor collinearity.</li>
+                                    <li><strong>Super Learner (Ensemble):</strong> Fits StandardScaler strictly on Training set and applies to Testing set with one-hot encoding.</li>
+                                </ul>
+                                All models are evaluated strictly on the unaltered Testing set emphasizing clinical metrics (F1-Score, Precision, Recall, AUC-ROC, Accuracy).
+                            </div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 20px;">
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <label class="form-label" style="margin: 0;">Evaluation Seed:</label>
+                                <input type="number" id="pipeline-eval-seed-input" class="form-input" style="width: 100px;" value="42">
+                            </div>
+                            <button id="pipeline-train-models-btn" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan)); font-weight: 700; padding: 12px 24px;">
+                                🚀 Train Constrained Models & Benchmark on Unaltered Test Set
+                            </button>
+                        </div>
+
+                        <div id="pipeline-train-status" class="train-status-box" style="display: none; margin-bottom: 20px;">
+                            <div class="spinner"></div>
+                            <span id="pipeline-train-status-text">Training algorithm-constrained clinical models...</span>
+                        </div>
+
+                        <!-- Results Dashboard -->
+                        <div id="pipeline-results-container" style="display: none;">
+                            <!-- Leaderboard Table -->
+                            <div class="card" style="background: var(--bg-surface-elevated); padding: 20px; margin-bottom: 20px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
+                                    <h4 style="font-size: 14px; font-weight: 700; color: var(--text-primary);">
+                                        🏆 Clinical Models Performance Benchmark (Evaluated Strictly on Unaltered Test Set)
+                                    </h4>
+                                    <button id="pipeline-download-report-btn" class="btn btn-secondary btn-sm">
+                                        📄 Download Clinical Protocol Report (.JSON)
+                                    </button>
+                                </div>
+                                <div id="pipeline-leaderboard-container" class="table-container"></div>
+                            </div>
+
+                            <!-- 2x2 Confusion Matrices Grid -->
+                            <div class="card" style="background: var(--bg-surface-elevated); padding: 20px;">
+                                <h4 style="font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 14px;">
+                                    🎯 2×2 Diagnostic Concordance & Confusion Matrices (Unaltered Test Set)
+                                </h4>
+                                <div id="pipeline-cm-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px;"></div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
         </main>

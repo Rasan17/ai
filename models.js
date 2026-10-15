@@ -220,7 +220,7 @@
         fit(X, y) {
             const numSamples = X.length;
             const numFeatures = X[0].length;
-            
+
             let maxFeatures = Math.max(1, Math.floor(this.isClassification ? Math.sqrt(numFeatures) : numFeatures / 3));
             if (this.featureRatio === 'all') {
                 maxFeatures = numFeatures;
@@ -504,10 +504,10 @@
                 Object.keys(weightedCounts).forEach(k => {
                     probs[k] = Number((weightedCounts[k] / (totalWeight || 1)).toFixed(4));
                 });
-                return { 
-                    pred: majority, 
-                    probabilities: probs, 
-                    confidence: Number((maxW / (totalWeight || 1)).toFixed(4)) 
+                return {
+                    pred: majority,
+                    probabilities: probs,
+                    confidence: Number((maxW / (totalWeight || 1)).toFixed(4))
                 };
             } else {
                 let weightedSum = 0;
@@ -830,8 +830,8 @@
             this.isClassification = isClassification;
             this.numClasses = numClasses;
             this.voting = config.voting || 'soft'; // 'soft', 'weighted', 'hard'
-            this.selectedBaseIds = config.baseModels && config.baseModels.length > 0 
-                ? config.baseModels 
+            this.selectedBaseIds = config.baseModels && config.baseModels.length > 0
+                ? config.baseModels
                 : ['nn', 'rf', 'glm'];
             this.seed = config.seed !== null && config.seed !== undefined && config.seed !== '' ? Number(config.seed) : null;
             this.rng = createPRNG(this.seed);
@@ -1277,6 +1277,22 @@
             }
         },
 
+        evaluateModel(model, testX, testY, isClassificationOrClasses = true, targetClassesOrStats = []) {
+            let isClassification = true;
+            let targetClasses = [];
+            if (typeof isClassificationOrClasses === 'boolean') {
+                isClassification = isClassificationOrClasses;
+                targetClasses = Array.isArray(targetClassesOrStats) ? targetClassesOrStats : [];
+            } else if (Array.isArray(isClassificationOrClasses)) {
+                targetClasses = isClassificationOrClasses;
+                isClassification = targetClasses.length > 0;
+            } else if (model && model.isClassification !== undefined) {
+                isClassification = Boolean(model.isClassification);
+                targetClasses = Array.isArray(targetClassesOrStats) ? targetClassesOrStats : [];
+            }
+            return this.evaluate(model, testX, testY, isClassification, targetClasses);
+        },
+
         _calculateBinaryAUC(yTrue, yScores) {
             // Rank-based Mann-Whitney U test calculation for ROC AUC
             const items = yTrue.map((val, idx) => ({ y: val, score: yScores[idx] }));
@@ -1305,4 +1321,11 @@
     };
 
     window.ModelEngine = ModelEngine;
+    window.ModelFactory = ModelEngine;
+    window.RandomForest = RandomForest;
+    window.KNNModel = KNNModel;
+    window.GeneralizedLinearModel = GeneralizedLinearModel;
+    window.DeepNeuralNetwork = DeepNeuralNetwork;
+    window.GaussianNaiveBayes = GaussianNaiveBayes;
+    window.EnsembleModel = EnsembleModel;
 })(window);

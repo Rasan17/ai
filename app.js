@@ -36,7 +36,32 @@
         selectedModelIds: ['nn'],
         activeHyperparamModelId: 'nn',
         allTestedResults: null,
-        deployedModelId: 'nn'
+        deployedModelId: 'nn',
+        // 7-Step Clinical ML Pipeline State
+        pipeline: {
+            substep: 1,
+            seed: 42,
+            evalSeed: 42,
+            imputeStrategy: 'median',
+            trainRows: null,
+            testRows: null,
+            balancedTrainRows: null,
+            imputer: null,
+            featureCols: [],
+            targetCol: null,
+            columnConfigs: {},
+            droppedFeatures: new Set(),
+            normalityMap: {},
+            corrPairs: [],
+            vifResults: [],
+            univariateResults: [],
+            smotencResult: null,
+            rfScout: null,
+            rfImportance: [],
+            top70Features: [],
+            bottom30Features: [],
+            benchmarkResults: []
+        }
     };
 
     // Model Metadata & Lookup
@@ -132,6 +157,48 @@
         DOM.batchResultsCard = document.getElementById('batch-results-card');
         DOM.batchTableContainer = document.getElementById('batch-table-container');
         DOM.downloadBatchCsvBtn = document.getElementById('download-batch-csv-btn');
+
+        // 7-Step Clinical ML Pipeline DOM References
+        DOM.tabPipeline = document.getElementById('tab-step-pipeline');
+        DOM.pipelineDatasetName = document.getElementById('pipeline-dataset-name');
+        DOM.pipelineLoadCardioBtn = document.getElementById('pipeline-load-cardio-btn');
+        DOM.pipelineLoadShuntBtn = document.getElementById('pipeline-load-shunt-btn');
+        DOM.pipelineSubPills = document.querySelectorAll('.pipeline-step-pill');
+        DOM.pipelinePanels = document.querySelectorAll('.pipeline-step-panel');
+        DOM.pipelineSeedInput = document.getElementById('pipeline-seed-input');
+        DOM.pipelineSeedRandomBtn = document.getElementById('pipeline-seed-random-btn');
+        DOM.pipelineImputeStrategy = document.getElementById('pipeline-impute-strategy');
+        DOM.pipelineStep1RunBtn = document.getElementById('pipeline-step1-run-btn');
+        DOM.pipelineStep1Results = document.getElementById('pipeline-step1-results');
+        DOM.pipelineTrainCount = document.getElementById('pipeline-train-count');
+        DOM.pipelineTestCount = document.getElementById('pipeline-test-count');
+        DOM.pipelineMissingImputedCount = document.getElementById('pipeline-missing-imputed-count');
+        DOM.pipelineImputerTableContainer = document.getElementById('pipeline-imputer-table-container');
+        DOM.pipelineToStep2Btn = document.getElementById('pipeline-to-step2-btn');
+        DOM.pipelineNormalityTableContainer = document.getElementById('pipeline-normality-table-container');
+        DOM.pipelineCorrPairsContainer = document.getElementById('pipeline-corr-pairs-container');
+        DOM.pipelineCorrPairCounter = document.getElementById('pipeline-corr-pair-counter');
+        DOM.pipelineRunCorrBtn = document.getElementById('pipeline-run-corr-btn');
+        DOM.pipelineToStep3Btn = document.getElementById('pipeline-to-step3-btn');
+        DOM.pipelineVifTableContainer = document.getElementById('pipeline-vif-table-container');
+        DOM.pipelineDropVifBtn = document.getElementById('pipeline-drop-vif-btn');
+        DOM.pipelineRunVifBtn = document.getElementById('pipeline-run-vif-btn');
+        DOM.pipelineToStep4Btn = document.getElementById('pipeline-to-step4-btn');
+        DOM.pipelineUnivariateTableContainer = document.getElementById('pipeline-univariate-table-container');
+        DOM.pipelineToStep5Btn = document.getElementById('pipeline-to-step5-btn');
+        DOM.pipelineSmotencContainer = document.getElementById('pipeline-smotenc-container');
+        DOM.pipelineToStep6Btn = document.getElementById('pipeline-to-step6-btn');
+        DOM.pipelineRunRfScoutBtn = document.getElementById('pipeline-run-rf-scout-btn');
+        DOM.pipelineRfImportanceContainer = document.getElementById('pipeline-rf-importance-container');
+        DOM.pipelineToStep7Btn = document.getElementById('pipeline-to-step7-btn');
+        DOM.pipelineEvalSeedInput = document.getElementById('pipeline-eval-seed-input');
+        DOM.pipelineTrainModelsBtn = document.getElementById('pipeline-train-models-btn');
+        DOM.pipelineTrainStatus = document.getElementById('pipeline-train-status');
+        DOM.pipelineTrainStatusText = document.getElementById('pipeline-train-status-text');
+        DOM.pipelineResultsContainer = document.getElementById('pipeline-results-container');
+        DOM.pipelineLeaderboardContainer = document.getElementById('pipeline-leaderboard-container');
+        DOM.pipelineCmGrid = document.getElementById('pipeline-cm-grid');
+        DOM.pipelineDownloadReportBtn = document.getElementById('pipeline-download-report-btn');
     }
 
     function setupEventListeners() {
@@ -141,10 +208,57 @@
         // Stepper Navigation
         DOM.stepTabs.forEach(tab => {
             tab.addEventListener('click', () => {
-                const step = parseInt(tab.dataset.step, 10);
+                const step = tab.dataset.step;
                 goToStep(step);
             });
         });
+
+        // 7-Step Pipeline Sub-stepper Nav
+        if (DOM.pipelineSubPills) {
+            DOM.pipelineSubPills.forEach(pill => {
+                pill.addEventListener('click', () => {
+                    const substep = parseInt(pill.dataset.substep, 10);
+                    goToPipelineSubstep(substep);
+                });
+            });
+        }
+
+        // Pipeline Sample Cohort Quick Loaders
+        if (DOM.pipelineLoadCardioBtn) {
+            DOM.pipelineLoadCardioBtn.addEventListener('click', async () => {
+                await loadSampleDataset('universal_medical_cohort.csv', 'Cardiometabolic Risk Cohort (Binary)');
+                initPipelineUI();
+            });
+        }
+        if (DOM.pipelineLoadShuntBtn) {
+            DOM.pipelineLoadShuntBtn.addEventListener('click', async () => {
+                await loadSampleDataset('medical_shunt_cohort.csv', 'Neurosurgical Shunt Response Cohort');
+                initPipelineUI();
+            });
+        }
+
+        if (DOM.pipelineSeedRandomBtn) {
+            DOM.pipelineSeedRandomBtn.addEventListener('click', () => {
+                const r = Math.floor(Math.random() * 90000) + 1000;
+                DOM.pipelineSeedInput.value = r;
+                if (DOM.pipelineEvalSeedInput) DOM.pipelineEvalSeedInput.value = r;
+            });
+        }
+
+        // Pipeline Step Action Buttons
+        if (DOM.pipelineStep1RunBtn) DOM.pipelineStep1RunBtn.addEventListener('click', executePipelineStep1);
+        if (DOM.pipelineToStep2Btn) DOM.pipelineToStep2Btn.addEventListener('click', () => goToPipelineSubstep(2));
+        if (DOM.pipelineRunCorrBtn) DOM.pipelineRunCorrBtn.addEventListener('click', renderPipelineStep2);
+        if (DOM.pipelineToStep3Btn) DOM.pipelineToStep3Btn.addEventListener('click', () => goToPipelineSubstep(3));
+        if (DOM.pipelineRunVifBtn) DOM.pipelineRunVifBtn.addEventListener('click', renderPipelineStep3);
+        if (DOM.pipelineDropVifBtn) DOM.pipelineDropVifBtn.addEventListener('click', pipelineDropSelectedVIF);
+        if (DOM.pipelineToStep4Btn) DOM.pipelineToStep4Btn.addEventListener('click', () => goToPipelineSubstep(4));
+        if (DOM.pipelineToStep5Btn) DOM.pipelineToStep5Btn.addEventListener('click', () => goToPipelineSubstep(5));
+        if (DOM.pipelineToStep6Btn) DOM.pipelineToStep6Btn.addEventListener('click', () => goToPipelineSubstep(6));
+        if (DOM.pipelineRunRfScoutBtn) DOM.pipelineRunRfScoutBtn.addEventListener('click', executePipelineStep6);
+        if (DOM.pipelineToStep7Btn) DOM.pipelineToStep7Btn.addEventListener('click', () => goToPipelineSubstep(7));
+        if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.addEventListener('click', executePipelineStep7);
+        if (DOM.pipelineDownloadReportBtn) DOM.pipelineDownloadReportBtn.addEventListener('click', downloadPipelineProtocolReport);
 
         // Next Step Buttons
         DOM.toStep2Btn.addEventListener('click', () => goToStep(2));
@@ -617,38 +731,47 @@
 
     function goToStep(stepNum) {
         // Enforce prerequisites
-        if (stepNum > 1 && !AppState.parsedData) {
-            alert("Please upload a CSV file or load a sample dataset first.");
-            return;
-        }
-        if (stepNum > 3 && !AppState.imputedData) {
-            alert("Please complete the Data Imputation step first.");
-            return;
-        }
-        if (stepNum > 4 && !AppState.trainedModel) {
-            alert("Please train a machine learning model first in Step 4.");
-            return;
+        if (stepNum !== 'pipeline') {
+            const num = parseInt(stepNum, 10);
+            if (num > 1 && !AppState.parsedData) {
+                alert("Please upload a CSV file or load a sample dataset first.");
+                return;
+            }
+            if (num > 3 && !AppState.imputedData) {
+                alert("Please complete the Data Imputation step first.");
+                return;
+            }
+            if (num > 4 && !AppState.trainedModel) {
+                alert("Please train a machine learning model first in Step 4.");
+                return;
+            }
         }
 
         AppState.currentStep = stepNum;
 
         DOM.stepTabs.forEach(tab => {
-            const s = parseInt(tab.dataset.step, 10);
-            tab.classList.toggle('active', s === stepNum);
-            if (s < stepNum) tab.classList.add('completed');
+            const s = tab.dataset.step;
+            const isActive = String(s) === String(stepNum);
+            tab.classList.toggle('active', isActive);
+            const num = parseInt(s, 10);
+            const targetNum = parseInt(stepNum, 10);
+            if (!isNaN(num) && !isNaN(targetNum) && num < targetNum) {
+                tab.classList.add('completed');
+            }
         });
 
         DOM.stepContents.forEach(content => {
-            const s = parseInt(content.dataset.step, 10);
-            content.classList.toggle('active', s === stepNum);
+            const s = content.dataset.step;
+            content.classList.toggle('active', String(s) === String(stepNum));
         });
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        if (stepNum === 2) renderVariableConfigGrid();
-        if (stepNum === 3) renderImputationTable();
-        if (stepNum === 4) refreshOptionBSummaries();
-        if (stepNum === 5) renderSinglePredictionForm();
+        if (stepNum === 2 || stepNum === '2') renderVariableConfigGrid();
+        if (stepNum === 3 || stepNum === '3') renderImputationTable();
+        if (stepNum === 4 || stepNum === '4') refreshOptionBSummaries();
+        if (stepNum === 5 || stepNum === '5') renderSinglePredictionForm();
+        if (stepNum === 'pipeline') initPipelineUI();
     }
 
     function handleFileUpload(file) {
@@ -698,6 +821,14 @@
 
             renderDataOverview();
             DOM.toStep2Btn.disabled = false;
+
+            // Sync with pipeline tab if currently active or loaded
+            if (DOM.pipelineDatasetName) {
+                DOM.pipelineDatasetName.innerText = name;
+            }
+            if (AppState.currentStep === 'pipeline') {
+                initPipelineUI();
+            }
         } catch (e) {
             alert(`Failed to parse CSV: ${e.message}`);
         }
@@ -2382,7 +2513,980 @@
         URL.revokeObjectURL(url);
     }
 
-    // Initialize application when DOM is ready
+    // =========================================================================
+    // 7-STEP CLINICAL ML PIPELINE CONTROLLER
+    // Conceived, designed and developed by Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)
+    // =========================================================================
+
+    function initPipelineUI() {
+        if (DOM.pipelineDatasetName) {
+            DOM.pipelineDatasetName.innerText = AppState.fileName || "No dataset loaded yet (select cohort or upload CSV)";
+        }
+        if (DOM.pipelineSeedInput && !DOM.pipelineSeedInput.value) {
+            DOM.pipelineSeedInput.value = AppState.pipeline.seed;
+        }
+        if (DOM.pipelineEvalSeedInput && !DOM.pipelineEvalSeedInput.value) {
+            DOM.pipelineEvalSeedInput.value = AppState.pipeline.evalSeed;
+        }
+        if (AppState.pipeline.trainRows) {
+            renderPipelineStep1Results();
+        }
+    }
+
+    function goToPipelineSubstep(substepNum) {
+        substepNum = parseInt(substepNum, 10);
+        if (substepNum > 1 && !AppState.pipeline.trainRows) {
+            alert("Please execute Step 1: Train/Test Split & Strict Imputation first.");
+            return;
+        }
+        if (substepNum === 7 && (!AppState.pipeline.rfImportance || AppState.pipeline.rfImportance.length === 0)) {
+            alert("Please execute Step 6: Random Forest Scout & Feature Ranking first.");
+            return;
+        }
+
+        AppState.pipeline.substep = substepNum;
+
+        if (DOM.pipelineSubPills) {
+            DOM.pipelineSubPills.forEach(pill => {
+                const s = parseInt(pill.dataset.substep, 10);
+                pill.classList.toggle('active', s === substepNum);
+                if (s < substepNum) pill.classList.add('completed');
+            });
+        }
+
+        if (DOM.pipelinePanels) {
+            DOM.pipelinePanels.forEach(panel => {
+                panel.classList.toggle('active', panel.id === `pipeline-panel-${substepNum}`);
+            });
+        }
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        if (substepNum === 2) renderPipelineStep2();
+        if (substepNum === 3) renderPipelineStep3();
+        if (substepNum === 4) renderPipelineStep4();
+        if (substepNum === 5) renderPipelineStep5();
+        if (substepNum === 6) renderPipelineStep6UI();
+    }
+
+    // =========================================================================
+    // STEP 1: Train/Test Split (80/20) & Strict Leak-Free Imputation
+    // =========================================================================
+    function executePipelineStep1() {
+        if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
+            alert("Please upload a CSV dataset or select a sample medical cohort first.");
+            return;
+        }
+
+        // Identify target column
+        let targetCol = Object.keys(AppState.columnConfigs).find(col => AppState.columnConfigs[col].role === 'target');
+        if (!targetCol && AppState.parsedData.headers.length > 0) {
+            targetCol = AppState.parsedData.headers[AppState.parsedData.headers.length - 1];
+            if (AppState.columnConfigs[targetCol]) AppState.columnConfigs[targetCol].role = 'target';
+        }
+
+        if (!targetCol) {
+            alert("Please select a target variable for prediction.");
+            return;
+        }
+
+        // Identify feature columns
+        const featureCols = Object.keys(AppState.columnConfigs).filter(col =>
+            col !== targetCol && AppState.columnConfigs[col].role !== 'meta'
+        );
+
+        if (featureCols.length === 0) {
+            alert("No predictor feature columns found. Ensure at least one column is configured as a feature.");
+            return;
+        }
+
+        // Read configuration
+        const userSeed = DOM.pipelineSeedInput ? parseInt(DOM.pipelineSeedInput.value, 10) : 42;
+        AppState.pipeline.seed = isNaN(userSeed) ? 42 : userSeed;
+        AppState.pipeline.evalSeed = AppState.pipeline.seed;
+        if (DOM.pipelineEvalSeedInput) DOM.pipelineEvalSeedInput.value = AppState.pipeline.seed;
+
+        const imputeStrategy = DOM.pipelineImputeStrategy ? DOM.pipelineImputeStrategy.value : 'median';
+        AppState.pipeline.imputeStrategy = imputeStrategy;
+
+        // Perform 80/20 Train/Test split
+        const isClassification = AppState.columnConfigs[targetCol]?.type !== 'continuous';
+        const targetVals = AppState.parsedData.rows.map(r => r[targetCol]);
+
+        const splitResult = DataEngine.trainTestSplit(
+            AppState.parsedData.rows,
+            targetVals,
+            0.8,
+            isClassification,
+            AppState.pipeline.seed
+        );
+
+        const trainRaw = splitResult.trainX;
+        const testRaw = splitResult.testX;
+
+        // Fit strict imputer ONLY on the Training set (Zero Data Leakage)
+        const imputer = DataEngine.fitStrictImputer(
+            trainRaw,
+            featureCols,
+            targetCol,
+            AppState.columnConfigs,
+            imputeStrategy
+        );
+
+        // Transform both Training and Testing sets with the fitted imputer
+        const trainTransformed = DataEngine.transformWithStrictImputer(trainRaw, imputer, AppState.columnConfigs);
+        const testTransformed = DataEngine.transformWithStrictImputer(testRaw, imputer, AppState.columnConfigs);
+
+        // Save pipeline state
+        AppState.pipeline.trainRows = trainTransformed.rows;
+        AppState.pipeline.testRows = testTransformed.rows;
+        AppState.pipeline.imputer = imputer;
+        AppState.pipeline.featureCols = featureCols;
+        AppState.pipeline.targetCol = targetCol;
+        AppState.pipeline.columnConfigs = { ...AppState.columnConfigs };
+        AppState.pipeline.droppedFeatures = new Set();
+        AppState.pipeline.rfImportance = [];
+        AppState.pipeline.top70Features = [];
+        AppState.pipeline.bottom30Features = [];
+
+        renderPipelineStep1Results(trainTransformed.missingFilledCount, testTransformed.missingFilledCount);
+    }
+
+    function renderPipelineStep1Results(trainMissing = 0, testMissing = 0) {
+        if (!AppState.pipeline.trainRows || !AppState.pipeline.imputer) return;
+
+        const trainRows = AppState.pipeline.trainRows;
+        const testRows = AppState.pipeline.testRows;
+        const imputer = AppState.pipeline.imputer;
+
+        if (DOM.pipelineTrainCount) DOM.pipelineTrainCount.innerText = trainRows.length;
+        if (DOM.pipelineTestCount) DOM.pipelineTestCount.innerText = testRows.length;
+        if (DOM.pipelineMissingImputedCount) DOM.pipelineMissingImputedCount.innerText = trainMissing + testMissing;
+
+        // Render imputer audit table
+        let tableHtml = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Variable</th>
+                        <th>Role</th>
+                        <th>Measurement Scale</th>
+                        <th>Fitted Imputation Value (Strictly from Train)</th>
+                        <th>Training Summary Stats</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        Object.keys(imputer.fillValues).forEach(col => {
+            const conf = AppState.pipeline.columnConfigs[col] || { type: 'continuous', role: 'feature' };
+            const stats = imputer.columnStats[col] || {};
+            const fillVal = imputer.fillValues[col];
+
+            let statsStr = '';
+            if (conf.type === 'nominal') {
+                statsStr = `Mode: ${stats.mode || 'N/A'} (Distinct: ${stats.distinctCount || 0})`;
+            } else {
+                statsStr = `Mean: ${stats.mean !== undefined ? stats.mean : 'N/A'}, Median: ${stats.median !== undefined ? stats.median : 'N/A'}, Std: ${stats.std !== undefined ? stats.std : 'N/A'}`;
+            }
+
+            tableHtml += `
+                <tr>
+                    <td><strong>${col}</strong></td>
+                    <td><span class="pill pill-${conf.role || 'feature'}">${conf.role || 'feature'}</span></td>
+                    <td><span class="pill pill-${conf.type || 'continuous'}">${conf.type || 'continuous'}</span></td>
+                    <td><strong style="color: var(--accent-emerald);">${fillVal}</strong></td>
+                    <td style="font-size: 12px; color: var(--text-secondary);">${statsStr}</td>
+                </tr>
+            `;
+        });
+
+        tableHtml += `</tbody></table>`;
+
+        if (DOM.pipelineImputerTableContainer) {
+            DOM.pipelineImputerTableContainer.innerHTML = tableHtml;
+        }
+
+        if (DOM.pipelineStep1Results) {
+            DOM.pipelineStep1Results.style.display = 'block';
+        }
+    }
+
+    // =========================================================================
+    // STEP 2: Continuous Variable Correlation Check (Pearson vs. Spearman)
+    // =========================================================================
+    function renderPipelineStep2() {
+        if (!AppState.pipeline.trainRows) return;
+
+        const contCols = AppState.pipeline.featureCols.filter(col =>
+            !AppState.pipeline.droppedFeatures.has(col) &&
+            (AppState.pipeline.columnConfigs[col]?.type === 'continuous' || AppState.pipeline.columnConfigs[col]?.type === 'ordinal')
+        );
+
+        if (contCols.length < 2) {
+            if (DOM.pipelineNormalityTableContainer) {
+                DOM.pipelineNormalityTableContainer.innerHTML = `<p style="padding: 16px; color: var(--text-muted);">Less than two continuous features available for pairwise correlation analysis.</p>`;
+            }
+            if (DOM.pipelineCorrPairsContainer) {
+                DOM.pipelineCorrPairsContainer.innerHTML = `<p style="padding: 16px; color: var(--text-muted);">No continuous feature pairs to evaluate.</p>`;
+            }
+            if (DOM.pipelineCorrPairCounter) DOM.pipelineCorrPairCounter.innerText = `0 High Pairs`;
+            return;
+        }
+
+        const corrRes = DataEngine.checkPairwiseCorrelations(AppState.pipeline.trainRows, contCols, 0.8);
+        AppState.pipeline.normalityMap = corrRes.normalityMap;
+        AppState.pipeline.corrPairs = corrRes.allPairs;
+
+        // 1. Render Normality Table
+        let normHtml = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Continuous Feature</th>
+                        <th>Sample Mean</th>
+                        <th>Std Deviation</th>
+                        <th>Skewness (g₁)</th>
+                        <th>Normality Verdict</th>
+                        <th>Test Rule Applied</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        contCols.forEach(col => {
+            const norm = corrRes.normalityMap[col] || { mean: 0, std: 1, skewness: 0, isNormal: true };
+            normHtml += `
+                <tr>
+                    <td><strong>${col}</strong></td>
+                    <td>${norm.mean}</td>
+                    <td>${norm.std}</td>
+                    <td><strong style="color: ${norm.isNormal ? 'var(--accent-emerald)' : 'var(--accent-amber)'};">${norm.skewness}</strong></td>
+                    <td>
+                        <span class="pill" style="${norm.isNormal ? 'background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);' : 'background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border-color: rgba(245, 158, 11, 0.4);'}">
+                            ${norm.isNormal ? '✓ Normal (|g₁| ≤ 1.0)' : '⚠️ Skewed (|g₁| > 1.0)'}
+                        </span>
+                    </td>
+                    <td style="font-size: 12px; color: var(--text-secondary);">
+                        ${norm.isNormal ? 'Use Pearson when paired with normal variables' : 'Requires Spearman Rank Correlation'}
+                    </td>
+                </tr>
+            `;
+        });
+        normHtml += `</tbody></table>`;
+        if (DOM.pipelineNormalityTableContainer) DOM.pipelineNormalityTableContainer.innerHTML = normHtml;
+
+        // 2. Render High Correlation Pairs (|r| or |rho| >= 0.8)
+        const highPairs = corrRes.highPairs;
+        if (DOM.pipelineCorrPairCounter) {
+            DOM.pipelineCorrPairCounter.innerText = `${highPairs.length} High Pairs`;
+        }
+
+        if (highPairs.length === 0) {
+            DOM.pipelineCorrPairsContainer.innerHTML = `
+                <div class="pipeline-alert pipeline-alert-success">
+                    <div style="font-size: 18px;">✅</div>
+                    <div>
+                        <strong>No Excessive Pairwise Collinearity Detected:</strong> All continuous variable pairs have |correlation| &lt; 0.80. No automatic dropping is strictly required; you may proceed to Step 3.
+                    </div>
+                </div>
+            `;
+        } else {
+            let pairsHtml = '';
+            highPairs.forEach((p, idx) => {
+                const var1Dropped = AppState.pipeline.droppedFeatures.has(p.var1);
+                const var2Dropped = AppState.pipeline.droppedFeatures.has(p.var2);
+
+                pairsHtml += `
+                    <div class="corr-pair-card high-corr ${var1Dropped || var2Dropped ? 'dropped' : ''}">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                                <strong style="font-size: 14px; color: var(--text-primary);">${p.var1}</strong>
+                                <span style="color: var(--text-muted);">&harr;</span>
+                                <strong style="font-size: 14px; color: var(--text-primary);">${p.var2}</strong>
+                                <span class="vif-badge-danger">${p.method} = ${p.coeff}</span>
+                            </div>
+                            <div style="font-size: 12px; color: var(--text-secondary);">
+                                <strong>Collinearity Reason:</strong> ${p.bothNormal ? 'Both variables normal &rarr; Pearson product-moment correlation calculated.' : `Skewness detected (${p.norm1.isNormal ? '' : p.var1 + ' skewed '}${p.norm2.isNormal ? '' : p.var2 + ' skewed'}) &rarr; Spearman rank correlation applied.`}
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature('${p.var1}')" ${var1Dropped ? 'disabled' : ''}>
+                                ${var1Dropped ? `✓ Dropped ${p.var1}` : `🗑️ Drop ${p.var1}`}
+                            </button>
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeature('${p.var2}')" ${var2Dropped ? 'disabled' : ''}>
+                                ${var2Dropped ? `✓ Dropped ${p.var2}` : `🗑️ Drop ${p.var2}`}
+                            </button>
+                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineKeepBothPairs('${p.var1}', '${p.var2}')">
+                                🤝 Keep Both
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            DOM.pipelineCorrPairsContainer.innerHTML = pairsHtml;
+        }
+    }
+
+    window.pipelineDropFeature = function (featureName) {
+        AppState.pipeline.droppedFeatures.add(featureName);
+        renderPipelineStep2();
+        if (AppState.pipeline.substep === 3) renderPipelineStep3();
+    };
+
+    window.pipelineKeepBothPairs = function (var1, var2) {
+        alert(`Pair [${var1}] and [${var2}] retained with clinical justification.`);
+    };
+
+    // =========================================================================
+    // STEP 3: Variance Inflation Factor (VIF) Check
+    // =========================================================================
+    function renderPipelineStep3() {
+        if (!AppState.pipeline.trainRows) return;
+
+        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        const vifResults = DataEngine.calculateVIF(AppState.pipeline.trainRows, activeCols, AppState.pipeline.columnConfigs);
+        AppState.pipeline.vifResults = vifResults;
+
+        const hasHighVif = vifResults.some(v => v.highVIF);
+        if (DOM.pipelineDropVifBtn) DOM.pipelineDropVifBtn.disabled = !hasHighVif;
+
+        let tableHtml = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40px; text-align: center;">Select</th>
+                        <th>Feature Name</th>
+                        <th>Measurement Scale</th>
+                        <th>Encoded Dummy Levels</th>
+                        <th>Linear R² Score</th>
+                        <th>VIF Score</th>
+                        <th>Collinearity Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        vifResults.forEach(item => {
+            const isHigh = item.highVIF;
+            const isDropped = AppState.pipeline.droppedFeatures.has(item.feature);
+
+            tableHtml += `
+                <tr style="${isHigh ? 'background: rgba(244, 63, 94, 0.04);' : ''}">
+                    <td style="text-align: center;">
+                        <input type="checkbox" class="pipeline-vif-checkbox" data-feature="${item.feature}" ${isHigh && !isDropped ? 'checked' : ''} ${isDropped ? 'disabled' : ''}>
+                    </td>
+                    <td><strong>${item.feature}</strong> ${isDropped ? '<span class="pill pill-meta" style="font-size: 10px;">Dropped</span>' : ''}</td>
+                    <td><span class="pill pill-${item.type}">${item.type}</span></td>
+                    <td style="font-size: 12px; color: var(--text-secondary);">${item.dummyCount}</td>
+                    <td>${item.rSquared}</td>
+                    <td><strong style="color: ${isHigh ? 'var(--accent-rose)' : 'var(--accent-emerald)'}; font-size: 13.5px;">${item.vif}</strong></td>
+                    <td>
+                        <span class="${isHigh ? 'vif-badge-danger' : 'vif-badge-ok'}">
+                            ${isHigh ? '⚠️ VIF > 5.0 (High Multicollinearity)' : '✓ VIF ≤ 5.0 (Acceptable)'}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tableHtml += `</tbody></table>`;
+        if (DOM.pipelineVifTableContainer) DOM.pipelineVifTableContainer.innerHTML = tableHtml;
+    }
+
+    function pipelineDropSelectedVIF() {
+        const checkboxes = document.querySelectorAll('.pipeline-vif-checkbox:checked');
+        if (checkboxes.length === 0) {
+            alert("No variables selected to eliminate.");
+            return;
+        }
+
+        const droppedNames = [];
+        checkboxes.forEach(cb => {
+            const f = cb.dataset.feature;
+            if (f) {
+                AppState.pipeline.droppedFeatures.add(f);
+                droppedNames.push(f);
+            }
+        });
+
+        alert(`Permanently eliminated ${droppedNames.length} feature(s) from both Train and Test sets: ${droppedNames.join(', ')}`);
+        renderPipelineStep3();
+    }
+
+    // =========================================================================
+    // STEP 4: Univariate Statistical Testing Check
+    // =========================================================================
+    function renderPipelineStep4() {
+        if (!AppState.pipeline.trainRows) return;
+
+        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        const results = DataEngine.runUnivariateTesting(
+            AppState.pipeline.trainRows,
+            activeCols,
+            AppState.pipeline.targetCol,
+            AppState.pipeline.columnConfigs
+        );
+
+        AppState.pipeline.univariateResults = results;
+
+        let tableHtml = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="width: 50px;">Rank</th>
+                        <th>Feature</th>
+                        <th>Measurement Scale</th>
+                        <th>Statistical Test</th>
+                        <th>Test Statistic</th>
+                        <th>Degrees of Freedom</th>
+                        <th>p-value</th>
+                        <th>Statistical Significance</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        results.forEach((r, idx) => {
+            const isSig = r.significant;
+            tableHtml += `
+                <tr>
+                    <td style="font-weight: 700; color: var(--accent-cyan);">#${idx + 1}</td>
+                    <td><strong>${r.feature}</strong></td>
+                    <td><span class="pill pill-${r.scale.toLowerCase().includes('nominal') ? 'nominal' : 'continuous'}">${r.scale}</span></td>
+                    <td style="font-weight: 600;">${r.testName}</td>
+                    <td>${r.statisticLabel}: <strong>${r.statisticValue}</strong></td>
+                    <td style="font-size: 12px; color: var(--text-secondary);">${r.df}</td>
+                    <td><strong style="color: ${isSig ? 'var(--accent-emerald)' : 'var(--text-muted)'}; font-size: 13.5px;">${r.pValue < 0.0001 ? '< 0.0001' : r.pValue}</strong></td>
+                    <td>
+                        <span class="pill" style="${isSig ? 'background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);' : 'background: rgba(100, 116, 139, 0.15); color: var(--text-muted);'}">
+                            ${isSig ? '✓ p < 0.05 (Significant)' : 'p ≥ 0.05 (Non-Significant)'}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        });
+
+        tableHtml += `</tbody></table>`;
+        if (DOM.pipelineUnivariateTableContainer) DOM.pipelineUnivariateTableContainer.innerHTML = tableHtml;
+    }
+
+    // =========================================================================
+    // STEP 5: Imbalance Handling (SMOTENC)
+    // =========================================================================
+    function renderPipelineStep5() {
+        if (!AppState.pipeline.trainRows) return;
+
+        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        const smotencRes = DataEngine.applySMOTENC(
+            AppState.pipeline.trainRows,
+            activeCols,
+            AppState.pipeline.targetCol,
+            AppState.pipeline.columnConfigs,
+            AppState.pipeline.seed
+        );
+
+        AppState.pipeline.smotencResult = smotencRes;
+        AppState.pipeline.balancedTrainRows = smotencRes.balancedRows;
+
+        let contentHtml = '';
+        if (smotencRes.applied) {
+            contentHtml = `
+                <div class="pipeline-alert pipeline-alert-warning" style="margin-bottom: 20px;">
+                    <div style="font-size: 20px;">⚠️</div>
+                    <div>
+                        <strong>Minority Class Imbalance Detected:</strong><br>
+                        Minority class <code>${smotencRes.minorityClass}</code> represented only <strong>${smotencRes.minorityPctBefore}%</strong> of the training set (&lt; 30% clinical threshold).<br>
+                        SMOTENC synthesized <strong>${smotencRes.syntheticCountGenerated}</strong> new training instances to achieve <strong>${smotencRes.minorityPctAfter}%</strong> class balance.
+                    </div>
+                </div>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px;">
+                    <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
+                        <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--text-secondary);">Original Training Class Distribution</h5>
+                        ${Object.keys(smotencRes.originalCounts).map(c => `
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
+                                <span>Class <strong>${c}</strong>:</span>
+                                <strong>${smotencRes.originalCounts[c]} cases</strong>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div class="card" style="padding: 16px; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.3);">
+                        <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--accent-emerald);">Post-SMOTENC Training Class Distribution</h5>
+                        ${Object.keys(smotencRes.balancedCounts).map(c => `
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
+                                <span>Class <strong>${c}</strong>:</span>
+                                <strong style="color: var(--accent-emerald);">${smotencRes.balancedCounts[c]} cases</strong>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        } else {
+            contentHtml = `
+                <div class="pipeline-alert pipeline-alert-success" style="margin-bottom: 20px;">
+                    <div style="font-size: 20px;">✅</div>
+                    <div>
+                        <strong>Balanced Training Distribution:</strong><br>
+                        ${smotencRes.reason || 'Minority class represents ≥ 30% of the training cohort. No synthetic resampling needed.'}
+                    </div>
+                </div>
+                <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
+                    <h5 style="font-size: 13px; font-weight: 700; margin-bottom: 10px; color: var(--text-secondary);">Training Class Distribution</h5>
+                    ${Object.keys(smotencRes.classCounts || {}).map(c => `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 12.5px;">
+                            <span>Class <strong>${c}</strong>:</span>
+                            <strong>${smotencRes.classCounts[c]} cases</strong>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        if (DOM.pipelineSmotencContainer) {
+            DOM.pipelineSmotencContainer.innerHTML = contentHtml;
+        }
+    }
+
+    // =========================================================================
+    // STEP 6: Model-Driven Feature Ranking (Random Forest Scout)
+    // =========================================================================
+    function renderPipelineStep6UI() {
+        if (!AppState.pipeline.rfImportance || AppState.pipeline.rfImportance.length === 0) {
+            if (DOM.pipelineRfImportanceContainer) {
+                DOM.pipelineRfImportanceContainer.innerHTML = `
+                    <p style="padding: 24px; color: var(--text-muted); text-align: center;">
+                        Click the purple 'Run Random Forest Scout & Feature Ranking' button above to train a Random Forest classifier on the balanced training set and extract feature importances.
+                    </p>
+                `;
+            }
+        }
+    }
+
+    function executePipelineStep6() {
+        if (!AppState.pipeline.balancedTrainRows) {
+            renderPipelineStep5();
+        }
+
+        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        const subConfigs = {};
+        activeCols.forEach(c => subConfigs[c] = AppState.pipeline.columnConfigs[c]);
+        subConfigs[AppState.pipeline.targetCol] = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol];
+
+        const prep = DataEngine.prepareDataset(
+            AppState.pipeline.balancedTrainRows,
+            subConfigs,
+            activeCols,
+            AppState.pipeline.targetCol
+        );
+
+        // Train Random Forest Scout
+        const rf = new RandomForest(prep.isClassification, 40, 6, 2, 'sqrt', AppState.pipeline.seed);
+        rf.fit(prep.X, prep.y);
+
+        // Map feature importances back to original clinical features
+        const featureImpMap = {};
+        activeCols.forEach(col => {
+            const meta = prep.featureMetadata[col];
+            let sumImp = 0;
+            if (meta) {
+                for (let k = 0; k < meta.length; k++) {
+                    sumImp += rf.featureImportances[meta.startIndex + k] || 0;
+                }
+            }
+            featureImpMap[col] = sumImp;
+        });
+
+        const totalImp = Object.values(featureImpMap).reduce((a, b) => a + b, 0) || 1;
+        const ranked = activeCols.map(col => ({
+            name: col,
+            importance: Number((featureImpMap[col] / totalImp).toFixed(4)),
+            pct: Number(((featureImpMap[col] / totalImp) * 100).toFixed(1))
+        }));
+
+        ranked.sort((a, b) => b.importance - a.importance);
+
+        // Bottom 30% cutoff
+        const k = Math.max(1, Math.round(activeCols.length * 0.30));
+        const topCount = activeCols.length - k;
+
+        AppState.pipeline.top70Features = ranked.slice(0, topCount).map(f => f.name);
+        AppState.pipeline.bottom30Features = ranked.slice(topCount).map(f => f.name);
+        AppState.pipeline.rfImportance = ranked;
+
+        // Render ranked bar chart
+        const maxPct = Math.max(...ranked.map(r => r.pct), 1);
+        let chartHtml = `
+            <div class="rf-importance-bar-container">
+        `;
+
+        ranked.forEach((r, idx) => {
+            const isBottomTier = idx >= topCount;
+            const barWidth = Math.max(4, Math.round((r.pct / maxPct) * 100));
+
+            if (idx === topCount) {
+                chartHtml += `
+                    <div class="cutoff-line-notice">
+                        <span>✂️</span>
+                        <span><strong>Bottom 30% Dimensionality Cutoff:</strong> Features below this threshold are automatically pruned specifically for k-NN and Gaussian Naive Bayes in Step 7.</span>
+                    </div>
+                `;
+            }
+
+            chartHtml += `
+                <div class="rf-importance-row">
+                    <div>
+                        <strong style="color: ${isBottomTier ? 'var(--accent-amber)' : 'var(--text-primary)'};">#${idx + 1} ${r.name}</strong>
+                    </div>
+                    <div class="rf-meter-track">
+                        <div class="rf-meter-fill ${isBottomTier ? 'bottom-tier' : 'top-tier'}" style="width: ${barWidth}%;"></div>
+                    </div>
+                    <div style="font-weight: 700; color: ${isBottomTier ? 'var(--accent-amber)' : 'var(--accent-emerald)'}; text-align: right;">
+                        ${r.pct}%
+                    </div>
+                    <div>
+                        <span class="pill" style="font-size: 10px; ${isBottomTier ? 'background: rgba(245,158,11,0.15); color: var(--accent-amber); border-color: rgba(245,158,11,0.4);' : 'background: rgba(16,185,129,0.15); color: var(--accent-emerald); border-color: rgba(16,185,129,0.4);'}">
+                            ${isBottomTier ? 'Bottom 30%' : 'Top 70%'}
+                        </span>
+                    </div>
+                </div>
+            `;
+        });
+
+        chartHtml += `</div>`;
+        if (DOM.pipelineRfImportanceContainer) DOM.pipelineRfImportanceContainer.innerHTML = chartHtml;
+        if (DOM.pipelineToStep7Btn) DOM.pipelineToStep7Btn.disabled = false;
+    }
+
+    // =========================================================================
+    // STEP 7: Algorithm-Specific Training & Constraints
+    // =========================================================================
+    async function executePipelineStep7() {
+        if (!AppState.pipeline.rfImportance || AppState.pipeline.rfImportance.length === 0) {
+            alert("Please complete Step 6: Random Forest Scout & Feature Ranking first.");
+            return;
+        }
+
+        const userSeed = DOM.pipelineEvalSeedInput ? parseInt(DOM.pipelineEvalSeedInput.value, 10) : 42;
+        AppState.pipeline.evalSeed = isNaN(userSeed) ? 42 : userSeed;
+
+        if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'flex';
+        if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
+
+        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        const top70Cols = AppState.pipeline.top70Features;
+
+        const targetCol = AppState.pipeline.targetCol;
+        const isClassification = AppState.pipeline.columnConfigs[targetCol]?.type !== 'continuous';
+        const numClasses = isClassification ? Array.from(new Set(AppState.pipeline.trainRows.map(r => String(r[targetCol])))).length : 1;
+
+        // 1. Prepare standard full dataset (for DNN, GLM, Ensemble)
+        const fullConfigs = {};
+        activeCols.forEach(c => fullConfigs[c] = AppState.pipeline.columnConfigs[c]);
+        fullConfigs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
+
+        const fullPrep = DataEngine.prepareDataset(
+            AppState.pipeline.balancedTrainRows,
+            fullConfigs,
+            activeCols,
+            targetCol
+        );
+
+        // Transform unaltered Test set using full training metadata
+        const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
+
+        // 2. Prepare reduced Top 70% dataset (strictly for k-NN & Naive Bayes)
+        const top70Configs = {};
+        top70Cols.forEach(c => top70Configs[c] = AppState.pipeline.columnConfigs[c]);
+        top70Configs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
+
+        const top70Prep = DataEngine.prepareDataset(
+            AppState.pipeline.balancedTrainRows,
+            top70Configs,
+            top70Cols,
+            targetCol
+        );
+        const top70TestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, top70Prep);
+
+        const benchmarkList = [];
+
+        try {
+            // A. k-NN Model (Strict constraint: Bottom 30% features dropped)
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 1/5: k-NN (Top 70% features only)...";
+            await new Promise(r => setTimeout(r, 60));
+            const knn = new KNNModel(isClassification, 5, 'euclidean', 'distance', AppState.pipeline.evalSeed);
+            knn.fit(top70Prep.X, top70Prep.y);
+            const knnEval = ModelEngine.evaluate(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
+            knnEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
+            knnEval.constraintNote = "Pruned bottom 30% features to combat curse of dimensionality.";
+            benchmarkList.push({ id: 'knn', name: 'k-Nearest Neighbors (k-NN)', eval: knnEval });
+
+            // B. Gaussian Naive Bayes (Strict constraint: Bottom 30% features dropped)
+            if (isClassification) {
+                if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 2/5: Gaussian Naive Bayes (Top 70% features only)...";
+                await new Promise(r => setTimeout(r, 60));
+                const nb = new GaussianNaiveBayes(1e-4, 'empirical', AppState.pipeline.evalSeed);
+                nb.fit(top70Prep.X, top70Prep.y);
+                const nbEval = ModelEngine.evaluate(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
+                nbEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
+                nbEval.constraintNote = "Pruned bottom 30% features to prevent conditional independence violation.";
+                benchmarkList.push({ id: 'nb', name: 'Gaussian Naive Bayes', eval: nbEval });
+            }
+
+            // C. Deep Neural Network (Strict constraint: L2 Weight Decay + Dropout)
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 3/5: Deep Neural Network (L2 Regularization + Dropout)...";
+            await new Promise(r => setTimeout(r, 60));
+            const dnnParams = {
+                epochs: 40,
+                learningRate: 0.005,
+                hiddenLayers: [48, 24],
+                dropoutRate: 0.15,
+                l2Reg: 0.001, // L2 weight decay constraint
+                activation: 'relu',
+                optimizer: 'adam',
+                batchSize: 16,
+                seed: AppState.pipeline.evalSeed
+            };
+            const dnn = new DeepNeuralNetwork(isClassification, numClasses, dnnParams);
+            await dnn.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y);
+            const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            dnnEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
+            dnnEval.constraintNote = "Enforced L2 Weight Decay (0.001) and Dropout (0.15) against overfitting.";
+            benchmarkList.push({ id: 'nn', name: 'Deep Neural Network (DNN / MLP)', eval: dnnEval });
+
+            // D. Logistic / Ridge Regression (Strict constraint: L2 penalization against collinearity)
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 4/5: Logistic / Ridge Regression (L2 lambda = 0.02)...";
+            await new Promise(r => setTimeout(r, 60));
+            const glm = new GeneralizedLinearModel(
+                isClassification,
+                numClasses,
+                0.05,
+                180,
+                0.02, // Ridge L2 penalization constraint
+                'momentum',
+                AppState.pipeline.evalSeed
+            );
+            glm.fit(fullPrep.X, fullPrep.y);
+            const glmEval = ModelEngine.evaluate(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            glmEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
+            glmEval.constraintNote = "Applied Ridge L2 penalization (λ = 0.02) to stabilize against minor collinearity.";
+            benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', eval: glmEval });
+
+            // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 5/5: Ensemble Super Learner (Strictly Scaled & Encoded)...";
+            await new Promise(r => setTimeout(r, 60));
+            const ensembleConfig = {
+                voting: 'soft',
+                baseModels: isClassification ? ['nn', 'rf', 'glm'] : ['rf', 'glm', 'knn'],
+                capacity: 'balanced',
+                seed: AppState.pipeline.evalSeed
+            };
+            const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
+            await ensemble.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y);
+            const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            ensEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
+            ensEval.constraintNote = "StandardScaler fitted on Train and applied to Test; base models soft-blended.";
+            benchmarkList.push({ id: 'ensemble', name: 'Ensemble Super Learner', eval: ensEval });
+
+            AppState.pipeline.benchmarkResults = benchmarkList;
+
+            // Render Leaderboard & Confusion Matrices
+            renderPipelineBenchmarkResults(benchmarkList, fullPrep.targetClasses, isClassification);
+
+            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
+            if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'block';
+
+        } catch (err) {
+            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
+            alert(`Pipeline training error: ${err.message}`);
+        }
+    }
+
+    function renderPipelineBenchmarkResults(benchmarkList, targetClasses, isClassification) {
+        // 1. Leaderboard Table
+        let tableHtml = `
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Algorithm</th>
+                        <th>Features Subset</th>
+                        <th>F1-Score (Macro)</th>
+                        <th>Precision</th>
+                        <th>Recall</th>
+                        <th>AUC-ROC</th>
+                        <th>Test Accuracy</th>
+                        <th>Algorithm Constraint Verification</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        // Sort descending by F1 or Accuracy
+        const sorted = [...benchmarkList].sort((a, b) => {
+            const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
+            const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
+            return f1B - f1A;
+        });
+
+        sorted.forEach(item => {
+            const ev = item.eval;
+            const f1 = isClassification ? (ev.macroF1 !== undefined ? (ev.macroF1 * 100).toFixed(1) + '%' : 'N/A') : `R²: ${ev.r2}`;
+            const prec = isClassification ? (ev.macroPrecision !== undefined ? (ev.macroPrecision * 100).toFixed(1) + '%' : 'N/A') : `MAE: ${ev.mae}`;
+            const rec = isClassification ? (ev.macroRecall !== undefined ? (ev.macroRecall * 100).toFixed(1) + '%' : 'N/A') : `RMSE: ${ev.rmse}`;
+            const auc = isClassification ? (ev.rocAuc !== null && ev.rocAuc !== undefined ? ev.rocAuc.toFixed(3) : 'N/A') : 'N/A';
+            const acc = isClassification ? (ev.accuracy !== undefined ? (ev.accuracy * 100).toFixed(1) + '%' : 'N/A') : `MSE: ${ev.mse}`;
+
+            tableHtml += `
+                <tr>
+                    <td><strong>${item.name}</strong></td>
+                    <td><span class="pill pill-target" style="font-size: 11px;">${ev.featuresUsed}</span></td>
+                    <td><strong style="color: var(--accent-emerald); font-size: 13.5px;">${f1}</strong></td>
+                    <td>${prec}</td>
+                    <td>${rec}</td>
+                    <td><strong style="color: var(--accent-cyan);">${auc}</strong></td>
+                    <td><strong>${acc}</strong></td>
+                    <td style="font-size: 11.5px; color: var(--text-secondary);">${ev.constraintNote}</td>
+                </tr>
+            `;
+        });
+
+        tableHtml += `</tbody></table>`;
+        if (DOM.pipelineLeaderboardContainer) DOM.pipelineLeaderboardContainer.innerHTML = tableHtml;
+
+        // 2. 2x2 Confusion Matrices Grid
+        let cmHtml = '';
+        sorted.forEach(item => {
+            const ev = item.eval;
+            const cm = ev.confMatrix;
+
+            if (cm && cm.length === 2) {
+                const tn = cm[0][0];
+                const fp = cm[0][1];
+                const fn = cm[1][0];
+                const tp = cm[1][1];
+                const sens = (tp + fn) > 0 ? ((tp / (tp + fn)) * 100).toFixed(1) + '%' : '0.0%';
+                const spec = (tn + fp) > 0 ? ((tn / (tn + fp)) * 100).toFixed(1) + '%' : '0.0%';
+                const ppv = (tp + fp) > 0 ? ((tp / (tp + fp)) * 100).toFixed(1) + '%' : '0.0%';
+                const npv = (tn + fn) > 0 ? ((tn / (tn + fn)) * 100).toFixed(1) + '%' : '0.0%';
+
+                cmHtml += `
+                    <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <strong style="font-size: 13.5px; color: var(--text-primary);">${item.name}</strong>
+                            <span class="pill pill-continuous" style="font-size: 10.5px;">Acc: ${(ev.accuracy * 100).toFixed(1)}%</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                            ${ev.featuresUsed} &bull; ${ev.constraintNote}
+                        </div>
+                        <div class="cm-table-wrapper" style="margin-bottom: 10px;">
+                            <table class="cm-table">
+                                <thead>
+                                    <tr>
+                                        <th>Actual \\ Pred</th>
+                                        <th>Negative (${targetClasses[0]})</th>
+                                        <th>Positive (${targetClasses[1]})</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Negative (${targetClasses[0]})</strong></td>
+                                        <td class="cm-cell-tn">TN: <strong>${tn}</strong></td>
+                                        <td class="cm-cell-fp">FP: <strong>${fp}</strong></td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Positive (${targetClasses[1]})</strong></td>
+                                        <td class="cm-cell-fn">FN: <strong>${fn}</strong></td>
+                                        <td class="cm-cell-tp">TP: <strong>${tp}</strong></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; font-size: 11px; text-align: center;">
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">Sens: <strong>${sens}</strong></div>
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">Spec: <strong>${spec}</strong></div>
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">PPV: <strong>${ppv}</strong></div>
+                            <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">NPV: <strong>${npv}</strong></div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+
+        if (DOM.pipelineCmGrid) DOM.pipelineCmGrid.innerHTML = cmHtml;
+    }
+
+    function downloadPipelineProtocolReport() {
+        if (!AppState.pipeline.benchmarkResults || AppState.pipeline.benchmarkResults.length === 0) {
+            alert("No pipeline results available to download.");
+            return;
+        }
+
+        const report = {
+            title: "Strict 7-Step Clinical Machine Learning Protocol Report",
+            conceived_and_directed_by: "Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)",
+            generated_at: new Date().toISOString(),
+            dataset_name: AppState.fileName,
+            target_variable: AppState.pipeline.targetCol,
+            reproducibility_seed: AppState.pipeline.evalSeed,
+            pipeline_steps: {
+                step_1_split_and_strict_imputation: {
+                    train_records: AppState.pipeline.trainRows.length,
+                    test_records: AppState.pipeline.testRows.length,
+                    imputation_strategy: AppState.pipeline.imputeStrategy,
+                    leak_free_audit: AppState.pipeline.imputer.fillValues
+                },
+                step_2_normality_and_correlation: {
+                    continuous_features_analyzed: Object.keys(AppState.pipeline.normalityMap),
+                    normality_assessment: AppState.pipeline.normalityMap,
+                    high_correlation_pairs: AppState.pipeline.corrPairs.filter(p => p.isHigh)
+                },
+                step_3_vif_check: {
+                    vif_scores: AppState.pipeline.vifResults,
+                    permanently_dropped_features: Array.from(AppState.pipeline.droppedFeatures)
+                },
+                step_4_univariate_testing: {
+                    baseline_rankings: AppState.pipeline.univariateResults
+                },
+                step_5_smotenc_imbalance_handling: {
+                    applied: AppState.pipeline.smotencResult?.applied,
+                    minority_percentage_before: AppState.pipeline.smotencResult?.minorityPctBefore,
+                    minority_percentage_after: AppState.pipeline.smotencResult?.minorityPctAfter,
+                    synthetic_instances_generated: AppState.pipeline.smotencResult?.syntheticCountGenerated || 0
+                },
+                step_6_rf_feature_scout: {
+                    feature_importance_scores: AppState.pipeline.rfImportance,
+                    top_70_features: AppState.pipeline.top70Features,
+                    bottom_30_features: AppState.pipeline.bottom30Features
+                },
+                step_7_constrained_model_benchmark: AppState.pipeline.benchmarkResults.map(b => ({
+                    model_id: b.id,
+                    model_name: b.name,
+                    features_used: b.eval.featuresUsed,
+                    constraint_note: b.eval.constraintNote,
+                    metrics: {
+                        f1_score: b.eval.macroF1,
+                        precision: b.eval.macroPrecision,
+                        recall: b.eval.macroRecall,
+                        auc_roc: b.eval.rocAuc,
+                        accuracy: b.eval.accuracy
+                    },
+                    confusion_matrix: b.eval.confMatrix
+                }))
+            }
+        };
+
+        const jsonString = JSON.stringify(report, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Clinical_ML_7Step_Protocol_Report_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         initDOM();
         setupEventListeners();
