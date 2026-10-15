@@ -6,7 +6,7 @@
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 
@@ -72,6 +72,22 @@
                 <span style="font-weight: 700; color: var(--accent-emerald);">7-Step Pipeline</span>
             </button>
         </nav>
+
+        <!-- Analysis settings: save / restore every choice for a dataset (no patient data is stored) -->
+        <div class="settings-bar" id="settings-bar">
+            <div class="settings-bar-row">
+                <div class="settings-bar-text">
+                    <strong>⚙️ Analysis settings</strong>
+                    <span>Save all your choices for this dataset and restore them another day, then re-run in one click. Settings files contain choices only, never patient data.</span>
+                </div>
+                <div class="settings-bar-actions">
+                    <button type="button" id="settings-save-btn" class="btn btn-secondary btn-sm" disabled title="Load a dataset first">💾 Save settings</button>
+                    <button type="button" id="settings-load-btn" class="btn btn-secondary btn-sm">📂 Load settings</button>
+                    <input type="file" id="settings-file-input" accept=".json,application/json" style="display: none;" aria-label="Settings file">
+                </div>
+            </div>
+            <div id="settings-banner" aria-live="polite"></div>
+        </div>
 
         <!-- ===================================================================
              STEP 1: DATA INGESTION & OVERVIEW
@@ -173,6 +189,9 @@
                             <p>Choose tailored mathematical imputation strategies based on whether variables are continuous, ordinal, or nominal.</p>
                         </div>
                     </div>
+
+                    <!-- Complete-case option (rendered by app.js when the active variables have empty cells) -->
+                    <div id="complete-case-box"></div>
 
                     <div class="table-container">
                         <table class="data-table">
@@ -1277,6 +1296,11 @@
                                     <option value="mean">Mean</option>
                                 </select>
                                 <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Categorical variables strictly imputed via Training Mode.</span>
+                                <label for="pipeline-complete-case" style="display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 12.5px; color: var(--text-primary); cursor: pointer;">
+                                    <input type="checkbox" id="pipeline-complete-case" style="margin-top: 2px; accent-color: var(--accent-cyan);">
+                                    <span><strong>Remove all rows with one or more empty cells</strong> (complete-case analysis) instead of imputing</span>
+                                </label>
+                                <span id="pipeline-complete-case-info" style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;"></span>
                             </div>
                             <div class="form-group">
                                 <label for="pipeline-seed-input" class="form-label">Reproducibility Seed:</label>
@@ -1689,8 +1713,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=23"></script>
-    <script src="models.js?v=23"></script>
-    <script src="app.js?v=23"></script>
+    <script src="data-engine.js?v=29"></script>
+    <script src="models.js?v=29"></script>
+    <script src="app.js?v=30"></script>
 </body>
 </html>

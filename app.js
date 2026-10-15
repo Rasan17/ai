@@ -680,6 +680,8 @@
 
         // Pipeline Step Action Buttons
         if (DOM.pipelineStep1RunBtn) DOM.pipelineStep1RunBtn.addEventListener('click', executePipelineStep1);
+        const pipelineCompleteCase = document.getElementById('pipeline-complete-case');
+        if (pipelineCompleteCase) pipelineCompleteCase.addEventListener('change', updatePipelineCompleteCaseInfo);
         if (DOM.pipelineToStep2Btn) DOM.pipelineToStep2Btn.addEventListener('click', () => goToPipelineSubstep(2));
         if (DOM.pipelineRunCorrBtn) DOM.pipelineRunCorrBtn.addEventListener('click', renderPipelineStep2);
         if (DOM.pipelineToStep3Btn) DOM.pipelineToStep3Btn.addEventListener('click', () => goToPipelineSubstep(3));
@@ -759,7 +761,15 @@
         DOM.sampleRegressionBtn.addEventListener('click', () => loadSampleDataset('medical_recovery_score.csv', 'Functional Recovery Score (Continuous Regression)'));
 
         // Imputation execution
-        DOM.applyImputationBtn.addEventListener('click', executeImputation);
+        DOM.applyImputationBtn.addEventListener('click', () => {
+            // Complete data: still build the validated dataset Step 4 trains from, then go straight on
+            if (DOM.applyImputationBtn.dataset.mode === 'complete') {
+                executeImputation();
+                if (AppState.imputedData) goToStep(4);
+            } else {
+                executeImputation();
+            }
+        });
 
         // =========================================================================
         // MODEL TESTING SCOPE & SELECTION (Single, Multi, All Models)
@@ -1054,6 +1064,38 @@
 
         // Initial model-scope sync (setModelScope is local to this function)
         setModelScope('single');
+
+        // Used by "Load settings" to restore the chosen models and scope
+        AppState.applyModelSelection = (scope, ids) => {
+            const valid = (ids || []).filter(id => ALL_MODEL_IDS.includes(id));
+            if (valid.length === 0) return;
+            AppState.selectedModelIds = valid.slice();
+            AppState.selectedModelId = valid[0];
+            AppState.activeHyperparamModelId = valid[0];
+            AppState.modelScope = valid.length === ALL_MODEL_IDS.length ? 'all' : (valid.length === 1 ? 'single' : (scope || 'multi'));
+            if (DOM.scopeSingle) DOM.scopeSingle.checked = AppState.modelScope === 'single';
+            if (DOM.scopeMulti) DOM.scopeMulti.checked = AppState.modelScope === 'multi';
+            if (DOM.scopeAll) DOM.scopeAll.checked = AppState.modelScope === 'all';
+            if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.classList.toggle('active-single', AppState.modelScope === 'single');
+            if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.toggle('active-multi', AppState.modelScope === 'multi');
+            if (DOM.scopeAllLabel) DOM.scopeAllLabel.classList.toggle('active-all', AppState.modelScope === 'all');
+            syncModelCardSelections();
+            updateTrainButtonLabel();
+        };
+
+        // Analysis settings bar
+        const settingsSaveBtn = document.getElementById('settings-save-btn');
+        const settingsLoadBtn = document.getElementById('settings-load-btn');
+        const settingsFileInput = document.getElementById('settings-file-input');
+        if (settingsSaveBtn) settingsSaveBtn.addEventListener('click', downloadSettings);
+        if (settingsLoadBtn && settingsFileInput) {
+            settingsLoadBtn.addEventListener('click', () => settingsFileInput.click());
+            settingsFileInput.addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) loadSettingsFile(file);
+                e.target.value = '';
+            });
+        }
     }
 
     function syncTrainTestSplit(trainVal) {
@@ -1360,7 +1402,9 @@
             top70Features: [],
             bottom30Features: [],
             benchmarkResults: [],
-            excludedMissingTarget: 0
+            excludedMissingTarget: 0,
+            completeCase: false,
+            excludedIncomplete: 0
         };
     }
 
@@ -1385,6 +1429,9 @@
         AppState.deployedSource = null;
         AppState.deployedPipelineModel = null;
         AppState.baselinePrepMeta = null;
+        AppState.completeCase = false;
+        const pipelineCC = document.getElementById('pipeline-complete-case');
+        if (pipelineCC) pipelineCC.checked = false;
         if (AppState.charts.loss) {
             AppState.charts.loss.destroy();
             AppState.charts.loss = null;
@@ -1448,6 +1495,9 @@
 
             renderDataOverview();
             DOM.toStep2Btn.disabled = false;
+            const saveBtn = document.getElementById('settings-save-btn');
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.title = 'Save all choices for this dataset'; }
+            offerStoredSettings(parsed.headers);
             if (DOM.pipelineDirectLaunchBtn) {
                 DOM.pipelineDirectLaunchBtn.disabled = false;
             }
@@ -1689,12 +1739,78 @@
         return html;
     }
 
+    // Rows with at least one empty cell among the variables used for modelling (predictors + outcome)
+    function countIncompleteRows(rows, activeCols) {
+        let n = 0;
+        for (let i = 0; i < rows.length; i++) {
+            for (let j = 0; j < activeCols.length; j++) {
+                if (DataEngine.isMissing(rows[i][activeCols[j]])) { n++; break; }
+            }
+        }
+        return n;
+    }
+
+    function renderCompleteCaseBox(rows, activeCols) {
+        const box = document.getElementById('complete-case-box');
+        if (!box) return;
+        const incomplete = countIncompleteRows(rows, activeCols);
+        if (incomplete === 0) {
+            AppState.completeCase = false;
+            box.innerHTML = '';
+            return;
+        }
+        const total = rows.length;
+        const remaining = total - incomplete;
+        const pct = (100 * incomplete / total).toFixed(1);
+        const heavy = incomplete / total > 0.2 || remaining < 30;
+        box.innerHTML = `
+            <div style="margin-bottom: 16px; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid ${AppState.completeCase ? 'var(--accent-cyan)' : 'var(--border-color)'}; background: var(--bg-surface-subtle);">
+                <label for="complete-case-toggle" style="display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 13px; color: var(--text-primary);">
+                    <input type="checkbox" id="complete-case-toggle" ${AppState.completeCase ? 'checked' : ''} style="margin-top: 3px; accent-color: var(--accent-cyan);">
+                    <span>
+                        <strong>Remove all rows with one or more empty cells</strong> (complete-case analysis) instead of imputing.
+                        <span style="display: block; font-size: 12px; color: var(--text-secondary); margin-top: 3px;">
+                            ${incomplete.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} rows (${pct}%) have an empty cell in the variables used for modelling
+                            (predictors and outcome; columns set to Meta / ID are ignored). ${remaining.toLocaleString('en-GB')} complete rows would remain.
+                            The same rule is applied to the test data.
+                        </span>
+                        ${heavy ? `<span style="display: block; font-size: 12px; color: var(--accent-amber); margin-top: 4px;">
+                            ⚠️ This removes a large share of the data${remaining < 30 ? ' and leaves very few rows' : ''}. Complete-case analysis is unbiased only if
+                            values are missing completely at random; otherwise imputation is usually preferable.</span>` : ''}
+                    </span>
+                </label>
+            </div>`;
+        document.getElementById('complete-case-toggle').addEventListener('change', (e) => {
+            AppState.completeCase = e.target.checked;
+            AppState.imputedData = null; // previous result no longer matches the chosen strategy
+            if (DOM.toStep4Btn) DOM.toStep4Btn.disabled = true;
+            if (DOM.imputeAuditBox) DOM.imputeAuditBox.innerHTML = '';
+            renderImputationTable();
+        });
+    }
+
     // =========================================================================
     // STEP 3: MISSING DATA IMPUTATION
     // =========================================================================
     function renderImputationTable() {
-        const { headers } = AppState.parsedData;
+        const { headers, rows } = AppState.parsedData;
         const analysis = AppState.columnAnalysis;
+
+        // Complete-case option: while on, every used predictor is set to "drop rows with missing"
+        // (previous choices are remembered and restored when it is switched off)
+        const activeCols = headers.filter(h => AppState.columnConfigs[h].role !== 'meta');
+        activeCols.forEach(h => {
+            const c = AppState.columnConfigs[h];
+            if (c.role !== 'feature') return;
+            if (AppState.completeCase) {
+                if (c.imputationStrategy !== 'drop' && c.prevImputationStrategy === undefined) c.prevImputationStrategy = c.imputationStrategy;
+                c.imputationStrategy = 'drop';
+            } else if (c.prevImputationStrategy !== undefined) {
+                c.imputationStrategy = c.prevImputationStrategy;
+                delete c.prevImputationStrategy;
+            }
+        });
+        renderCompleteCaseBox(rows, activeCols);
 
         let rowsHtml = '';
         let missingColCount = 0;
@@ -1757,7 +1873,7 @@
                     <td><span class="pill pill-${cfg.type}">${cfg.type}</span></td>
                     <td><span class="pill pill-missing">${a.missingCount} / ${a.total} (${a.missingPercent}%)</span></td>
                     <td>
-                        <select class="control-select impute-strat-select" data-col="${escapeHtml(col)}" style="min-width: 200px;">
+                        <select class="control-select impute-strat-select" data-col="${escapeHtml(col)}" style="min-width: 200px;" ${AppState.completeCase ? 'disabled title="Complete-case option is on: rows with an empty cell are removed"' : ''}>
                             ${strategyOptionsHtml}
                         </select>
                     </td>
@@ -1767,6 +1883,14 @@
                 </tr>
             `;
         });
+
+        // Button reflects the data: nothing to impute -> "Full data | Move Next" (validates and opens Step 4)
+        if (DOM.applyImputationBtn) {
+            const complete = missingColCount === 0;
+            DOM.applyImputationBtn.dataset.mode = complete ? 'complete' : 'impute';
+            DOM.applyImputationBtn.textContent = complete ? '✓ Full data | Move Next'
+                : (AppState.completeCase ? '⚡ Remove Incomplete Rows & Validate Dataset' : '⚡ Apply Imputation & Validate Dataset');
+        }
 
         if (missingColCount === 0) {
             DOM.imputeTableBody.innerHTML = `
@@ -1810,7 +1934,9 @@
             let auditHtml = `
                 <div style="background: var(--bg-surface-elevated); border: 1px solid var(--accent-emerald); border-radius: var(--radius-md); padding: 16px;">
                     <h4 style="color: var(--accent-emerald); display: flex; align-items: center; gap: 8px;">
-                        ✓ Imputation Complete: ${res.totalRowsAfter} clean records ready
+                        ${AppState.completeCase
+                            ? `✓ Complete-case dataset ready: ${res.totalRowsAfter} complete records (${rows.length - res.totalRowsAfter} row(s) with an empty cell removed; no imputation)`
+                            : `✓ Imputation Complete: ${res.totalRowsAfter} clean records ready`}
                     </h4>
                     <ul style="margin: 10px 0 0 20px; font-size: 13px; color: var(--text-secondary);">
                         ${res.audit.length === 0 ? '<li>No missing cells required imputation.</li>' : res.audit.map(a => `
@@ -2338,8 +2464,17 @@
                     return;
                 }
 
+                // Complete-case option: apply the same rule to the testing file (drop rows with an empty predictor cell)
+                let optionBRows = AppState.separateTestRawRows;
+                let completeCaseDropped = 0;
+                if (AppState.completeCase) {
+                    const predictors = prep.featureCols;
+                    optionBRows = optionBRows.filter(r => predictors.every(c => !DataEngine.isMissing(r[c])));
+                    completeCaseDropped = AppState.separateTestRawRows.length - optionBRows.length;
+                }
                 // Transform separate test data using training metadata (strict zero leakage)
-                const testPrep = DataEngine.prepareTestingDataset(AppState.separateTestRawRows, prep);
+                const testPrep = DataEngine.prepareTestingDataset(optionBRows, prep);
+                testPrep.completeCaseDropped = completeCaseDropped;
                 AppState.separateTestData = testPrep;
 
                 if (!testPrep.totalEvaluated || testPrep.totalEvaluated === 0) {
@@ -2413,6 +2548,7 @@
                     evalRes.missingTargetCount = testPrep.missingTargetCount;
                     evalRes.unknownClassCount = testPrep.unknownClassCount;
                     evalRes.imputedFeatureCells = testPrep.imputedFeatureCells;
+                    evalRes.completeCaseDropped = testPrep.completeCaseDropped;
                     evalRes.seed = hyperparams.seed;
                     if (model.trainingInfo) evalRes.nnNote = describeNNTraining(model.trainingInfo);
                     if (model.usedFallback) {
@@ -2448,6 +2584,7 @@
             markBaselineDeployed();
             // The previous run's models are no longer reachable (the new leader is now deployed)
             disposeModels((previousResults || []).map(r => r.model));
+            saveSettingsToBrowser(); // remember these choices for this dataset
 
             if (watchdog) {
                 watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Top-ranked on ${rankingMetricLabel(prep.isClassification)}: ${champion.info.name}`);
@@ -2772,6 +2909,11 @@
             const resultsForNotes = allResults.length ? allResults.map(r => r.evalRes) : [evalRes];
             if (prep && prep.isClassification && prep.positiveClass !== null && prep.positiveClass !== undefined) {
                 notes.push(`Positive (event) class for ROC-AUC, Brier score, sensitivity and TP/FN: <strong>${escapeHtml(prep.positiveClass)}</strong>. Change it in Step 2 (target card) if this is not the outcome of interest.`);
+            }
+            if (AppState.completeCase) {
+                notes.push(isOptionB
+                    ? `Complete-case analysis: training rows with an empty cell were removed${evalRes.completeCaseDropped ? `; ${evalRes.completeCaseDropped} Dataset (ii) row(s) with an empty predictor cell were also removed` : ''}.`
+                    : 'Complete-case analysis: rows with an empty cell were removed from both the training and test splits (no imputation).');
             }
             if (isOptionB && evalRes.imputedFeatureCells > 0) {
                 notes.push(`${evalRes.imputedFeatureCells} missing/unrecognised predictor cell(s) in Dataset (ii) were filled from training-cohort statistics.`);
@@ -3516,7 +3658,34 @@
     // Conceived, designed and developed by Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)
     // =========================================================================
 
+    // Preview for the pipeline complete-case option: how many rows it would remove
+    function updatePipelineCompleteCaseInfo() {
+        const info = document.getElementById('pipeline-complete-case-info');
+        const toggle = document.getElementById('pipeline-complete-case');
+        const strategy = document.getElementById('pipeline-impute-strategy');
+        if (!info || !toggle) return;
+        if (strategy) strategy.disabled = toggle.checked; // nothing is imputed in complete-case mode
+        if (!AppState.parsedData || !AppState.parsedData.rows) { info.textContent = ''; return; }
+        const cfgs = AppState.columnConfigs;
+        const targetCol = Object.keys(cfgs).find(c => cfgs[c].role === 'target');
+        const predictors = Object.keys(cfgs).filter(c => c !== targetCol && cfgs[c].role !== 'meta');
+        const rows = targetCol ? AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol])) : AppState.parsedData.rows;
+        const incomplete = rows.filter(r => predictors.some(c => DataEngine.isMissing(r[c]))).length;
+        const remaining = rows.length - incomplete;
+        if (incomplete === 0) {
+            info.textContent = 'No predictor cells are empty in this dataset: nothing would be removed.';
+            info.style.color = 'var(--text-muted)';
+            return;
+        }
+        const heavy = incomplete / rows.length > 0.2 || remaining < 30;
+        info.textContent = `${incomplete} of ${rows.length} rows (${(100 * incomplete / rows.length).toFixed(1)}%) have an empty predictor cell ` +
+            `(Meta / ID columns ignored); ${remaining} complete rows would remain.` +
+            (heavy ? ' ⚠️ This removes a large share of the data; complete-case analysis is unbiased only if values are missing completely at random, otherwise imputation is usually preferable.' : '');
+        info.style.color = heavy ? 'var(--accent-amber)' : 'var(--text-muted)';
+    }
+
     function initPipelineUI() {
+        updatePipelineCompleteCaseInfo();
         if (DOM.pipelineDatasetName) {
             DOM.pipelineDatasetName.innerText = AppState.fileName || "No dataset loaded yet (select cohort or upload CSV)";
         }
@@ -3613,11 +3782,25 @@
 
         // Rows with a missing (or, for regression, non-numeric) outcome are excluded: outcomes are never imputed
         const isClassification = AppState.columnConfigs[targetCol]?.type !== 'continuous';
-        const usableRows = AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol]) &&
+        let usableRows = AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol]) &&
             (isClassification || !isNaN(Number(r[targetCol]))));
         const excludedMissingTarget = AppState.parsedData.rows.length - usableRows.length;
+
+        // Optional complete-case analysis: drop every row with an empty predictor cell BEFORE splitting,
+        // so the training and testing sets both contain complete rows only (each row is judged on its own
+        // values, so this introduces no train/test leakage)
+        const completeCaseEl = document.getElementById('pipeline-complete-case');
+        const completeCase = Boolean(completeCaseEl && completeCaseEl.checked);
+        let excludedIncomplete = 0;
+        if (completeCase) {
+            const before = usableRows.length;
+            usableRows = usableRows.filter(r => featureCols.every(c => !DataEngine.isMissing(r[c])));
+            excludedIncomplete = before - usableRows.length;
+        }
         if (usableRows.length < 5) {
-            alert(`Only ${usableRows.length} row(s) have a valid outcome for '${targetCol}'. At least 5 are needed for a train/test split.`);
+            alert(completeCase
+                ? `Only ${usableRows.length} complete row(s) remain after removing rows with an empty cell. At least 5 are needed for a train/test split; untick the complete-case option to impute instead.`
+                : `Only ${usableRows.length} row(s) have a valid outcome for '${targetCol}'. At least 5 are needed for a train/test split.`);
             return;
         }
 
@@ -3659,6 +3842,8 @@
         AppState.pipeline.targetCol = targetCol;
         AppState.pipeline.columnConfigs = { ...AppState.columnConfigs };
         AppState.pipeline.excludedMissingTarget = excludedMissingTarget;
+        AppState.pipeline.completeCase = completeCase;
+        AppState.pipeline.excludedIncomplete = excludedIncomplete;
         // Re-running Step 1 invalidates every downstream result
         AppState.pipeline.droppedFeatures = new Set();
         AppState.pipeline.normalityMap = {};
@@ -3688,8 +3873,11 @@
         }
 
         renderPipelineStep1Results(trainTransformed.missingFilledCount, testTransformed.missingFilledCount);
-        if (excludedMissingTarget > 0) {
-            alert(`${excludedMissingTarget} row(s) with a missing outcome ('${targetCol}') were excluded before splitting. Outcomes are never imputed.`);
+        const removalNotes = [];
+        if (excludedMissingTarget > 0) removalNotes.push(`${excludedMissingTarget} row(s) with a missing outcome ('${targetCol}') were excluded (outcomes are never imputed).`);
+        if (excludedIncomplete > 0) removalNotes.push(`${excludedIncomplete} row(s) with one or more empty predictor cells were removed (complete-case analysis).`);
+        if (removalNotes.length > 0) {
+            alert(removalNotes.join('\n') + `\n${usableRows.length} row(s) remain for the train/test split.`);
         }
     }
 
@@ -3743,6 +3931,12 @@
         });
 
         tableHtml += `</tbody></table>`;
+        if (AppState.pipeline.completeCase) {
+            tableHtml += `<p style="font-size: 12px; color: var(--accent-cyan); margin-top: 8px;">
+                Complete-case analysis: ${AppState.pipeline.excludedIncomplete} row(s) with one or more empty predictor cells were removed before the split,
+                so no predictor values needed imputing (the fitted values above are kept only as a fallback for new cases at prediction time).
+            </p>`;
+        }
         tableHtml += `<p style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
             Outcome '<strong>${escapeHtml(AppState.pipeline.targetCol)}</strong>' is never imputed${AppState.pipeline.excludedMissingTarget > 0
                 ? `: ${AppState.pipeline.excludedMissingTarget} row(s) with a missing outcome were excluded before the split.`
@@ -4573,6 +4767,7 @@
             if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'block';
 
             if (watchdog) watchdog.finish(`All ${benchmarkList.length} Clinical Models Evaluated Successfully!`);
+            saveSettingsToBrowser(); // remember these choices for this dataset
 
         } catch (err) {
             console.error("Pipeline Step 7 training error:", err);
@@ -4867,7 +5062,9 @@
     // Factual one-line summary of what the 7-step pipeline actually did
     function pipelineProvenanceSummary() {
         const p = AppState.pipeline;
-        const parts = ['Imputation & scaling fitted on training split only'];
+        const parts = [p.completeCase
+            ? `Complete-case analysis (${p.excludedIncomplete} incomplete row(s) removed); scaling fitted on training split only`
+            : 'Imputation & scaling fitted on training split only'];
         const vifDropped = (p.vifResults || []).filter(v => v.highVIF && p.droppedFeatures.has(v.feature)).length;
         parts.push(p.droppedFeatures.size > 0 ? `${p.droppedFeatures.size} feature(s) excluded (correlation/VIF/univariate review)` : 'no features excluded');
         if (vifDropped > 0) parts.push(`${vifDropped} with VIF > 5`);
@@ -5152,7 +5349,7 @@
                 <tbody>
                     ${row('Top-ranked model', escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()), escapeHtml(pipeBest.name), '')}
                     ${metricRows}
-                    ${row('Imputation / scaling', bEv.protocol === 'option-b' ? 'Fitted on Dataset (i) only' : 'Fitted on the training split only (split first)', 'Fitted on the training split only', '')}
+                    ${row('Imputation / scaling', bEv.protocol === 'option-b' ? 'Fitted on Dataset (i) only' : 'Fitted on the training split only (split first)', AppState.pipeline.completeCase ? `Complete-case (${AppState.pipeline.excludedIncomplete} incomplete row(s) removed); scaling fitted on the training split only` : 'Fitted on the training split only', '')}
                     ${row('Collinearity handling', '<span style="color: var(--text-muted);">None (all features kept)</span>', `Correlation & VIF review; ${AppState.pipeline.droppedFeatures.size} feature(s) excluded overall`, '')}
                     ${row('Class imbalance', '<span style="color: var(--text-muted);">Original distribution</span>',
                         isClassification ? (sm && sm.applied ? `SMOTENC on training split (+${sm.syntheticCountGenerated} synthetic rows)` : 'SMOTENC not applied (not imbalanced)') : 'Not applicable (regression)', '')}
@@ -5189,6 +5386,8 @@
                     train_records: AppState.pipeline.trainRows.length,
                     test_records: AppState.pipeline.testRows.length,
                     rows_excluded_missing_outcome: AppState.pipeline.excludedMissingTarget || 0,
+                    complete_case_analysis: Boolean(AppState.pipeline.completeCase),
+                    rows_excluded_incomplete_predictors: AppState.pipeline.excludedIncomplete || 0,
                     split_seed: AppState.pipeline.seed,
                     imputation_strategy: AppState.pipeline.imputeStrategy,
                     leak_free_audit: AppState.pipeline.imputer.fillValues
@@ -5262,6 +5461,299 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    }
+
+    // =========================================================================
+    // ANALYSIS SETTINGS: SAVE / RESTORE / ONE-CLICK RE-RUN
+    // Settings hold the user's choices only (column names, roles, options, seeds, hyper-parameters),
+    // never patient data. Stored as a downloadable .json file and, per dataset, in this browser.
+    // =========================================================================
+    const SETTINGS_SCHEMA = 1;
+    const SETTINGS_APP = 'Universal Medical ML/NeuralNet Predictor';
+    const SETTINGS_KEY_PREFIX = 'ummp-settings:';
+    const SETTINGS_MAX_STORED = 20;
+    const VARIABLE_FIELDS = ['role', 'type', 'imputationStrategy', 'prevImputationStrategy', 'customImputeVal', 'positiveClass', 'ordinalOrder'];
+
+    // Identifies a dataset by its column headers (FNV-1a hash), so a re-loaded or updated file matches
+    function datasetSignature(headers) {
+        let h = 0x811c9dc5;
+        const str = headers.join('\u0001');
+        for (let i = 0; i < str.length; i++) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 0x01000193) >>> 0;
+        }
+        return h.toString(16).padStart(8, '0');
+    }
+
+    // Form controls to remember (by id; radio groups by name). Controls whose state lives in AppState,
+    // or that are rebuilt per run (model cards, scope, ranking metric, results tables), are excluded.
+    function isRememberedControl(el) {
+        if (el.type === 'file' || el.type === 'button' || el.type === 'submit') return false;
+        if (el.classList.contains('model-select-checkbox') || el.classList.contains('ranking-metric-select')) return false;
+        if (el.type === 'radio') return Boolean(el.name) && el.name !== 'model-scope' && !/^scope-/.test(el.id);
+        if (!el.id || /^scope-/.test(el.id) || el.id === 'pipeline-univ-master-check') return false;
+        return true;
+    }
+
+    function collectFormState(rootSelector) {
+        const root = document.querySelector(rootSelector);
+        const state = {};
+        if (!root) return state;
+        root.querySelectorAll('input, select, textarea').forEach(el => {
+            if (!isRememberedControl(el)) return;
+            if (el.type === 'radio') {
+                if (el.checked) state[`radio:${el.name}`] = el.value;
+            } else if (el.type === 'checkbox') {
+                state[el.id] = el.checked;
+            } else {
+                state[el.id] = el.value;
+            }
+        });
+        return state;
+    }
+
+    function applyFormState(state) {
+        if (!state) return;
+        const fire = (el, types) => types.forEach(t => el.dispatchEvent(new Event(t, { bubbles: true })));
+        // Radios first: some (seed mode, validation mode) reset related inputs when they change
+        Object.keys(state).filter(k => k.startsWith('radio:')).forEach(k => {
+            const name = k.slice(6);
+            const el = Array.from(document.querySelectorAll('input[type="radio"]')).find(r => r.name === name && r.value === state[k]);
+            if (el && !el.checked) { el.checked = true; fire(el, ['change']); }
+        });
+        Object.keys(state).filter(k => !k.startsWith('radio:')).forEach(id => {
+            const el = document.getElementById(id);
+            if (!el || !isRememberedControl(el)) return;
+            if (el.type === 'checkbox') {
+                if (el.checked !== Boolean(state[id])) { el.checked = Boolean(state[id]); fire(el, ['change']); }
+            } else if (el.value !== String(state[id])) {
+                el.value = state[id];
+                fire(el, ['input', 'change']);
+            }
+        });
+    }
+
+    function collectSettings() {
+        const { headers, totalRows } = AppState.parsedData;
+        const variables = {};
+        headers.forEach(h => {
+            const c = AppState.columnConfigs[h] || {};
+            variables[h] = {};
+            VARIABLE_FIELDS.forEach(f => { if (c[f] !== undefined) variables[h][f] = c[f]; });
+        });
+        return {
+            app: SETTINGS_APP,
+            schema: SETTINGS_SCHEMA,
+            savedAt: new Date().toISOString(),
+            note: 'Analysis choices only; contains no patient data.',
+            dataset: { fileName: AppState.fileName, headers, rowCount: totalRows, signature: datasetSignature(headers) },
+            variables,
+            standard: {
+                completeCase: Boolean(AppState.completeCase),
+                modelScope: AppState.modelScope,
+                selectedModelIds: (AppState.selectedModelIds || []).slice(),
+                rankingMetricClf: AppState.rankingMetricClf || 'macroF1',
+                rankingMetricReg: AppState.rankingMetricReg || 'r2',
+                form: collectFormState('#step-4-content')
+            },
+            pipeline: {
+                form: collectFormState('#step-pipeline-content'),
+                droppedFeatures: Array.from((AppState.pipeline && AppState.pipeline.droppedFeatures) || []),
+                // Step 1 resets the evaluation seed to the split seed, so the seed used in Step 7 is kept separately
+                evalSeed: DOM.pipelineEvalSeedInput ? DOM.pipelineEvalSeedInput.value : ''
+            },
+            used: {
+                standard: Boolean(AppState.allTestedResults && AppState.allTestedResults.length),
+                pipeline: Boolean(AppState.pipeline && AppState.pipeline.benchmarkResults && AppState.pipeline.benchmarkResults.length)
+            }
+        };
+    }
+
+    // Browser memory (per-viewer convenience; may be unavailable or cleared, so always optional)
+    function saveSettingsToBrowser() {
+        if (!AppState.parsedData) return;
+        try {
+            const settings = collectSettings();
+            const key = SETTINGS_KEY_PREFIX + settings.dataset.signature;
+            localStorage.setItem(key, JSON.stringify(settings));
+            const index = JSON.parse(localStorage.getItem(SETTINGS_KEY_PREFIX + 'index') || '[]').filter(k => k !== key);
+            index.unshift(key);
+            index.slice(SETTINGS_MAX_STORED).forEach(k => localStorage.removeItem(k));
+            localStorage.setItem(SETTINGS_KEY_PREFIX + 'index', JSON.stringify(index.slice(0, SETTINGS_MAX_STORED)));
+        } catch (e) { /* storage unavailable: the downloadable file still works */ }
+    }
+
+    function readStoredSettings(headers) {
+        try {
+            const raw = localStorage.getItem(SETTINGS_KEY_PREFIX + datasetSignature(headers));
+            return raw ? JSON.parse(raw) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function downloadSettings() {
+        if (!AppState.parsedData) {
+            alert('Load a dataset first.');
+            return;
+        }
+        const settings = collectSettings();
+        saveSettingsToBrowser();
+        const base = String(AppState.fileName || 'dataset').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_').slice(0, 60) || 'dataset';
+        const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${base}_analysis-settings_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showSeedToast('Settings saved (file downloaded and remembered in this browser)');
+    }
+
+    function loadSettingsFile(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            let settings;
+            try {
+                settings = JSON.parse(e.target.result);
+            } catch (err) {
+                alert('This file is not a valid settings file (it could not be read as JSON).');
+                return;
+            }
+            if (!settings || settings.app !== SETTINGS_APP || !settings.variables || !settings.dataset) {
+                alert('This file is not a settings file from this app.');
+                return;
+            }
+            if (!AppState.parsedData) {
+                alert(`Please load the dataset first (settings were saved for "${settings.dataset.fileName}"), then load the settings file.`);
+                return;
+            }
+            applySettings(settings);
+        };
+        reader.readAsText(file);
+    }
+
+    function offerStoredSettings(headers) {
+        const banner = document.getElementById('settings-banner');
+        if (!banner) return;
+        banner.innerHTML = '';
+        const stored = readStoredSettings(headers);
+        if (!stored) return;
+        const when = new Date(stored.savedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+        banner.innerHTML = `
+            <div class="settings-banner-box">
+                <div>📂 Settings from a previous session with this dataset are available (saved ${escapeHtml(when)}${stored.dataset.fileName ? `, file "${escapeHtml(stored.dataset.fileName)}"` : ''}).</div>
+                <div class="settings-banner-actions">
+                    <button type="button" class="btn btn-primary btn-sm" id="settings-apply-stored">Apply these settings</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="settings-dismiss">Dismiss</button>
+                </div>
+            </div>`;
+        document.getElementById('settings-apply-stored').addEventListener('click', () => applySettings(stored));
+        document.getElementById('settings-dismiss').addEventListener('click', () => { banner.innerHTML = ''; });
+    }
+
+    function applySettings(settings) {
+        const headers = AppState.parsedData.headers;
+        const savedHeaders = settings.dataset.headers || Object.keys(settings.variables);
+        const missing = savedHeaders.filter(h => !headers.includes(h));
+        const extra = headers.filter(h => !savedHeaders.includes(h));
+
+        // Step 2/3 choices (only for columns present in this file)
+        headers.forEach(h => {
+            const saved = settings.variables[h];
+            if (!saved || !AppState.columnConfigs[h]) return;
+            const cfg = AppState.columnConfigs[h];
+            // Optional choices absent from the saved file must not linger from the current session
+            ['prevImputationStrategy', 'positiveClass', 'ordinalOrder'].forEach(f => { delete cfg[f]; });
+            VARIABLE_FIELDS.forEach(f => { if (saved[f] !== undefined) cfg[f] = Array.isArray(saved[f]) ? saved[f].slice() : saved[f]; });
+        });
+        // Exactly one target
+        const targets = headers.filter(h => AppState.columnConfigs[h].role === 'target');
+        targets.slice(1).forEach(h => { AppState.columnConfigs[h].role = 'feature'; });
+
+        // Standard workflow (Step 4)
+        const std = settings.standard || {};
+        AppState.completeCase = Boolean(std.completeCase);
+        if (std.rankingMetricClf) AppState.rankingMetricClf = std.rankingMetricClf;
+        if (std.rankingMetricReg) AppState.rankingMetricReg = std.rankingMetricReg;
+        if (AppState.applyModelSelection && std.selectedModelIds) AppState.applyModelSelection(std.modelScope, std.selectedModelIds);
+        applyFormState(std.form);
+
+        // 7-step pipeline
+        const pipe = settings.pipeline || {};
+        applyFormState(pipe.form);
+        AppState.pendingPipelineDropped = (pipe.droppedFeatures || []).filter(f => headers.includes(f));
+        AppState.pendingPipelineEvalSeed = pipe.evalSeed !== undefined && pipe.evalSeed !== '' ? String(pipe.evalSeed)
+            : (DOM.pipelineEvalSeedInput && DOM.pipelineEvalSeedInput.value ? DOM.pipelineEvalSeedInput.value : null);
+
+        // Earlier results no longer match the restored choices
+        AppState.imputedData = null;
+        if (DOM.toStep4Btn) DOM.toStep4Btn.disabled = true;
+        if (DOM.imputeAuditBox) DOM.imputeAuditBox.innerHTML = '';
+        const targetCol = headers.find(h => AppState.columnConfigs[h].role === 'target');
+        syncRankingSelectors(targetCol ? AppState.columnConfigs[targetCol].type !== 'continuous' : true);
+        if (String(AppState.currentStep) === '2') renderVariableConfigGrid();
+        if (String(AppState.currentStep) === '3') renderImputationTable();
+        updatePipelineCompleteCaseInfo();
+
+        // Confirmation with one-click re-run
+        const banner = document.getElementById('settings-banner');
+        const when = new Date(settings.savedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+        const warnings = [];
+        if (missing.length) warnings.push(`Saved column(s) not in this file (ignored): ${missing.join(', ')}.`);
+        if (extra.length) warnings.push(`New column(s) in this file kept their automatic settings: ${extra.join(', ')}.`);
+        const optionB = std.form && std.form['radio:validation-mode'] === 'separate';
+        if (optionB) warnings.push('These settings use Option B: load the separate testing file (Dataset ii) in Step 4 before running the standard workflow.');
+        if (banner) {
+            banner.innerHTML = `
+                <div class="settings-banner-box">
+                    <div>✓ Settings applied (saved ${escapeHtml(when)}). Every step is filled in; review anything you like, or reproduce the analysis now:</div>
+                    ${warnings.map(w => `<div class="settings-warn">⚠️ ${escapeHtml(w)}</div>`).join('')}
+                    <div class="settings-banner-actions">
+                        <button type="button" class="btn ${settings.used && settings.used.standard ? 'btn-primary' : 'btn-secondary'} btn-sm" id="settings-run-standard">▶ Run standard workflow</button>
+                        <button type="button" class="btn ${settings.used && settings.used.pipeline ? 'btn-primary' : 'btn-secondary'} btn-sm" id="settings-run-pipeline">▶ Run 7-step pipeline</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="settings-dismiss">Close</button>
+                    </div>
+                </div>`;
+            document.getElementById('settings-run-standard').addEventListener('click', runStandardWithSettings);
+            document.getElementById('settings-run-pipeline').addEventListener('click', runPipelineWithSettings);
+            document.getElementById('settings-dismiss').addEventListener('click', () => { banner.innerHTML = ''; });
+        }
+        showSeedToast('Settings applied');
+    }
+
+    async function runStandardWithSettings() {
+        goToStep(2);
+        goToStep(3);               // renders the imputation table (applies the complete-case choice)
+        executeImputation();
+        if (!AppState.imputedData) return;
+        goToStep(4);
+        const optionB = DOM.valModeB && DOM.valModeB.checked;
+        if (optionB && (!AppState.separateTestRawRows || AppState.separateTestRawRows.length === 0)) {
+            alert('These settings use Option B. Please load the separate testing file (Dataset ii) in this step, then click Train.');
+            return;
+        }
+        await startModelTraining();
+    }
+
+    async function runPipelineWithSettings() {
+        goToStep('pipeline');
+        goToPipelineSubstep(1);
+        executePipelineStep1();
+        if (!AppState.pipeline.trainRows) return;
+        const dropped = (AppState.pendingPipelineDropped || []).filter(f => AppState.pipeline.featureCols.includes(f));
+        AppState.pipeline.droppedFeatures = new Set(dropped);
+        if (AppState.pendingPipelineEvalSeed !== null && AppState.pendingPipelineEvalSeed !== undefined && DOM.pipelineEvalSeedInput) {
+            DOM.pipelineEvalSeedInput.value = AppState.pendingPipelineEvalSeed;
+        }
+        for (const n of [2, 3, 4, 5]) goToPipelineSubstep(n);
+        goToPipelineSubstep(6);
+        await executePipelineStep6();
+        if (!AppState.pipeline.rfImportance || AppState.pipeline.rfImportance.length === 0) return;
+        goToPipelineSubstep(7);
+        await executePipelineStep7();
     }
 
     // Safety net: an unexpected error anywhere (e.g. in a form renderer) is reported to the user and the
