@@ -644,6 +644,17 @@
             const inputDim = trainX[0].length;
 
             if (hasTF) {
+                // Dispose existing model instance if retraining to prevent GPU memory leak
+                if (this.tfModel) {
+                    try { this.tfModel.dispose(); } catch (e) { /* ignore */ }
+                    this.tfModel = null;
+                }
+
+                let xTensor = null;
+                let yTensor = null;
+                let valXTensor = null;
+                let valYTensor = null;
+
                 try {
                     const tf = window.tf;
                     const model = tf.sequential();
@@ -716,15 +727,15 @@
                     });
 
                     // Prepare Tensors
-                    const xTensor = tf.tensor2d(trainX, [trainX.length, inputDim]);
-                    const yTensor = this.isClassification ?
+                    xTensor = tf.tensor2d(trainX, [trainX.length, inputDim]);
+                    yTensor = this.isClassification ?
                         tf.tensor1d(trainY, 'int32') :
                         tf.tensor2d(trainY.map(v => [v]), [trainY.length, 1]);
 
                     let validationData = null;
                     if (testX && testY && testX.length > 0) {
-                        const valXTensor = tf.tensor2d(testX, [testX.length, inputDim]);
-                        const valYTensor = this.isClassification ?
+                        valXTensor = tf.tensor2d(testX, [testX.length, inputDim]);
+                        valYTensor = this.isClassification ?
                             tf.tensor1d(testY, 'int32') :
                             tf.tensor2d(testY.map(v => [v]), [testY.length, 1]);
                         validationData = [valXTensor, valYTensor];
@@ -753,18 +764,15 @@
 
                     this.tfModel = model;
                     this.history = history;
-
-                    // Cleanup tensors
-                    xTensor.dispose();
-                    yTensor.dispose();
-                    if (validationData) {
-                        validationData[0].dispose();
-                        validationData[1].dispose();
-                    }
-
                     return;
                 } catch (e) {
                     console.warn("TensorFlow.js training exception, using native fallback:", e);
+                } finally {
+                    // Guaranteed cleanup of intermediate tensors
+                    if (xTensor) { try { xTensor.dispose(); } catch (e) {} }
+                    if (yTensor) { try { yTensor.dispose(); } catch (e) {} }
+                    if (valXTensor) { try { valXTensor.dispose(); } catch (e) {} }
+                    if (valYTensor) { try { valYTensor.dispose(); } catch (e) {} }
                 }
             }
 
