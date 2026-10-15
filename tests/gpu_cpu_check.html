@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU vs CPU Check</title>
+<style>
+    :root { --bg: #ffffff; --fg: #0f172a; --muted: #64748b; --line: #e2e8f0; --pass: #047857; --fail: #b91c1c; --warn: #b45309; }
+    @media (prefers-color-scheme: dark) {
+        :root { --bg: #0f172a; --fg: #f1f5f9; --muted: #94a3b8; --line: #334155; --pass: #34d399; --fail: #f87171; --warn: #fbbf24; }
+    }
+    body { background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, sans-serif; margin: 0; padding: 24px 16px; }
+    main { max-width: 1000px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p { color: var(--muted); margin: 0 0 16px; }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 24px; font-size: 13px; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .PASS { color: var(--pass); font-weight: 700; } .FAIL { color: var(--fail); font-weight: 700; }
+    .WARN, .INFO { color: var(--warn); font-weight: 700; }
+    #status { font-weight: 600; }
+    .wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+    <h1>Neural network: browser GPU (WebGL) vs CPU</h1>
+    <p>Trains the app's own neural network (<code>models.js</code>) with TensorFlow.js in this browser and checks that the GPU backend
+       users get gives the same predictions as the CPU backend used by the automated benchmark. Open via a local web server
+       from the project folder (e.g. <code>python3 -m http.server</code>, then <code>http://localhost:8000/tests/gpu_cpu_check.html</code>).</p>
+    <div id="status">Running…</div>
+    <div class="wrap"><table id="env"></table></div>
+    <div class="wrap"><table id="results"></table></div>
+</main>
+<script src="../tf.min.js"></script>
+<script src="../data-engine.js"></script>
+<script src="../models.js"></script>
+<script>
+(async function () {
+    'use strict';
+    const statusEl = document.getElementById('status');
+    const rows = [];
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const add = (dataset, check, result, verdict) => rows.push({ dataset, check, result, verdict });
+    const NN = { hiddenLayers: [64, 32], epochs: 40, learningRate: 0.005, batchSize: 16, dropoutRate: 0.1,
+                 l2Reg: 1e-4, activation: 'relu', optimizer: 'adam', seed: 42 };
+    const MARGIN = { auc: 0.02, accuracy: 0.03, r2: 0.05 };
+
+    // ---------------------------------------------------------------- environment / precision
+    await tf.setBackend('webgl');
+    await tf.ready();
+    const env = {
+        'TensorFlow.js': tf.version['tfjs-core'],
+        'Backend': tf.getBackend(),
+        'WebGL version': tf.env().getNumber('WEBGL_VERSION'),
+        'Float32 textures (capable / enabled)': `${tf.env().getBool('WEBGL_RENDER_FLOAT32_CAPABLE')} / ${tf.env().getBool('WEBGL_RENDER_FLOAT32_ENABLED')}`,
+        'Float16 forced': tf.env().getBool('WEBGL_FORCE_F16_TEXTURES'),
+        'Browser': navigator.userAgent
+    };
+    try {
+        const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+        const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+        if (ext) env['GPU'] = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+    } catch (e) { /* ignore */ }
+    document.getElementById('env').innerHTML = '<tr><th colspan="2">Environment</th></tr>' +
+        Object.entries(env).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+    const fullPrecision = tf.env().getBool('WEBGL_RENDER_FLOAT32_ENABLED');
+    add('—', 'GPU computes in full float32 precision', fullPrecision ? 'yes' : 'NO: float16 (≈3 significant digits)',
+        fullPrecision ? 'PASS' : 'WARN');
+
+    // ---------------------------------------------------------------- data
+    let s = 2024;
+    const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+    const gauss = () => Math.sqrt(-2 * Math.log(rnd() || 1e-9)) * Math.cos(2 * Math.PI * rnd());
+    function synthetic(task) {
+        const rowsS = [];
+        for (let i = 0; i < 600; i++) {
+            const r = {};
+            let z = 0;
+            for (let j = 0; j < 25; j++) { const v = gauss() * (1 + j % 4) + j; r['x' + j] = v; z += (j % 5 - 2) * (v - j) * 0.15; }
+            r.y = task === 'regression' ? 50 + 10 * z + gauss() * 5 : String(z + gauss() > 0 ? 1 : 0);
+            rowsS.push(r);
+        }
+        return rowsS;
+    }
+    async function cohort(file) {
+        const parsed = DataEngine.parseCSV(await (await fetch('../' + file)).text());
+        const analysis = DataEngine.analyzeColumns(parsed.headers, parsed.rows);
+        const cfg = {};
+        parsed.headers.forEach(h => { cfg[h] = { role: analysis[h].role, type: analysis[h].type, imputationStrategy: analysis[h].suggestedImputation }; });
+        return { rows: DataEngine.imputeDataset(parsed.rows, cfg, analysis).imputedRows, cfg };
+    }
+    const datasets = [];
+    const synCfg = task => {
+        const c = {};
+        for (let j = 0; j < 25; j++) c['x' + j] = { role: 'feature', type: 'continuous' };
+        c.y = { role: 'target', type: task === 'regression' ? 'continuous' : 'nominal' };
+        return c;
+    };
+    datasets.push({ name: 'Synthetic binary (600 × 25)', rows: synthetic('binary'), cfg: synCfg('binary') });
+    datasets.push({ name: 'Synthetic regression (600 × 25)', rows: synthetic('regression'), cfg: synCfg('regression') });
+    for (const [file, label] of [['universal_medical_cohort.csv', 'Cardiometabolic sample cohort'], ['medical_shunt_cohort.csv', 'Shunt sample cohort']]) {
+        try { const c = await cohort(file); datasets.push({ name: label, rows: c.rows, cfg: c.cfg }); } catch (e) { add(label, 'Load sample cohort', String(e), 'WARN'); }
+    }
+
+    function metric(isClf, yTrue, outs) {
+        if (!isClf) {
+            const p = outs.map(o => o.pred);
+            const m = yTrue.reduce((a, b) => a + b, 0) / yTrue.length;
+            const ssr = yTrue.reduce((a, y, i) => a + (y - p[i]) ** 2, 0);
+            const sst = yTrue.reduce((a, y) => a + (y - m) ** 2, 0);
+            return { r2: 1 - ssr / sst };
+        }
+        const acc = outs.filter((o, i) => o.pred === yTrue[i]).length / yTrue.length;
+        const auc = ModelEngine._calculateBinaryAUC(yTrue, outs.map(o => (o.probabilities ? o.probabilities[1] : o.pred)));
+        return { accuracy: acc, auc };
+    }
+    const rawOutputs = (nn, X) => tf.tidy(() => Array.from(nn.tfModel.predict(tf.tensor2d(X)).dataSync()));
+
+    // ---------------------------------------------------------------- checks
+    for (const ds of datasets) {
+        statusEl.textContent = `Running: ${ds.name}…`;
+        const prep = DataEngine.prepareFeaturesAndTarget(ds.rows, ds.cfg);
+        const split = DataEngine.trainTestSplit(prep.X, prep.y, 0.8, prep.isClassification, 7);
+        const k = prep.targetClasses.length || 2;
+
+        // A. Same trained weights evaluated on both backends
+        await tf.setBackend('webgl');
+        const nnGpu = new DeepNeuralNetwork(prep.isClassification, k, NN);
+        await nnGpu.fit(split.trainX, split.trainY);
+        if (nnGpu.usedFallback) { add(ds.name, 'Network trained', `fallback: ${nnGpu.fallbackReason}`, 'FAIL'); continue; }
+        const gpuRaw = rawOutputs(nnGpu, split.testX);
+        const gpuOut = nnGpu.predictOutputs(split.testX);
+        await tf.setBackend('cpu');                 // weights migrate to the CPU backend
+        const cpuRaw = rawOutputs(nnGpu, split.testX);
+        const cpuOut = nnGpu.predictOutputs(split.testX);
+        const scale = cpuRaw.map(v => Math.max(1, Math.abs(v)));
+        const dRaw = Math.max(...gpuRaw.map((v, i) => Math.abs(v - cpuRaw[i]) / scale[i]));
+        const agree = gpuOut.filter((o, i) => o.pred === cpuOut[i].pred).length / gpuOut.length;
+        const okA = dRaw <= (fullPrecision ? 1e-4 : 1e-2) && (prep.isClassification ? agree === 1 : true);
+        add(ds.name, 'Same trained weights: GPU vs CPU predictions',
+            `max relative diff ${dRaw.toExponential(1)}` + (prep.isClassification ? `; predicted class agreement ${(agree * 100).toFixed(1)}%` : ''),
+            okA ? 'PASS' : 'FAIL');
+        await tf.setBackend('webgl');
+        const mGpu = metric(prep.isClassification, split.testY, gpuOut);
+
+        // B. Independent training on each backend (same seed: same initial weights and shuffles)
+        await tf.setBackend('cpu');
+        const nnCpu = new DeepNeuralNetwork(prep.isClassification, k, NN);
+        await nnCpu.fit(split.trainX, split.trainY);
+        const mCpu = metric(prep.isClassification, split.testY, nnCpu.predictOutputs(split.testX));
+        const trainAgree = prep.isClassification
+            ? nnCpu.predictOutputs(split.testX).filter((o, i) => o.pred === cpuOut[i].pred).length / split.testX.length : null;
+        nnCpu.dispose();
+        await tf.setBackend('webgl');
+        nnGpu.dispose();
+        const parts = [];
+        let okB = true;
+        for (const key of Object.keys(mGpu)) {
+            const d = mGpu[key] - mCpu[key];
+            if (MARGIN[key] !== undefined && Math.abs(d) > MARGIN[key]) okB = false;
+            parts.push(`${key} GPU ${mGpu[key].toFixed(3)} vs CPU ${mCpu[key].toFixed(3)} (Δ ${d >= 0 ? '+' : ''}${d.toFixed(3)})`);
+        }
+        if (trainAgree !== null) parts.push(`class agreement ${(trainAgree * 100).toFixed(1)}%`);
+        add(ds.name, 'Trained separately on GPU and on CPU (same seed)', parts.join('; '), okB ? 'PASS' : 'FAIL');
+    }
+
+    // ---------------------------------------------------------------- report
+    const nFail = rows.filter(r => r.verdict === 'FAIL').length;
+    document.getElementById('results').innerHTML =
+        '<tr><th>Dataset</th><th>Check</th><th>Result</th><th>Verdict</th></tr>' +
+        rows.map(r => `<tr><td>${esc(r.dataset)}</td><td>${esc(r.check)}</td><td>${esc(r.result)}</td><td class="${r.verdict}">${r.verdict}</td></tr>`).join('');
+    statusEl.textContent = nFail ? `Finished: ${nFail} check(s) FAILED` : `Finished: all checks passed (${rows.filter(r => r.verdict === 'PASS').length} PASS)`;
+    statusEl.className = nFail ? 'FAIL' : 'PASS';
+    window.__gpuCpuCheck = { env, rows, nFail };
+})().catch(e => {
+    document.getElementById('status').textContent = 'Error: ' + (e && e.message ? e.message : e);
+    window.__gpuCpuCheck = { error: String(e) };
+});
+</script>
+</body>
+</html>
