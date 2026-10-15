@@ -185,6 +185,10 @@
         DOM.pipelineRunVifBtn = document.getElementById('pipeline-run-vif-btn');
         DOM.pipelineToStep4Btn = document.getElementById('pipeline-to-step4-btn');
         DOM.pipelineUnivariateTableContainer = document.getElementById('pipeline-univariate-table-container');
+        DOM.pipelineFilterSignificantBtn = document.getElementById('pipeline-filter-significant-btn');
+        DOM.pipelineSelectAllUnivBtn = document.getElementById('pipeline-select-all-univ-btn');
+        DOM.pipelineDropUnselectedUnivBtn = document.getElementById('pipeline-drop-unselected-univ-btn');
+        DOM.pipelineUnivSelectedSummary = document.getElementById('pipeline-univ-selected-summary');
         DOM.pipelineToStep5Btn = document.getElementById('pipeline-to-step5-btn');
         DOM.pipelineSmotencContainer = document.getElementById('pipeline-smotenc-container');
         DOM.pipelineToStep6Btn = document.getElementById('pipeline-to-step6-btn');
@@ -253,6 +257,9 @@
         if (DOM.pipelineRunVifBtn) DOM.pipelineRunVifBtn.addEventListener('click', renderPipelineStep3);
         if (DOM.pipelineDropVifBtn) DOM.pipelineDropVifBtn.addEventListener('click', pipelineDropSelectedVIF);
         if (DOM.pipelineToStep4Btn) DOM.pipelineToStep4Btn.addEventListener('click', () => goToPipelineSubstep(4));
+        if (DOM.pipelineFilterSignificantBtn) DOM.pipelineFilterSignificantBtn.addEventListener('click', filterSignificantUnivariateFeatures);
+        if (DOM.pipelineSelectAllUnivBtn) DOM.pipelineSelectAllUnivBtn.addEventListener('click', selectAllUnivariateFeatures);
+        if (DOM.pipelineDropUnselectedUnivBtn) DOM.pipelineDropUnselectedUnivBtn.addEventListener('click', dropUnselectedUnivariateFeatures);
         if (DOM.pipelineToStep5Btn) DOM.pipelineToStep5Btn.addEventListener('click', () => goToPipelineSubstep(5));
         if (DOM.pipelineToStep6Btn) DOM.pipelineToStep6Btn.addEventListener('click', () => goToPipelineSubstep(6));
         if (DOM.pipelineRunRfScoutBtn) DOM.pipelineRunRfScoutBtn.addEventListener('click', executePipelineStep6);
@@ -2920,20 +2927,36 @@
     function renderPipelineStep4() {
         if (!AppState.pipeline.trainRows) return;
 
-        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+        // Run univariate test on all pipeline features so user can see rankings and restore any previously dropped variables
+        const allFeatures = AppState.pipeline.featureCols;
         const results = DataEngine.runUnivariateTesting(
             AppState.pipeline.trainRows,
-            activeCols,
+            allFeatures,
             AppState.pipeline.targetCol,
             AppState.pipeline.columnConfigs
         );
 
         AppState.pipeline.univariateResults = results;
 
+        const activeCount = allFeatures.filter(c => !AppState.pipeline.droppedFeatures.has(c)).length;
+        const sigCount = results.filter(r => r.significant && !AppState.pipeline.droppedFeatures.has(r.feature)).length;
+        const nonSigCount = activeCount - sigCount;
+
+        if (DOM.pipelineUnivSelectedSummary) {
+            DOM.pipelineUnivSelectedSummary.innerHTML = `
+                Active in Pipeline: <strong>${activeCount} / ${allFeatures.length}</strong> features 
+                (${sigCount} significant, ${nonSigCount} non-significant). 
+                ${AppState.pipeline.droppedFeatures.size > 0 ? `<span style="color: var(--accent-rose);">(${AppState.pipeline.droppedFeatures.size} currently excluded)</span>` : ''}
+            `;
+        }
+
         let tableHtml = `
             <table class="data-table">
                 <thead>
                     <tr>
+                        <th style="width: 40px; text-align: center;">
+                            <input type="checkbox" id="pipeline-univ-master-check" title="Toggle all active" checked>
+                        </th>
                         <th style="width: 50px;">Rank</th>
                         <th>Feature</th>
                         <th>Measurement Scale</th>
@@ -2941,7 +2964,8 @@
                         <th>Test Statistic</th>
                         <th>Degrees of Freedom</th>
                         <th>p-value</th>
-                        <th>Statistical Significance</th>
+                        <th>Significance</th>
+                        <th style="text-align: right; width: 110px;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -2949,10 +2973,18 @@
 
         results.forEach((r, idx) => {
             const isSig = r.significant;
+            const isDropped = AppState.pipeline.droppedFeatures.has(r.feature);
+
             tableHtml += `
-                <tr>
+                <tr style="${isDropped ? 'opacity: 0.55; background: rgba(244, 63, 94, 0.04);' : (isSig ? 'background: rgba(16, 185, 129, 0.02);' : '')}">
+                    <td style="text-align: center;">
+                        <input type="checkbox" class="pipeline-univ-checkbox" data-feature="${r.feature}" data-sig="${isSig}" ${!isDropped ? 'checked' : ''}>
+                    </td>
                     <td style="font-weight: 700; color: var(--accent-cyan);">#${idx + 1}</td>
-                    <td><strong>${r.feature}</strong></td>
+                    <td>
+                        <strong style="${isDropped ? 'text-decoration: line-through;' : ''}">${r.feature}</strong>
+                        ${isDropped ? '<span class="pill pill-meta" style="font-size: 10px; margin-left: 6px;">Excluded</span>' : ''}
+                    </td>
                     <td><span class="pill pill-${r.scale.toLowerCase().includes('nominal') ? 'nominal' : 'continuous'}">${r.scale}</span></td>
                     <td style="font-weight: 600;">${r.testName}</td>
                     <td>${r.statisticLabel}: <strong>${r.statisticValue}</strong></td>
@@ -2960,16 +2992,125 @@
                     <td><strong style="color: ${isSig ? 'var(--accent-emerald)' : 'var(--text-muted)'}; font-size: 13.5px;">${r.pValue < 0.0001 ? '< 0.0001' : r.pValue}</strong></td>
                     <td>
                         <span class="pill" style="${isSig ? 'background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);' : 'background: rgba(100, 116, 139, 0.15); color: var(--text-muted);'}">
-                            ${isSig ? '✓ p < 0.05 (Significant)' : 'p ≥ 0.05 (Non-Significant)'}
+                            ${isSig ? '✓ p < 0.05 (Sig)' : 'p ≥ 0.05 (Non-Sig)'}
                         </span>
+                    </td>
+                    <td style="text-align: right;">
+                        ${isDropped ? `
+                            <button class="btn btn-secondary btn-sm" onclick="window.pipelineRestoreFeatureStep4('${r.feature}')" title="Restore variable into modeling pipeline">
+                                ↩️ Include
+                            </button>
+                        ` : `
+                            <button class="btn btn-rose btn-sm" onclick="window.pipelineDropFeatureStep4('${r.feature}')" title="Exclude this variable from modeling">
+                                🗑️ Exclude
+                            </button>
+                        `}
                     </td>
                 </tr>
             `;
         });
 
         tableHtml += `</tbody></table>`;
-        if (DOM.pipelineUnivariateTableContainer) DOM.pipelineUnivariateTableContainer.innerHTML = tableHtml;
+        if (DOM.pipelineUnivariateTableContainer) {
+            DOM.pipelineUnivariateTableContainer.innerHTML = tableHtml;
+
+            // Master checkbox event
+            const masterCheck = document.getElementById('pipeline-univ-master-check');
+            if (masterCheck) {
+                masterCheck.addEventListener('change', (e) => {
+                    const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+                    cbs.forEach(cb => cb.checked = e.target.checked);
+                    updateUnivSelectionSummary();
+                });
+            }
+
+            // Individual checkbox events
+            const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+            cbs.forEach(cb => {
+                cb.addEventListener('change', updateUnivSelectionSummary);
+            });
+        }
     }
+
+    function updateUnivSelectionSummary() {
+        const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+        const checkedCount = Array.from(cbs).filter(cb => cb.checked).length;
+        if (DOM.pipelineUnivSelectedSummary) {
+            DOM.pipelineUnivSelectedSummary.innerHTML = `
+                Checked for Inclusion: <strong>${checkedCount} / ${cbs.length}</strong> features. 
+                Click <strong>"🗑️ Exclude Unchecked Features"</strong> to apply changes to subsequent pipeline steps.
+            `;
+        }
+    }
+
+    function filterSignificantUnivariateFeatures() {
+        const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+        let uncheckCount = 0;
+        cbs.forEach(cb => {
+            const isSig = cb.dataset.sig === 'true';
+            if (!isSig) {
+                cb.checked = false;
+                uncheckCount++;
+            } else {
+                cb.checked = true;
+            }
+        });
+        updateUnivSelectionSummary();
+        alert(`Unchecked ${uncheckCount} non-significant feature(s) (p ≥ 0.05). Click "🗑️ Exclude Unchecked Features" to finalize.`);
+    }
+
+    function selectAllUnivariateFeatures() {
+        const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+        cbs.forEach(cb => cb.checked = true);
+        const masterCheck = document.getElementById('pipeline-univ-master-check');
+        if (masterCheck) masterCheck.checked = true;
+        updateUnivSelectionSummary();
+    }
+
+    function dropUnselectedUnivariateFeatures() {
+        const cbs = document.querySelectorAll('.pipeline-univ-checkbox');
+        let newlyDropped = [];
+        let newlyRestored = [];
+
+        cbs.forEach(cb => {
+            const f = cb.dataset.feature;
+            if (!f) return;
+            if (!cb.checked) {
+                if (!AppState.pipeline.droppedFeatures.has(f)) {
+                    AppState.pipeline.droppedFeatures.add(f);
+                    newlyDropped.push(f);
+                }
+            } else {
+                if (AppState.pipeline.droppedFeatures.has(f)) {
+                    AppState.pipeline.droppedFeatures.delete(f);
+                    newlyRestored.push(f);
+                }
+            }
+        });
+
+        const activeCount = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c)).length;
+        if (activeCount === 0) {
+            alert("Warning: At least 1 predictor variable must remain active in the pipeline!");
+            return;
+        }
+
+        let msg = `Pipeline features updated successfully! (${activeCount} active)`;
+        if (newlyDropped.length > 0) msg += `\nExcluded: ${newlyDropped.join(', ')}`;
+        if (newlyRestored.length > 0) msg += `\nRestored: ${newlyRestored.join(', ')}`;
+        alert(msg);
+
+        renderPipelineStep4();
+    }
+
+    window.pipelineDropFeatureStep4 = function (featureName) {
+        AppState.pipeline.droppedFeatures.add(featureName);
+        renderPipelineStep4();
+    };
+
+    window.pipelineRestoreFeatureStep4 = function (featureName) {
+        AppState.pipeline.droppedFeatures.delete(featureName);
+        renderPipelineStep4();
+    };
 
     // =========================================================================
     // STEP 5: Imbalance Handling (SMOTENC)
