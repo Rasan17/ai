@@ -157,6 +157,13 @@
     // Plain-language summary of how a neural network was trained (validation split / early stopping)
     function describeNNTraining(info) {
         if (!info) return '';
+        const batchNote = info.batchSize && info.requestedBatchSize && info.batchSize > info.requestedBatchSize
+            ? ` Mini-batch raised from ${info.requestedBatchSize} to ${info.batchSize} for ${info.fitCases.toLocaleString('en-GB')} cases to keep training time practical.`
+            : '';
+        return describeNNTrainingCore(info) + batchNote;
+    }
+
+    function describeNNTrainingCore(info) {
         if (!info.earlyStopping) {
             return `trained on all ${info.fitCases} training cases for ${info.maxEpochs} epochs (too few cases for an internal validation split; no early stopping).`;
         }
@@ -1559,6 +1566,7 @@
                             <option value="nominal" ${cfg.type === 'nominal' ? 'selected' : ''}>Nominal (Unordered Categorical)</option>
                         </select>
                     </div>
+                    ${a.autoMetaReason && cfg.role === 'meta' ? `<div style="font-size: 11px; color: var(--text-muted);">ℹ️ ${escapeHtml(a.autoMetaReason)}</div>` : ''}
                     ${renderTargetAndOrdinalControls(col, colIdx, a, cfg)}
                     ${cfg.role === 'feature' && cfg.type === 'nominal' && (a.distinctCount > 20 || (a.validCount > 0 && a.distinctCount / a.validCount > 0.5))
                         ? `<div style="font-size: 11px; color: var(--accent-amber);">⚠️ High cardinality (${a.distinctCount} levels): one-hot encoding adds a column per level, which slows training and invites overfitting. If this is an identifier, set it to Meta / ID; otherwise consider grouping rare levels.</div>`
@@ -1566,6 +1574,23 @@
                 </div>
             `;
         });
+
+        // Up-front size check (mirrors the engine's limit): warn before training would be refused
+        const encodedWidth = headers.reduce((sum, h) => {
+            const c = AppState.columnConfigs[h];
+            if (c.role !== 'feature') return sum;
+            return sum + (c.type === 'nominal' ? analysis[h].distinctCount : 1);
+        }, 0);
+        if (encodedWidth > 2000) {
+            const worst = headers.filter(h => AppState.columnConfigs[h].role === 'feature' && AppState.columnConfigs[h].type === 'nominal' && analysis[h].distinctCount > 50)
+                .sort((x, y) => analysis[y].distinctCount - analysis[x].distinctCount)
+                .map(h => `${h} (${analysis[h].distinctCount.toLocaleString('en-GB')})`);
+            gridHtml = `<div style="grid-column: 1 / -1; padding: 12px 14px; border-radius: var(--radius-sm); background: rgba(244, 63, 94, 0.12); border: 1px solid var(--accent-rose); color: var(--text-primary); font-size: 13px;">
+                ⚠️ <strong>Too many encoded predictor columns (${encodedWidth.toLocaleString('en-GB')}; limit 2,000).</strong>
+                Categorical predictors are one-hot encoded, one column per category, and this would exceed browser memory.
+                ${worst.length ? `Set these to <strong>Meta / ID</strong>: ${escapeHtml(worst.join(', '))}.` : ''}
+            </div>` + gridHtml;
+        }
 
         DOM.varConfigGrid.innerHTML = gridHtml;
 
@@ -2223,10 +2248,10 @@
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Benchmark out-of-sample accuracy on held-out test split
-                    const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, splitPrep.targetClasses, {
+                    const evalRes = await ModelEngine.evaluateAsync(valModel, split.testX, split.testY, prep.isClassification, splitPrep.targetClasses, {
                         regressionThreshold: splitThreshold,
                         thresholdSource: 'median of the training-split outcomes'
-                    });
+                    }, evalAbortOpts(watchdog));
                     evalRes.protocol = 'option-a';
                     evalRes.testImputedCells = testImp.audit.filter(a => a.type === 'impute_column').reduce((acc, a) => acc + a.imputedCount, 0);
                     evalRes.testDroppedRows = rowSplit.testX.length - testImp.imputedRows.length;
@@ -2375,10 +2400,10 @@
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Evaluate on independent Dataset (ii)
-                    const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses, {
+                    const evalRes = await ModelEngine.evaluateAsync(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses, {
                         regressionThreshold: prep.isClassification ? null : trainingMedian(prep.y),
                         thresholdSource: 'median of the Dataset (i) training outcomes'
-                    });
+                    }, evalAbortOpts(watchdog));
                     evalRes.protocol = 'option-b';
                     evalRes.retrainOn100 = false;
                     evalRes.trainCount = prep.X.length;
@@ -2514,6 +2539,15 @@
         } else {
             model.fit(X, y);
         }
+    }
+
+    // Lets Force Stop interrupt long (chunked) predictions during evaluation, e.g. k-NN on large cohorts
+    function evalAbortOpts(watchdog) {
+        return {
+            onYield: () => {
+                if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
+            }
+        };
     }
 
     // Re-sorts already-computed results after the ranking metric changes (no retraining, no redeployment)
@@ -3336,7 +3370,7 @@
         }
     }
 
-    function executeBatchPrediction() {
+    async function executeBatchPrediction() {
         if (!AppState.trainedModel || !AppState.prepMeta) {
             alert("Please train a model in Step 4 first.");
             return;
@@ -3362,7 +3396,22 @@
         // Encode every row, then predict in one batched pass (one GPU call for neural networks)
         const rowIssueLists = rows.map(() => []);
         const xMatrix = rows.map((r, i) => DataEngine.transformSingleRow(r, prep, rowIssueLists[i]));
-        const outputs = rows.length ? ModelEngine.predictOutputs(AppState.trainedModel, xMatrix) : [];
+        // Asynchronous, chunked prediction keeps the page responsive for large files
+        let outputs = [];
+        if (rows.length) {
+            DOM.runBatchPredictBtn.disabled = true;
+            const btnLabel = DOM.runBatchPredictBtn.innerHTML;
+            try {
+                outputs = await ModelEngine.predictOutputsAsync(AppState.trainedModel, xMatrix, {
+                    onYield: (done, total) => {
+                        DOM.runBatchPredictBtn.textContent = `Predicting… ${Math.round((done / total) * 100)}%`;
+                    }
+                });
+            } finally {
+                DOM.runBatchPredictBtn.disabled = false;
+                DOM.runBatchPredictBtn.innerHTML = btnLabel;
+            }
+        }
 
         rows.forEach((r, rowIdx) => {
             const rowIssues = rowIssueLists[rowIdx];
@@ -3842,7 +3891,16 @@
         if (!AppState.pipeline.trainRows) return;
 
         const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
-        const vifResults = DataEngine.calculateVIF(AppState.pipeline.trainRows, activeCols, AppState.pipeline.columnConfigs);
+        let vifResults;
+        try {
+            vifResults = DataEngine.calculateVIF(AppState.pipeline.trainRows, activeCols, AppState.pipeline.columnConfigs);
+        } catch (err) {
+            if (DOM.pipelineVifTableContainer) {
+                DOM.pipelineVifTableContainer.innerHTML = `<div class="pipeline-alert pipeline-alert-warning"><div>⚠️</div><div>${escapeHtml(err.message)}</div></div>`;
+            }
+            if (DOM.pipelineDropVifBtn) DOM.pipelineDropVifBtn.disabled = true;
+            return;
+        }
         AppState.pipeline.vifResults = vifResults;
 
         const hasHighVif = vifResults.some(v => v.highVIF);
@@ -4195,7 +4253,20 @@
         }
     }
 
-    function executePipelineStep6() {
+    async function executePipelineStep6() {
+        const btn = DOM.pipelineRunRfScoutBtn;
+        const label = btn ? btn.innerHTML : '';
+        try {
+            if (btn) { btn.disabled = true; btn.textContent = 'Training Random Forest scout…'; }
+            await runPipelineStep6();
+        } catch (err) {
+            alert(`Random Forest scout could not run: ${err.message}`);
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerHTML = label; }
+        }
+    }
+
+    async function runPipelineStep6() {
         // Always recompute Step 5 from the current split & feature set so the scout never uses stale rows
         renderPipelineStep5();
 
@@ -4217,7 +4288,7 @@
 
         // Train Random Forest Scout
         const rf = new RandomForest(prep.isClassification, 40, 6, 2, 'sqrt', AppState.pipeline.seed);
-        rf.fit(prep.X, prep.y);
+        await rf.fitAsync(prep.X, prep.y); // yields between trees: the page stays responsive on large cohorts
 
         // Map feature importances back to original clinical features
         const featureImpMap = {};
@@ -4393,7 +4464,7 @@
             await new Promise(r => setTimeout(r, 60));
             const knn = new KNNModel(isClassification, 5, 'euclidean', 'distance', AppState.pipeline.evalSeed);
             knn.fit(top70Prep.X, top70Prep.y);
-            const knnEval = ModelEngine.evaluate(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            const knnEval = await ModelEngine.evaluateAsync(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
             knnEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
             knnEval.constraintNote = "Bottom 30% RF-importance features removed to reduce distance noise in high dimensions.";
             benchmarkList.push({ id: 'knn', name: 'k-Nearest Neighbors (k-NN)', model: knn, prep: top70Prep, eval: knnEval });
@@ -4404,7 +4475,7 @@
                 await new Promise(r => setTimeout(r, 60));
                 const nb = new GaussianNaiveBayes(1e-4, 'empirical', AppState.pipeline.evalSeed);
                 nb.fit(top70Prep.X, top70Prep.y);
-                const nbEval = ModelEngine.evaluate(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+                const nbEval = await ModelEngine.evaluateAsync(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
                 nbEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
                 nbEval.constraintNote = "Bottom 30% RF-importance features removed (fewer noisy inputs; does not make features conditionally independent).";
                 benchmarkList.push({ id: 'nb', name: 'Naive Bayes (Gaussian + Bernoulli)', model: nb, prep: top70Prep, eval: nbEval });
@@ -4416,7 +4487,7 @@
             await new Promise(r => setTimeout(r, 60));
             const rfFinal = new RandomForest(isClassification, 40, 6, 2, 'sqrt', AppState.pipeline.evalSeed);
             await fitWithYields(rfFinal, fullPrep.X, fullPrep.y, watchdog);
-            const rfEval = ModelEngine.evaluate(rfFinal, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            const rfEval = await ModelEngine.evaluateAsync(rfFinal, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
             rfEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             rfEval.constraintNote = "40 trees, max depth 6, √p features per split; probabilities are tree vote shares.";
             benchmarkList.push({ id: 'rf', name: 'Random Forest', model: rfFinal, prep: fullPrep, eval: rfEval });
@@ -4443,7 +4514,7 @@
                     watchdog.tick(stepOf('nn'), `Training Model ${stepOf('nn')}/${totalModels}: Neural Network (Epoch ${ep}/${tot})...`);
                 }
             });
-            const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            const dnnEval = await ModelEngine.evaluateAsync(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
             dnnEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             dnnEval.constraintNote = dnn.usedFallback
                 ? `⚠️ TensorFlow.js failed (${dnn.fallbackReason}); a linear fallback model was trained instead of a neural network.`
@@ -4463,7 +4534,7 @@
                 AppState.pipeline.evalSeed
             );
             await fitWithYields(glm, fullPrep.X, fullPrep.y, watchdog);
-            const glmEval = ModelEngine.evaluate(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            const glmEval = await ModelEngine.evaluateAsync(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
             glmEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             glmEval.constraintNote = "Applied Ridge L2 penalization (λ = 0.02) to stabilize against minor collinearity.";
             benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', model: glm, prep: fullPrep, eval: glmEval });
@@ -4484,7 +4555,7 @@
                     watchdog.tick(stepOf('ensemble'), `Training Model ${stepOf('ensemble')}/${totalModels}: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`);
                 }
             });
-            const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
+            const ensEval = await ModelEngine.evaluateAsync(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions, evalAbortOpts(watchdog));
             ensEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             if (ensemble.fallbackNote) ensEval.fallbackNote = ensemble.fallbackNote;
             ensEval.constraintNote = `Equal-weight soft vote of ${ensembleConfig.baseModels.map(b => b.toUpperCase()).join(', ')}; scaling fitted on Train only.`;

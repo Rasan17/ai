@@ -43,9 +43,22 @@
         return new Promise(resolve => setTimeout(resolve, 0));
     }
 
+    // Upper bound on mini-batch steps per neural-network epoch (see DeepNeuralNetwork.fit)
+    const MAX_BATCHES_PER_EPOCH = 150;
+
     // Row-by-row outputs for any model, using a batched path when the model provides one
     function batchOutputs(model, X) {
         return typeof model.predictOutputs === 'function' ? model.predictOutputs(X) : X.map(x => model.predictSingle(x));
+    }
+
+    // Asynchronous variant: models that can yield to the browser while predicting (k-NN, ensembles
+    // containing k-NN) do so; everything else falls back to the batched synchronous path
+    async function batchOutputsAsync(model, X, opts = {}) {
+        if (typeof model.predictOutputsAsync === 'function') return model.predictOutputsAsync(X, opts);
+        const out = batchOutputs(model, X);
+        await yieldToBrowser();
+        if (typeof opts.onYield === 'function') opts.onYield(X.length, X.length);
+        return out;
     }
 
     /**
@@ -530,45 +543,59 @@
             // Seeded tie-break key per training case: equidistant neighbours are ordered by this key
             // (otherwise ties always favour rows earlier in the CSV); identical seed -> identical result
             const rng = createPRNG(this.seed);
-            this.tieKeys = X.map(() => rng());
+            this.tieKeys = Float64Array.from(X, () => rng());
+            // Flat typed-array copy of the training matrix: same values and arithmetic, much faster scans
+            const n = X.length;
+            const p = n ? X[0].length : 0;
+            this.p = p;
+            this.trainFlat = new Float64Array(n * p);
+            for (let i = 0; i < n; i++) this.trainFlat.set(X[i], i * p);
         }
 
         predictSingle(x) {
-            const distances = this.trainX.map((tx, idx) => {
+            const n = this.trainY.length;
+            const p = this.p;
+            const T = this.trainFlat;
+            const metric = this.metric;
+            const tie = this.tieKeys;
+            // Top-k selection (k is small) over (distance, seeded tie key) without materialising all
+            // distances as objects: same neighbours and order as a full sort, at O(n·p + n·k)
+            const kEff = Math.min(this.k, n);
+            const bestD = new Float64Array(kEff);
+            const bestI = new Int32Array(kEff);
+            let count = 0;
+            for (let i = 0; i < n; i++) {
+                const off = i * p;
                 let d = 0;
-                if (this.metric === 'manhattan') {
-                    for (let j = 0; j < x.length; j++) {
-                        d += Math.abs(x[j] - tx[j]);
-                    }
-                } else if (this.metric === 'chebyshev') {
-                    for (let j = 0; j < x.length; j++) {
-                        d = Math.max(d, Math.abs(x[j] - tx[j]));
-                    }
+                if (metric === 'manhattan') {
+                    for (let j = 0; j < p; j++) d += Math.abs(x[j] - T[off + j]);
+                } else if (metric === 'chebyshev') {
+                    for (let j = 0; j < p; j++) d = Math.max(d, Math.abs(x[j] - T[off + j]));
                 } else {
-                    // euclidean
                     let sumSq = 0;
-                    for (let j = 0; j < x.length; j++) {
-                        const diff = x[j] - tx[j];
+                    for (let j = 0; j < p; j++) {
+                        const diff = x[j] - T[off + j];
                         sumSq += diff * diff;
                     }
                     d = Math.sqrt(sumSq);
                 }
-                return { dist: d, label: this.trainY[idx], tie: this.tieKeys ? this.tieKeys[idx] : idx };
-            });
-
-            // Top-k selection (k is small) instead of sorting every training case: same order as sorting by
-            // (distance, seeded tie key), at O(n·k) rather than O(n log n) per prediction
-            const kEff = Math.min(this.k, distances.length);
-            const kNearest = [];
-            const before = (a, b) => (a.dist - b.dist) < 0 || (a.dist === b.dist && a.tie < b.tie);
-            for (let i = 0; i < distances.length; i++) {
-                const cand = distances[i];
-                if (kNearest.length === kEff && !before(cand, kNearest[kEff - 1])) continue;
-                let pos = kNearest.length;
-                while (pos > 0 && before(cand, kNearest[pos - 1])) pos--;
-                kNearest.splice(pos, 0, cand);
-                if (kNearest.length > kEff) kNearest.pop();
+                const ti = tie[i];
+                if (count === kEff) {
+                    const lastD = bestD[kEff - 1];
+                    if (!(d < lastD || (d === lastD && ti < tie[bestI[kEff - 1]]))) continue;
+                }
+                let pos = count < kEff ? count : kEff - 1;
+                while (pos > 0 && (d < bestD[pos - 1] || (d === bestD[pos - 1] && ti < tie[bestI[pos - 1]]))) {
+                    bestD[pos] = bestD[pos - 1];
+                    bestI[pos] = bestI[pos - 1];
+                    pos--;
+                }
+                bestD[pos] = d;
+                bestI[pos] = i;
+                if (count < kEff) count++;
             }
+            const kNearest = [];
+            for (let r = 0; r < count; r++) kNearest.push({ dist: bestD[r], label: this.trainY[bestI[r]] });
 
             if (this.isClassification) {
                 const weightedCounts = {};
@@ -613,6 +640,27 @@
 
         predict(X) {
             return X.map(x => this.predictSingle(x).pred);
+        }
+
+        predictOutputs(X) {
+            return X.map(x => this.predictSingle(x));
+        }
+
+        // Same outputs, computed in chunks that yield to the browser (a large test set against a large
+        // training set is billions of operations); opts.onYield(done, total) may throw to cancel
+        async predictOutputsAsync(X, opts = {}) {
+            const out = new Array(X.length);
+            const perRow = Math.max(1, this.trainY.length * Math.max(1, this.p));
+            const chunk = Math.max(1, Math.floor(6e7 / perRow)); // ~50 ms of work between yields
+            for (let start = 0; start < X.length; start += chunk) {
+                const end = Math.min(X.length, start + chunk);
+                for (let r = start; r < end; r++) out[r] = this.predictSingle(X[r]);
+                if (end < X.length) {
+                    await yieldToBrowser();
+                    if (typeof opts.onYield === 'function') opts.onYield(end, X.length);
+                }
+            }
+            return out;
         }
     }
 
@@ -924,7 +972,10 @@
 
                     const history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
                     const n = trainX.length;
-                    const batchSize = Math.min(this.batchSize, n);
+                    // Each mini-batch costs a fixed browser->GPU round trip, so on large cohorts a small batch
+                    // (e.g. 16 -> thousands of steps per epoch) makes training take hours. The batch is raised
+                    // just enough to keep about MAX_BATCHES_PER_EPOCH steps per epoch; small cohorts unchanged.
+                    const batchSize = Math.min(n, Math.max(this.batchSize, Math.ceil(n / MAX_BATCHES_PER_EPOCH)));
                     let bestValLoss = Infinity;
                     let bestEpoch = 0;
                     let epochsWithoutImprovement = 0;
@@ -1014,6 +1065,8 @@
                         fitCases: trainX.length,
                         validationCases: validationData ? validX.length : 0,
                         earlyStopping: Boolean(validationData && this.earlyStopping),
+                        requestedBatchSize: this.batchSize,
+                        batchSize,
                         earlyStopped,
                         bestEpoch: bestEpoch || null,
                         stoppedEpoch,
@@ -1329,6 +1382,15 @@
             return X.map((_, r) => this._combine(perModel.map(outs => outs[r])));
         }
 
+        async predictOutputsAsync(X, opts = {}) {
+            if (!this.models || this.models.length === 0) {
+                throw new Error("Ensemble model is not trained yet.");
+            }
+            const perModel = [];
+            for (const item of this.models) perModel.push(await batchOutputsAsync(item.model, X, opts));
+            return X.map((_, r) => this._combine(perModel.map(outs => outs[r])));
+        }
+
         // Combines one row's base-model outputs (baseResults[i] belongs to this.models[i])
         _combine(baseResults) {
             if (this.isClassification) {
@@ -1514,7 +1576,8 @@
             if (isClassification) {
                 const numClasses = targetClasses.length || [...new Set(testY)].length;
                 const total = testX.length;
-                const outputs = batchOutputs(model, testX);
+                // options.outputs: predictions already computed (e.g. asynchronously by evaluateAsync)
+                const outputs = options.outputs || batchOutputs(model, testX);
                 const preds = outputs.map(o => o.pred);
                 let correct = 0;
 
@@ -1636,7 +1699,7 @@
                 };
             } else {
                 // Regression Metrics: R2, MSE, RMSE, MAE
-                const preds = model.predict(testX);
+                const preds = options.outputs ? options.outputs.map(o => o.pred) : model.predict(testX);
                 const total = testX.length;
                 let sumSqErr = 0;
                 let sumAbsErr = 0;
@@ -1700,6 +1763,18 @@
 
         predictOutputs(model, X) {
             return batchOutputs(model, X);
+        },
+
+        predictOutputsAsync(model, X, opts = {}) {
+            return batchOutputsAsync(model, X, opts);
+        },
+
+        // evaluate() with predictions computed asynchronously (keeps the page responsive and lets
+        // opts.onYield cancel); metrics are identical to evaluate()
+        async evaluateAsync(model, testX, testY, isClassification, targetClasses = [], options = {}, opts = {}) {
+            if (!testX || testX.length === 0) return null;
+            const outputs = await batchOutputsAsync(model, testX, opts);
+            return this.evaluate(model, testX, testY, isClassification, targetClasses, { ...options, outputs });
         },
 
         evaluateModel(model, testX, testY, isClassificationOrClasses = true, targetClassesOrStats = []) {

@@ -11,6 +11,14 @@
 
     const TARGET_NAME_RE = /^(target|outcome|response|shunt_response|label|class|diagnos|result|improvement)/i;
 
+    // ISO (2024-01-31, with optional time) and day/month/year or month/day/year dates (31/01/2024, 1-31-24)
+    const DATE_RE = /^(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})$/;
+
+    // Hard limits on the one-hot encoded design matrix: beyond these the browser tab can run out of memory
+    const MAX_ENCODED_COLUMNS = 2000;
+    const MAX_MATRIX_CELLS = 60e6;
+    const MAX_VIF_COLUMNS = 500;
+
     // Conventional clinical ordering words (lowest rank first) used to order text ordinal levels
     const ORDINAL_WORD_ORDER = [
         'none', 'absent', 'never', 'normal', 'very low', 'low', 'minimal', 'mild', 'slight',
@@ -367,6 +375,22 @@
                     // Default imputation strategy suggestion
                     suggestedImputation: type === 'continuous' ? 'median' : 'mode'
                 };
+
+                // Text columns that cannot sensibly be one-hot encoded default to Meta / ID (the user can
+                // still change this in Step 2): identifier-like free text (names, doctors, hospitals...)
+                // would add one column per distinct value (tens of thousands on large files, exhausting
+                // browser memory), and calendar dates are not meaningful as unordered categories.
+                if (role === 'feature' && !isNumeric && validCount > 0) {
+                    const sample = distinctValues.slice(0, 200);
+                    const dateLike = sample.filter(v => DATE_RE.test(v.trim())).length >= 0.9 * sample.length;
+                    if (dateLike) {
+                        analysis[col].role = 'meta';
+                        analysis[col].autoMetaReason = 'Looks like a calendar date: excluded by default (dates are not meaningful as categories; derive e.g. a duration or year if needed).';
+                    } else if (distinctCount > 20 && distinctCount / validCount > 0.5) {
+                        analysis[col].role = 'meta';
+                        analysis[col].autoMetaReason = `Identifier-like text (${distinctCount.toLocaleString('en-GB')} distinct values in ${validCount.toLocaleString('en-GB')} rows): excluded by default because one-hot encoding would add a column per value.`;
+                    }
+                }
             });
 
             // Only one target may be suggested: prefer an outcome-like column name, else the last column
@@ -713,6 +737,27 @@
                     min: arrayMin(nums),
                     max: arrayMax(nums)
                 };
+            }
+
+            // Guard: estimate the encoded width BEFORE allocating anything, and stop with an explanation
+            // (instead of crashing the tab) if high-cardinality categorical predictors would make it too large
+            {
+                const widths = featureCols.map(col => {
+                    const conf = columnConfigs[col];
+                    if (conf.type !== 'nominal') return { col, w: 1 };
+                    const set = new Set();
+                    for (let i = 0; i < rows.length; i++) set.add(String(rows[i][col]));
+                    return { col, w: set.size };
+                });
+                const totalWidth = widths.reduce((a, b) => a + b.w, 0);
+                if (totalWidth > MAX_ENCODED_COLUMNS || totalWidth * rows.length > MAX_MATRIX_CELLS) {
+                    const worst = widths.filter(x => x.w > 50).sort((a, b) => b.w - a.w)
+                        .map(x => `"${x.col}" (${x.w.toLocaleString('en-GB')} categories)`);
+                    throw new Error(`The predictors would expand to ${totalWidth.toLocaleString('en-GB')} encoded columns × ` +
+                        `${rows.length.toLocaleString('en-GB')} rows, which exceeds what a browser can hold in memory. ` +
+                        (worst.length ? `High-cardinality categorical predictor(s): ${worst.join(', ')}. ` : '') +
+                        `Set identifier-like columns (names, IDs, doctors, hospitals, dates) to "Meta / ID" in Step 2, or group rare categories.`);
+                }
             }
 
             // 2. Build Feature Encoders
@@ -1386,6 +1431,16 @@
 
             const N = trainRows.length;
             const P = encodedCols.length;
+            // The correlation matrix is P×P: refuse sizes that would freeze or exhaust the browser
+            if (P > MAX_VIF_COLUMNS) {
+                const counts = {};
+                encodedCols.forEach(ec => { counts[ec.originalCol] = (counts[ec.originalCol] || 0) + 1; });
+                const worst = Object.entries(counts).filter(([, n]) => n > 50).sort((a, b) => b[1] - a[1])
+                    .map(([c, n]) => `"${c}" (${(n + 1).toLocaleString('en-GB')} categories)`);
+                throw new Error(`VIF would need a ${P.toLocaleString('en-GB')} × ${P.toLocaleString('en-GB')} correlation matrix (limit ${MAX_VIF_COLUMNS}). ` +
+                    (worst.length ? `High-cardinality categorical feature(s): ${worst.join(', ')}. ` : '') +
+                    'Set identifier-like columns to "Meta / ID" in Step 2, or exclude them in this step.');
+            }
 
             // Extract numeric values and standardize columns
             const X_raw = Array.from({ length: N }, () => new Array(P).fill(0));
@@ -1450,8 +1505,11 @@
                 }
                 return ld;
             };
-            const sub = (idx) => idx.map(i => idx.map(j => R[i][j]));
-            const logDetAll = logDet(R);
+            const sub = (M, idx) => idx.map(i => idx.map(j => M[i][j]));
+            // det(R_OO)/det(R) = det((R⁻¹)_SS), so GVIF = det(R_SS)·det((R⁻¹)_SS): one P×P inversion instead
+            // of a determinant of the (P−df)×(P−df) block for every feature (identical result, O(P³) total)
+            const Rinv = this.invertMatrix(R);
+            const logDetAll = Rinv ? null : logDet(R);
 
             const byFeature = {};
             encodedCols.forEach((ec, j) => {
@@ -1460,10 +1518,15 @@
 
             const results = Object.keys(byFeature).map(col => {
                 const S = byFeature[col];
-                const O = [];
-                for (let j = 0; j < P; j++) if (!S.includes(j)) O.push(j);
                 const df = S.length;
-                const logGVIF = logDet(sub(S)) + logDet(sub(O)) - logDetAll;
+                let logGVIF;
+                if (Rinv) {
+                    logGVIF = logDet(sub(R, S)) + logDet(sub(Rinv, S));
+                } else {
+                    const O = [];
+                    for (let j = 0; j < P; j++) if (!S.includes(j)) O.push(j);
+                    logGVIF = logDet(sub(R, S)) + logDet(sub(R, O)) - logDetAll;
+                }
                 let gvif = Math.exp(logGVIF);
                 if (!isFinite(gvif) || gvif < 1) gvif = isFinite(gvif) ? 1 : 999;
                 let vifScale = Math.pow(gvif, 1 / df);
@@ -1644,6 +1707,7 @@
                     // Categorical Target (e.g. Binary Classification)
                     const targetClasses = Array.from(new Set(rows.map(r => String(r[targetCol])))).sort();
                     const K = targetClasses.length;
+                    const classIndex = new Map(targetClasses.map((c, i) => [c, i]));
 
                     if (isFeatureContinuous) {
                         // One-Way ANOVA F-test (equivalent to the two-sample t-test when K = 2: F = t²)
@@ -1669,6 +1733,7 @@
                         // Categorical vs Categorical: Chi-Square Test
                         const validRows = rows.filter(r => !this.isMissing(r[col]));
                         const categories = Array.from(new Set(validRows.map(r => String(r[col])))).sort();
+                        const catIndex = new Map(categories.map((c, i) => [c, i]));
                         const R = categories.length;
 
                         // Contingency Table
@@ -1678,8 +1743,8 @@
                         let totalN = 0;
 
                         validRows.forEach(r => {
-                            const rIdx = categories.indexOf(String(r[col]));
-                            const cIdx = targetClasses.indexOf(String(r[targetCol]));
+                            const rIdx = catIndex.has(String(r[col])) ? catIndex.get(String(r[col])) : -1;
+                            const cIdx = classIndex.has(String(r[targetCol])) ? classIndex.get(String(r[targetCol])) : -1;
                             if (rIdx !== -1 && cIdx !== -1) {
                                 obs[rIdx][cIdx]++;
                                 rowTotals[rIdx]++;
