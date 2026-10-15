@@ -1088,6 +1088,7 @@
             goToPipelineSubstep(AppState.pipeline && AppState.pipeline.substep ? AppState.pipeline.substep : 1);
         }
     }
+    window.goToStep = goToStep;
 
     function handleFileUpload(file) {
         if (!file.name.endsWith('.csv') && file.type !== 'text/csv') {
@@ -4096,7 +4097,7 @@
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     ${hasBaseline ? `<button class="btn btn-secondary btn-sm" onclick="window.switchToBaselineModel()">🔄 Switch to Baseline Model</button>` : ''}
-                    <button class="btn btn-secondary btn-sm" onclick="goToStep('pipeline')">🔬 View 7-Step Pipeline</button>
+                    <button class="btn btn-secondary btn-sm" onclick="window.goToStep && window.goToStep('pipeline')">🔬 View 7-Step Pipeline</button>
                 </div>
             `;
             if (singleBar) {
@@ -4125,7 +4126,7 @@
                     </div>
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
-                    ${hasPipeline ? `<button class="btn btn-emerald btn-sm" onclick="window.switchToPipelineModel()">🔬 Switch to 7-Step Pipeline Model</button>` : `<button class="btn btn-emerald btn-sm" onclick="goToStep('pipeline')">🔬 Test 7-Step Pipeline to Compare</button>`}
+                    ${hasPipeline ? `<button class="btn btn-emerald btn-sm" onclick="window.switchToPipelineModel()">🔬 Switch to 7-Step Pipeline Model</button>` : `<button class="btn btn-emerald btn-sm" onclick="window.goToStep && window.goToStep('pipeline')">🔬 Test 7-Step Pipeline to Compare</button>`}
                 </div>
             `;
             if (singleBar) {
@@ -4157,7 +4158,7 @@
     window.switchToPipelineModel = function () {
         if (!AppState.pipeline.benchmarkResults || AppState.pipeline.benchmarkResults.length === 0) {
             alert("7-Step Pipeline has not been run yet. Please run the 7-Step Pipeline first.");
-            goToStep('pipeline');
+            if (window.goToStep) window.goToStep('pipeline');
             return;
         }
         const bestPipeline = AppState.pipeline.benchmarkResults[0];
@@ -4176,6 +4177,36 @@
         }
     }
 
+    window.trainStandardBaselineFromPipeline = function () {
+        if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
+            alert("No dataset loaded yet. Please select a sample cohort or upload a CSV first.");
+            return;
+        }
+
+        // If Step 3 imputation has not been run yet, run standard imputation automatically
+        if (!AppState.imputedData) {
+            try {
+                executeImputation();
+            } catch (err) {
+                console.warn("Auto-imputation error:", err);
+            }
+        }
+
+        // Navigate directly to Step 4
+        goToStep(4);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        // Scroll to train button with visual highlight
+        setTimeout(() => {
+            const trainBtn = document.getElementById('train-model-btn');
+            if (trainBtn) {
+                trainBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                trainBtn.style.boxShadow = '0 0 0 3px var(--accent-emerald)';
+                setTimeout(() => { if (trainBtn) trainBtn.style.boxShadow = ''; }, 2500);
+            }
+        }, 150);
+    };
+
     function renderPipelineVsBaselineComparison() {
         if (!DOM.pipelineVsBaselineContent) return;
 
@@ -4193,15 +4224,23 @@
         const pEv = pipeBest.eval;
 
         if (!hasBaseline) {
+            const f1Text = (pEv && typeof pEv.macroF1 === 'number' && !isNaN(pEv.macroF1))
+                ? `F1: ${(pEv.macroF1 * 100).toFixed(1)}%`
+                : (pEv && typeof pEv.r2 === 'number' && !isNaN(pEv.r2) ? `R²: ${pEv.r2.toFixed(3)}` : '');
+            const accText = (pEv && typeof pEv.accuracy === 'number' && !isNaN(pEv.accuracy))
+                ? `Acc: ${(pEv.accuracy * 100).toFixed(1)}%`
+                : (pEv && typeof pEv.rmse === 'number' && !isNaN(pEv.rmse) ? `RMSE: ${pEv.rmse.toFixed(3)}` : '');
+            const metricSummary = [f1Text, accText].filter(Boolean).join(', ') || 'Evaluated';
+
             DOM.pipelineVsBaselineContent.innerHTML = `
                 <div class="pipeline-alert pipeline-alert-info">
                     <div style="font-size: 20px;">💡</div>
                     <div>
                         <strong>Baseline Benchmark Not Run Yet:</strong><br>
-                        You have successfully completed the 7-Step Pipeline with <strong>${pipeBest.name}</strong> (F1: ${(pEv.macroF1 * 100).toFixed(1)}%, Acc: ${(pEv.accuracy * 100).toFixed(1)}%).<br>
+                        You have successfully completed the 7-Step Pipeline with <strong>${pipeBest.name}</strong> (${metricSummary}).<br>
                         To see if the 7-Step Pipeline improved predictions compared to the standard pre-existing workflow on this exact cohort, run Step 4 (Model Training) or click below to launch the standard baseline:
                         <div style="margin-top: 10px;">
-                            <button class="btn btn-primary btn-sm" onclick="goToStep(4)">
+                            <button class="btn btn-primary btn-sm" onclick="window.trainStandardBaselineFromPipeline && window.trainStandardBaselineFromPipeline()">
                                 🏃 Train Standard Baseline in Step 4
                             </button>
                         </div>
