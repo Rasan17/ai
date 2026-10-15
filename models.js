@@ -556,8 +556,19 @@
                 return { dist: d, label: this.trainY[idx], tie: this.tieKeys ? this.tieKeys[idx] : idx };
             });
 
-            distances.sort((a, b) => (a.dist - b.dist) || (a.tie - b.tie));
-            const kNearest = distances.slice(0, Math.min(this.k, distances.length));
+            // Top-k selection (k is small) instead of sorting every training case: same order as sorting by
+            // (distance, seeded tie key), at O(n·k) rather than O(n log n) per prediction
+            const kEff = Math.min(this.k, distances.length);
+            const kNearest = [];
+            const before = (a, b) => (a.dist - b.dist) < 0 || (a.dist === b.dist && a.tie < b.tie);
+            for (let i = 0; i < distances.length; i++) {
+                const cand = distances[i];
+                if (kNearest.length === kEff && !before(cand, kNearest[kEff - 1])) continue;
+                let pos = kNearest.length;
+                while (pos > 0 && before(cand, kNearest[pos - 1])) pos--;
+                kNearest.splice(pos, 0, cand);
+                if (kNearest.length > kEff) kNearest.pop();
+            }
 
             if (this.isClassification) {
                 const weightedCounts = {};

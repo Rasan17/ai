@@ -1094,7 +1094,10 @@
                         } else {
                             fillVal = (strategy === 'mean') ? Number(mean.toFixed(4)) : Number(median.toFixed(4));
                         }
-                        const variance = validNums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / validNums.length;
+                        // Descriptive SD shown to the user: sample SD (n − 1), as in the Step 2 table
+                        const variance = validNums.length > 1
+                            ? validNums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (validNums.length - 1)
+                            : 0;
                         columnStats[col] = {
                             mean: Number(mean.toFixed(4)),
                             median: Number(median.toFixed(4)),
@@ -1890,27 +1893,48 @@
                 const catPenalty = 1.0;
 
                 const k = Math.min(5, m - 1);
+
+                // Pre-converted cell values (avoids Number()/String() inside the O(m²) distance loop)
+                const contRaw = minorityRows.map(r => contCols.map(col => Number(r[col])));
+                const contStd = contCols.map(col => stdMap[col]);
+                const catRaw = minorityRows.map(r => catCols.map(col => String(r[col])));
+
+                // k nearest minority neighbours of case i, computed once per case and cached (the previous
+                // version recomputed and fully sorted all m distances for every synthetic sample: O(n·m²)).
+                // Top-k insertion keeps exactly the order of a stable sort by distance (ties: lower index first).
+                const neighbourCache = new Map();
+                const nearestOf = (i) => {
+                    if (neighbourCache.has(i)) return neighbourCache.get(i);
+                    const best = []; // ascending by dist, length <= k
+                    const ci = contRaw[i];
+                    const ki = catRaw[i];
+                    for (let j = 0; j < m; j++) {
+                        if (j === i) continue;
+                        let distSq = 0;
+                        const cj = contRaw[j];
+                        for (let c = 0; c < ci.length; c++) {
+                            const diff = (ci[c] - cj[c]) / contStd[c];
+                            if (!isNaN(diff)) distSq += diff * diff;
+                        }
+                        const kj = catRaw[j];
+                        for (let c = 0; c < ki.length; c++) {
+                            if (ki[c] !== kj[c]) distSq += catPenalty;
+                        }
+                        const dist = Math.sqrt(distSq);
+                        if (best.length === k && dist >= best[k - 1].dist) continue;
+                        let pos = best.length;
+                        while (pos > 0 && best[pos - 1].dist > dist) pos--;
+                        best.splice(pos, 0, { row: minorityRows[j], dist });
+                        if (best.length > k) best.pop();
+                    }
+                    neighbourCache.set(i, best);
+                    return best;
+                };
+
                 for (let sIdx = 0; sIdx < needed; sIdx++) {
                     const i = Math.floor(rng() * m);
                     const baseRow = minorityRows[i];
-
-                    const dists = [];
-                    for (let j = 0; j < m; j++) {
-                        if (j === i) continue;
-                        const otherRow = minorityRows[j];
-                        let distSq = 0;
-                        contCols.forEach(col => {
-                            const diff = (Number(baseRow[col]) - Number(otherRow[col])) / stdMap[col];
-                            if (!isNaN(diff)) distSq += diff * diff;
-                        });
-                        catCols.forEach(col => {
-                            if (String(baseRow[col]) !== String(otherRow[col])) distSq += catPenalty;
-                        });
-                        dists.push({ row: otherRow, dist: Math.sqrt(distSq) });
-                    }
-
-                    dists.sort((a, b) => a.dist - b.dist);
-                    const neighbors = dists.slice(0, k);
+                    const neighbors = nearestOf(i);
                     const chosenNeighbor = neighbors[Math.floor(rng() * neighbors.length)].row;
 
                     const newRow = {};

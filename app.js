@@ -1555,6 +1555,9 @@
                         </select>
                     </div>
                     ${renderTargetAndOrdinalControls(col, colIdx, a, cfg)}
+                    ${cfg.role === 'feature' && cfg.type === 'nominal' && (a.distinctCount > 20 || (a.validCount > 0 && a.distinctCount / a.validCount > 0.5))
+                        ? `<div style="font-size: 11px; color: var(--accent-amber);">⚠️ High cardinality (${a.distinctCount} levels): one-hot encoding adds a column per level, which slows training and invites overfitting. If this is an identifier, set it to Meta / ID; otherwise consider grouping rare levels.</div>`
+                        : ''}
                 </div>
             `;
         });
@@ -2847,7 +2850,7 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px;">
                             <div>
                                 <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
-                                    <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked
+                                    <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked by ${escapeHtml(rankingMetricLabel(prep.isClassification))}
                                 </h3>
                                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
                                     Comparative performance on ${cohortDesc}, ranked by <strong>${escapeHtml(rankingMetricLabel(prep.isClassification))}</strong> (change the primary metric above). The top-ranked model (${allResults[0].info.name}) is set as the active predictor. A single train/test split does not show that one model is generally superior, and because the leader was selected on these same test cases its score is optimistically biased. Report all metrics, not only the winner. Click any seed pill to copy it.
@@ -3671,7 +3674,7 @@
             if (conf.type === 'nominal' || stats.mode !== undefined) {
                 statsStr = `Mode: ${escapeHtml(stats.mode || 'N/A')} (Distinct: ${stats.distinctCount || 0})`;
             } else {
-                statsStr = `Mean: ${stats.mean !== undefined ? stats.mean : 'N/A'}, Median: ${stats.median !== undefined ? stats.median : 'N/A'}, Std: ${stats.std !== undefined ? stats.std : 'N/A'}`;
+                statsStr = `Mean: ${stats.mean !== undefined ? stats.mean : 'N/A'}, Median: ${stats.median !== undefined ? stats.median : 'N/A'}, SD (sample, n−1): ${stats.std !== undefined ? stats.std : 'N/A'}`;
             }
 
             tableHtml += `
@@ -5184,6 +5187,19 @@
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
     }
+
+    // Safety net: an unexpected error anywhere (e.g. in a form renderer) is reported to the user and the
+    // training buttons are re-enabled, instead of leaving the app looking busy or half-updated
+    function handleUnexpectedError(err) {
+        const msg = err && err.message ? err.message : String(err || 'Unknown error');
+        if (msg === 'Training aborted by user.' || msg === 'Operation halted by user.') return;
+        console.error('Unexpected error:', err);
+        if (DOM.trainModelBtn) DOM.trainModelBtn.disabled = false;
+        if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = false;
+        try { showSeedToast(`⚠️ Unexpected error: ${msg}. Please check your data/settings and retry.`); } catch (e) { /* ignore */ }
+    }
+    window.addEventListener('error', (e) => handleUnexpectedError(e.error || e.message));
+    window.addEventListener('unhandledrejection', (e) => handleUnexpectedError(e.reason));
 
     document.addEventListener('DOMContentLoaded', () => {
         initDOM();

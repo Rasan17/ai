@@ -24,9 +24,10 @@ The **Universal Medical ML/NeuralNet Predictor** provides clinical researchers, 
 
 ## ⚙️ Core System Architecture & Workflow
 
-### 1. Complete Client-Side Data Privacy (GDPR & HIPAA Compliant)
+### 1. Complete Client-Side Data Privacy (supports GDPR/HIPAA-aligned use)
 - Runs locally in modern browsers via HTML5, Vanilla JavaScript, and TensorFlow.js.
 - Patient health records and uploaded CSVs are processed solely in client memory—**zero data is transmitted to external servers**.
+- Keeping data in the browser supports GDPR/HIPAA-aligned workflows, but software alone cannot make a study compliant: lawful basis, de-identification, device security and governance remain the user's and institution's responsibility.
 
 ### 2. Flexible Variable Role & Scale Configuration
 - **Variable Roles:**
@@ -44,7 +45,7 @@ Context-aware imputation strategies dynamically selectable based on variable sca
 - **Ordinal:** *Mode / Most Frequent Rank*, *Median Rank*, *Constant Rank*, or *Drop Rows*.
 - **Nominal:** *Mode / Most Frequent Category*, *New Category ("Missing" / "Unknown")*, or *Drop Rows*.
 
-### 4. Deep Learning & Machine Learning Algorithms with Advanced Fine-Tuning
+### 4. Neural Network & Machine Learning Algorithms with Advanced Fine-Tuning
 Every model includes fine-tuning controls specifically designed to maximize predictive accuracy, adapt to patient cohort characteristics, and prevent overfitting:
 
 - **Voting / Weighted Ensemble:**
@@ -158,6 +159,29 @@ The suite includes built-in clinical datasets for instant experimentation:
 4. **📂 Unseen Batch Cases (`medical_batch_unseen_cases.csv`):** 10 patient cases ready for immediate batch prediction.
 
 ---
+
+## ⚠️ Known Limitations & Statistical Notes
+
+- **Single train/test split.** Performance is estimated on one held-out split (Option A or the 7-Step Pipeline), and the top-ranked model is chosen on that same split, so its score is optimistically biased. Confirm the chosen model on an independent cohort (Option B) or with repeated cross-validation before reporting.
+- **Row-level random splitting.** If patients contribute several rows, or the data are temporal or multicentre, a random row split leaks information between train and test; use a patient-level, temporal or external split instead (patient-grouped splitting is not built in).
+- **Uncalibrated probabilities.** Random Forest and hard voting give vote shares, k-NN gives neighbour shares, and no model is calibrated. The Brier score is reported; a calibration plot is recommended before any clinical interpretation.
+- **Exploratory 2×2 for continuous outcomes.** Cut at the training-data median, not a clinical threshold; these are not diagnostic accuracy measures.
+- **Feature importance (MDI)** ranks predictors for this model and data; it is not evidence of causal or clinical effect, and it can favour features with many distinct values.
+- **Ensemble** is a voting / performance-weighted ensemble, not a cross-validated stacked Super Learner.
+- **Variance conventions.** Feature scaling and tree impurity use the population variance (÷ n, as in scikit-learn); classical statistics (skewness G₁, ANOVA, Pearson/χ² tests) use the standard sample formulas, and displayed SDs are sample SDs (÷ (n − 1)).
+- **Collinearity.** Multi-level categorical features use the Generalised VIF (Fox & Monette), shown as GVIF^(1/df) so the VIF > 5 rule applies.
+- **Univariate screening** (p < 0.05) is informational; selecting predictors by p-value can bias models and is left to the user's judgement.
+- **Scale.** Everything runs in the browser's main thread. Training and SMOTENC are optimised and yield to the browser, but very large cohorts (tens of thousands of rows, or nominal variables with many levels) can still be slow; Force Stop takes effect at the next epoch, tree or batch of iterations.
+- **Not a medical device.** For research and education only; not for individual clinical decisions without independent validation.
+
+## ✅ Verification Tests
+
+From the project folder (Node.js; the reference check also needs Python with SciPy, scikit-learn and statsmodels):
+
+```bash
+node tests/reference_check.js && python3 tests/reference_check.py   # 41 checks against SciPy / scikit-learn / statsmodels
+node tests/edge_cases.js                                           # robustness: single class, all-missing, constant features, imbalance, zero-variance target
+```
 
 ## 🚀 How to Run
 
