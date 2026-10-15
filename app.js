@@ -3345,47 +3345,68 @@
         const userSeed = DOM.pipelineEvalSeedInput ? parseInt(DOM.pipelineEvalSeedInput.value, 10) : 42;
         AppState.pipeline.evalSeed = isNaN(userSeed) ? 42 : userSeed;
 
+        if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = true;
         if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'flex';
         if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
 
-        const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
-        const top70Cols = AppState.pipeline.top70Features;
-
-        const targetCol = AppState.pipeline.targetCol;
-        const isClassification = AppState.pipeline.columnConfigs[targetCol]?.type !== 'continuous';
-        const numClasses = isClassification ? Array.from(new Set(AppState.pipeline.trainRows.map(r => String(r[targetCol])))).length : 1;
-
-        // 1. Prepare standard full dataset (for DNN, GLM, Ensemble)
-        const fullConfigs = {};
-        activeCols.forEach(c => fullConfigs[c] = AppState.pipeline.columnConfigs[c]);
-        fullConfigs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
-
-        const fullPrep = DataEngine.prepareDataset(
-            AppState.pipeline.balancedTrainRows,
-            fullConfigs,
-            activeCols,
-            targetCol
-        );
-
-        // Transform unaltered Test set using full training metadata
-        const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
-
-        // 2. Prepare reduced Top 70% dataset (strictly for k-NN & Naive Bayes)
-        const top70Configs = {};
-        top70Cols.forEach(c => top70Configs[c] = AppState.pipeline.columnConfigs[c]);
-        top70Configs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
-
-        const top70Prep = DataEngine.prepareDataset(
-            AppState.pipeline.balancedTrainRows,
-            top70Configs,
-            top70Cols,
-            targetCol
-        );
-        const top70TestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, top70Prep);
-
-        const benchmarkList = [];
-
         try {
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Initializing constrained clinical pipeline...";
+            await new Promise(r => setTimeout(r, 60));
+
+            // Ensure balancedTrainRows is populated
+            if (!AppState.pipeline.balancedTrainRows) {
+                renderPipelineStep5();
+            }
+            if (!AppState.pipeline.balancedTrainRows) {
+                AppState.pipeline.balancedTrainRows = AppState.pipeline.trainRows || (AppState.parsedData && AppState.parsedData.rows);
+            }
+
+            const activeCols = AppState.pipeline.featureCols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+            
+            // Top 70% features with safe fallback
+            let top70Cols = AppState.pipeline.top70Features;
+            if (!top70Cols || top70Cols.length === 0) {
+                const k = Math.max(1, Math.round(activeCols.length * 0.30));
+                const topCount = Math.max(1, activeCols.length - k);
+                top70Cols = activeCols.slice(0, topCount);
+            }
+            top70Cols = top70Cols.filter(c => !AppState.pipeline.droppedFeatures.has(c));
+            if (top70Cols.length === 0) top70Cols = [...activeCols];
+
+            const targetCol = AppState.pipeline.targetCol;
+            const isClassification = AppState.pipeline.columnConfigs[targetCol]?.type !== 'continuous';
+            const numClasses = isClassification ? Array.from(new Set(AppState.pipeline.balancedTrainRows.map(r => String(r[targetCol])))).length : 1;
+
+            // 1. Prepare standard full dataset (for DNN, GLM, Ensemble)
+            const fullConfigs = {};
+            activeCols.forEach(c => fullConfigs[c] = AppState.pipeline.columnConfigs[c]);
+            fullConfigs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
+
+            const fullPrep = DataEngine.prepareDataset(
+                AppState.pipeline.balancedTrainRows,
+                fullConfigs,
+                activeCols,
+                targetCol
+            );
+
+            // Transform unaltered Test set using full training metadata
+            const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
+
+            // 2. Prepare reduced Top 70% dataset (strictly for k-NN & Naive Bayes)
+            const top70Configs = {};
+            top70Cols.forEach(c => top70Configs[c] = AppState.pipeline.columnConfigs[c]);
+            top70Configs[targetCol] = AppState.pipeline.columnConfigs[targetCol];
+
+            const top70Prep = DataEngine.prepareDataset(
+                AppState.pipeline.balancedTrainRows,
+                top70Configs,
+                top70Cols,
+                targetCol
+            );
+            const top70TestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, top70Prep);
+
+            const benchmarkList = [];
+
             // A. k-NN Model (Strict constraint: Bottom 30% features dropped)
             if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 1/5: k-NN (Top 70% features only)...";
             await new Promise(r => setTimeout(r, 60));
@@ -3412,18 +3433,22 @@
             if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 3/5: Deep Neural Network (L2 Regularization + Dropout)...";
             await new Promise(r => setTimeout(r, 60));
             const dnnParams = {
-                epochs: 40,
+                epochs: 25,
                 learningRate: 0.005,
                 hiddenLayers: [48, 24],
                 dropoutRate: 0.15,
-                l2Reg: 0.001, // L2 weight decay constraint
+                l2Reg: 0.001,
                 activation: 'relu',
                 optimizer: 'adam',
                 batchSize: 16,
                 seed: AppState.pipeline.evalSeed
             };
             const dnn = new DeepNeuralNetwork(isClassification, numClasses, dnnParams);
-            await dnn.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y);
+            await dnn.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (ep, tot) => {
+                if (DOM.pipelineTrainStatusText && (ep % 5 === 0 || ep === tot)) {
+                    DOM.pipelineTrainStatusText.innerText = `Training Model 3/5: Deep Neural Network (Epoch ${ep}/${tot})...`;
+                }
+            });
             const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
             dnnEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             dnnEval.constraintNote = "Enforced L2 Weight Decay (0.001) and Dropout (0.15) against overfitting.";
@@ -3436,8 +3461,8 @@
                 isClassification,
                 numClasses,
                 0.05,
-                180,
-                0.02, // Ridge L2 penalization constraint
+                150,
+                0.02,
                 'momentum',
                 AppState.pipeline.evalSeed
             );
@@ -3448,7 +3473,7 @@
             benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', model: glm, prep: fullPrep, eval: glmEval });
 
             // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
-            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 5/5: Ensemble Super Learner (Strictly Scaled & Encoded)...";
+            if (DOM.pipelineTrainStatusText) DOM.pipelineTrainStatusText.innerText = "Training Model 5/5: Ensemble Super Learner...";
             await new Promise(r => setTimeout(r, 60));
             const ensembleConfig = {
                 voting: 'soft',
@@ -3457,7 +3482,11 @@
                 seed: AppState.pipeline.evalSeed
             };
             const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
-            await ensemble.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y);
+            await ensemble.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (curr, tot, info) => {
+                if (DOM.pipelineTrainStatusText) {
+                    DOM.pipelineTrainStatusText.innerText = `Training Model 5/5: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`;
+                }
+            });
             const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
             ensEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             ensEval.constraintNote = "StandardScaler fitted on Train and applied to Test; base models soft-blended.";
@@ -3468,29 +3497,26 @@
             // Render Leaderboard & Confusion Matrices
             renderPipelineBenchmarkResults(benchmarkList, fullPrep.targetClasses, isClassification);
 
-            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
             if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'block';
 
         } catch (err) {
-            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
+            console.error("Pipeline Step 7 training error:", err);
             alert(`Pipeline training error: ${err.message}`);
+        } finally {
+            if (DOM.pipelineTrainStatus) DOM.pipelineTrainStatus.style.display = 'none';
+            if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = false;
         }
     }
 
-    function renderPipelineBenchmarkResults(benchmarkList, targetClasses, isClassification) {
-        // Sort descending by F1 or Accuracy
-        const sorted = [...benchmarkList].sort((a, b) => {
+    function renderPipelineLeaderboardOnly() {
+        if (!AppState.pipeline.benchmarkResults || !DOM.pipelineLeaderboardContainer) return;
+        const isClassification = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
+        const sorted = [...AppState.pipeline.benchmarkResults].sort((a, b) => {
             const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
             const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
             return f1B - f1A;
         });
 
-        // Auto-deploy the top-performing model if nothing deployed yet or previous deployment was from pipeline
-        if (!AppState.trainedModel || AppState.deployedSource === '7step') {
-            autoDeployPipelineModel(sorted[0], false);
-        }
-
-        // 1. Leaderboard Table
         let tableHtml = `
             <table class="data-table">
                 <thead>
@@ -3545,7 +3571,19 @@
         });
 
         tableHtml += `</tbody></table>`;
-        if (DOM.pipelineLeaderboardContainer) DOM.pipelineLeaderboardContainer.innerHTML = tableHtml;
+        DOM.pipelineLeaderboardContainer.innerHTML = tableHtml;
+    }
+
+    function renderPipelineBenchmarkResults(benchmarkList, targetClasses, isClassification) {
+        // Sort descending by F1 or Accuracy
+        const sorted = [...benchmarkList].sort((a, b) => {
+            const f1A = isClassification ? (a.eval.macroF1 || 0) : (a.eval.r2 || 0);
+            const f1B = isClassification ? (b.eval.macroF1 || 0) : (b.eval.r2 || 0);
+            return f1B - f1A;
+        });
+
+        // 1. Leaderboard Table
+        renderPipelineLeaderboardOnly();
 
         // 2. 2x2 Confusion Matrices Grid
         let cmHtml = '';
@@ -3608,11 +3646,16 @@
 
         if (DOM.pipelineCmGrid) DOM.pipelineCmGrid.innerHTML = cmHtml;
 
-        updatePipelineActiveDeploymentStatus();
-        updatePredictionProvenanceBar();
+        // Auto-deploy top-performing model if nothing deployed yet or previous deployment was from pipeline
+        if (!AppState.trainedModel || AppState.deployedSource === '7step') {
+            deployPipelineModel(sorted[0].id, false, true); // skipRerender = true to prevent recursion
+        } else {
+            updatePipelineActiveDeploymentStatus();
+            updatePredictionProvenanceBar();
+        }
     }
 
-    function deployPipelineModel(modelId, showNotice = true) {
+    function deployPipelineModel(modelId, showNotice = true, skipRerender = false) {
         if (!AppState.pipeline.benchmarkResults) return;
         const targetItem = AppState.pipeline.benchmarkResults.find(b => b.id === modelId);
         if (!targetItem) return;
@@ -3632,8 +3675,10 @@
         updatePredictionProvenanceBar();
         renderSinglePredictionForm();
 
-        const isClassification = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
-        renderPipelineBenchmarkResults(AppState.pipeline.benchmarkResults, targetItem.prep.targetClasses, isClassification);
+        // Update leaderboard row styling without recursive mutual autoDeploy
+        if (!skipRerender) {
+            renderPipelineLeaderboardOnly();
+        }
 
         if (showNotice) {
             alert(`✓ Deployed: "${targetItem.name}" is now the active predictor for Single Patient Prediction (Step 5) and Batch Prediction (Step 6).`);
@@ -3643,7 +3688,7 @@
 
     function autoDeployPipelineModel(item, showNotice = false) {
         if (!item) return;
-        deployPipelineModel(item.id, showNotice);
+        deployPipelineModel(item.id, showNotice, false);
     }
 
     function autoDeployBestPipelineModel() {
