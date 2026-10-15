@@ -45,12 +45,12 @@
 
     // Model Metadata & Lookup
     const MODEL_INFO = {
-        nn: { name: 'Deep Neural Network (MLP)', short: 'Neural Network', tag: 'Deep Learning', pillClass: 'pill-target', icon: '🧠' },
+        nn: { name: 'Neural Network (MLP)', short: 'Neural Network', tag: 'Neural Network', pillClass: 'pill-target', icon: '🧠' },
         rf: { name: 'Random Forest', short: 'Random Forest', tag: 'Ensemble Trees', pillClass: 'pill-feature', icon: '🌲' },
         glm: { name: 'Logistic / Ridge Regression', short: 'GLM / Regression', tag: 'Generalized Linear', pillClass: 'pill-continuous', icon: '📈' },
         knn: { name: 'k-Nearest Neighbors (k-NN)', short: 'k-NN', tag: 'Instance-Based', pillClass: 'pill-ordinal', icon: '🎯' },
-        nb: { name: 'Gaussian Naive Bayes', short: 'Naive Bayes', tag: 'Probabilistic', pillClass: 'pill-nominal', icon: '🎲' },
-        ensemble: { name: 'Ensemble Super Learner', short: 'Ensemble Meta-Learner', tag: 'Meta-Ensemble', pillClass: 'pill-target', icon: '⚡' }
+        nb: { name: 'Naive Bayes (Gaussian + Bernoulli)', short: 'Naive Bayes', tag: 'Probabilistic', pillClass: 'pill-nominal', icon: '🎲' },
+        ensemble: { name: 'Voting / Weighted Ensemble', short: 'Ensemble', tag: 'Voting Ensemble', pillClass: 'pill-target', icon: '⚡' }
     };
     const ALL_MODEL_IDS = ['nn', 'rf', 'glm', 'knn', 'nb', 'ensemble'];
 
@@ -69,21 +69,154 @@
         return escapeHtml(JSON.stringify(String(value)));
     }
 
+    // Median of training outcomes: the exploratory 2×2 cutoff for continuous targets is fixed from
+    // TRAINING data so the test outcomes never influence the threshold
+    function trainingMedian(values) {
+        const v = values.filter(x => typeof x === 'number' && isFinite(x)).sort((a, b) => a - b);
+        if (v.length === 0) return null;
+        const mid = Math.floor(v.length / 2);
+        return v.length % 2 === 0 ? (v[mid - 1] + v[mid]) / 2 : v[mid];
+    }
+
+    // Exploratory 2×2 table for a continuous outcome. The cutoff is fixed from TRAINING data (never
+    // the test outcomes); it is not a validated clinical decision threshold, so it is labelled as such.
+    function renderExploratoryCutoffTable(ev, compact) {
+        if (!ev || !ev.confMatrix || typeof ev.threshold !== 'number') return '';
+        const cm = ev.confMatrix;
+        const thresh = ev.threshold;
+        const labels = [`< ${thresh}`, `≥ ${thresh}`];
+        const pct = v => (typeof v === 'number' ? `${(v * 100).toFixed(1)}%` : 'N/A');
+        const pad = compact ? 'padding: 6px 8px; font-size: 10.5px;' : '';
+        return `
+            <div class="table-container" style="margin-top: 10px; ${compact ? '' : 'max-width: 500px;'}">
+                <div style="font-size: ${compact ? 11 : 13}px; font-weight: 700; color: var(--text-secondary); margin-bottom: 5px;">
+                    Exploratory split at ${thresh} (${escapeHtml(ev.thresholdSource || 'training median')})
+                </div>
+                <table class="cm-table" style="${compact ? 'font-size: 11.5px; width: 100%;' : ''}">
+                    <thead>
+                        <tr>
+                            <th style="${pad}">Actual \\ Pred</th>
+                            ${labels.map(c => `<th style="${pad}">${escapeHtml(c)}</th>`).join('')}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${labels.map((actual, r) => `
+                            <tr>
+                                <th style="text-align: left; ${pad}">${escapeHtml(actual)}</th>
+                                ${labels.map((_, c) => `<td class="${r === c ? 'cm-cell-hit' : 'cm-cell-miss'}" style="${pad} font-weight: 700;">${cm[r][c]}</td>`).join('')}
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+                <div style="display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--text-secondary); padding: 0 4px;">
+                    <span>Agreement: <strong>${pct(ev.thresholdAccuracy)}</strong></span>
+                    <span>"Sens" (≥ cutoff): <strong>${pct(ev.sensitivity)}</strong></span>
+                    <span>"Spec" (&lt; cutoff): <strong>${pct(ev.specificity)}</strong></span>
+                </div>
+                <div style="margin-top: 6px; padding: 6px 8px; background: var(--bg-surface-subtle); border-radius: var(--radius-sm); font-size: 10.5px; color: var(--text-muted); line-height: 1.35;">
+                    ⚠️ <em>Exploratory only: the cutoff is the training-data median, not a prespecified clinical threshold, so these are not diagnostic accuracy measures.</em>
+                </div>
+            </div>
+        `;
+    }
+
+    // What a displayed class "probability" actually is, by model type
+    const PROBABILITY_LABELS = {
+        model: { title: 'Model Probability', note: 'Model-estimated class probability' },
+        blend: { title: 'Averaged Probability', note: 'Average of the base models\' class probabilities/vote shares' },
+        vote: { title: 'Vote Share', note: 'Proportion of trees/models voting for this class' },
+        neighbours: { title: 'Neighbour Vote Share', note: 'Share of the k nearest training cases (distance-weighted if selected) in this class' }
+    };
+
+    function probabilityLabel(type) {
+        return PROBABILITY_LABELS[type] || PROBABILITY_LABELS.model;
+    }
+
+    // Display name for a trained model, flagging a neural network that fell back to a linear model
+    function displayModelName(modelId, model) {
+        const base = (MODEL_INFO[modelId] && MODEL_INFO[modelId].name) || String(modelId).toUpperCase();
+        return model && model.usedFallback ? `${base} ⚠️ linear fallback (not a neural network)` : base;
+    }
+
+    function fmtR2(v) {
+        return typeof v === 'number' && isFinite(v) ? v.toFixed(3) : 'N/A';
+    }
+
+    // Plain-language summary of how a neural network was trained (validation split / early stopping)
+    function describeNNTraining(info) {
+        if (!info) return '';
+        if (!info.earlyStopping) {
+            return `trained on all ${info.fitCases} training cases for ${info.maxEpochs} epochs (too few cases for an internal validation split; no early stopping).`;
+        }
+        return `${info.validationCases} training cases held out for validation; ` +
+            (info.earlyStopped
+                ? `early stopping at epoch ${info.stoppedEpoch}/${info.maxEpochs}, weights restored from epoch ${info.bestEpoch}.`
+                : `ran all ${info.maxEpochs} epochs, best weights from epoch ${info.bestEpoch}.`) +
+            ' The test set was not used during training.';
+    }
+
     function cssEscape(value) {
         return (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
     }
 
-    // Ranks classification results by macro-F1 (robust to class imbalance), then ROC-AUC, then accuracy;
-    // regression results by R², then lower RMSE.
-    function compareEvalResults(a, b, isClassification) {
-        if (isClassification) {
-            return ((b.macroF1 || 0) - (a.macroF1 || 0)) ||
-                ((b.rocAuc || 0) - (a.rocAuc || 0)) ||
-                ((b.accuracy || 0) - (a.accuracy || 0));
+    // Ranking policy (one policy for Step 4 and the 7-step pipeline; selectable by the user so the
+    // primary metric can match the prespecified study objective)
+    const RANKING_METRICS = {
+        classification: {
+            macroF1: { label: 'Macro F1', higherIsBetter: true },
+            balancedAccuracy: { label: 'Balanced accuracy', higherIsBetter: true },
+            rocAuc: { label: 'ROC-AUC (binary only)', higherIsBetter: true },
+            brierScore: { label: 'Brier score (lower is better)', higherIsBetter: false },
+            accuracy: { label: 'Accuracy', higherIsBetter: true }
+        },
+        regression: {
+            r2: { label: 'R²', higherIsBetter: true },
+            rmse: { label: 'RMSE (lower is better)', higherIsBetter: false },
+            mae: { label: 'MAE (lower is better)', higherIsBetter: false }
         }
-        return ((b.r2 !== undefined ? b.r2 : -Infinity) - (a.r2 !== undefined ? a.r2 : -Infinity)) ||
-            ((a.rmse || 0) - (b.rmse || 0));
+    };
+
+    function rankingMetricKey(isClassification) {
+        return isClassification ? (AppState.rankingMetricClf || 'macroF1') : (AppState.rankingMetricReg || 'r2');
     }
+
+    function rankingMetricLabel(isClassification) {
+        const group = isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression;
+        return group[rankingMetricKey(isClassification)].label;
+    }
+
+    // Sorts best-first on the selected metric; missing values rank last; ties broken by macro-F1/AUC
+    // (classification) or R²/RMSE (regression).
+    function compareEvalResults(a, b, isClassification) {
+        const key = rankingMetricKey(isClassification);
+        const def = (isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression)[key];
+        const val = ev => (typeof ev[key] === 'number' && isFinite(ev[key]) ? ev[key] : null);
+        const va = val(a);
+        const vb = val(b);
+        if (va === null && vb !== null) return 1;
+        if (vb === null && va !== null) return -1;
+        if (va !== null && vb !== null && va !== vb) return def.higherIsBetter ? vb - va : va - vb;
+        if (isClassification) {
+            return ((b.macroF1 || 0) - (a.macroF1 || 0)) || ((b.rocAuc || 0) - (a.rocAuc || 0)) || ((b.accuracy || 0) - (a.accuracy || 0));
+        }
+        const r2a = typeof a.r2 === 'number' ? a.r2 : -Infinity;
+        const r2b = typeof b.r2 === 'number' ? b.r2 : -Infinity;
+        return (r2b - r2a) || ((a.rmse || 0) - (b.rmse || 0));
+    }
+
+    function summariseHeldOutSet(ev) {
+        // Caveats about the size/composition of the evaluation set
+        const notes = [];
+        const n = ev.totalSamples || ev.testCount || 0;
+        if (n > 0 && n < 30) {
+            notes.push(`Only ${n} test cases: performance estimates are imprecise${ev.accuracyCI ? ` (accuracy 95% CI ${(ev.accuracyCI[0] * 100).toFixed(0)}–${(ev.accuracyCI[1] * 100).toFixed(0)}%)` : ''}. Treat differences between models with caution.`);
+        }
+        if (ev.classesMissingFromTest && ev.classesMissingFromTest.length > 0) {
+            notes.push(`Class(es) absent from the test set: ${ev.classesMissingFromTest.map(escapeHtml).join(', ')}. Their recall/F1 cannot be evaluated and are counted as 0 in macro averages.`);
+        }
+        return notes;
+    }
+
 
     // =========================================================================
     // EXECUTION WATCHDOG: LIVE MONITOR, LOOP DETECTOR & STALL SENTINEL
@@ -847,6 +980,18 @@
         // Train Model
         DOM.trainModelBtn.addEventListener('click', startModelTraining);
 
+        // Primary ranking metric (shared by Step 4 and the 7-step pipeline)
+        document.querySelectorAll('.ranking-metric-select').forEach(sel => {
+            sel.addEventListener('change', (e) => {
+                const [kind, key] = e.target.value.split(':');
+                if (kind === 'clf') AppState.rankingMetricClf = key;
+                else AppState.rankingMetricReg = key;
+                // Keep both selectors in sync (each <select> shows one selected option)
+                document.querySelectorAll('.ranking-metric-select').forEach(other => { other.value = e.target.value; });
+                rerankExistingResults();
+            });
+        });
+
         // Reproducibility Seed Management (Default 42 vs Custom Seed)
         setupSeedManagement();
 
@@ -1306,7 +1451,7 @@
         const analysis = AppState.columnAnalysis;
 
         let gridHtml = '';
-        headers.forEach(col => {
+        headers.forEach((col, colIdx) => {
             const a = analysis[col];
             const cfg = AppState.columnConfigs[col];
 
@@ -1322,8 +1467,8 @@
                     </div>
 
                     <div class="var-row-control">
-                        <label>Variable Role</label>
-                        <select class="control-select var-role-select" data-col="${escapeHtml(col)}">
+                        <label for="var-role-${colIdx}">Variable Role</label>
+                        <select id="var-role-${colIdx}" class="control-select var-role-select" data-col="${escapeHtml(col)}">
                             <option value="feature" ${cfg.role === 'feature' ? 'selected' : ''}>Predictor Feature</option>
                             <option value="target" ${cfg.role === 'target' ? 'selected' : ''}>Target (Outcome to Predict)</option>
                             <option value="meta" ${cfg.role === 'meta' ? 'selected' : ''}>Meta / ID (Ignore from Model)</option>
@@ -1331,13 +1476,14 @@
                     </div>
 
                     <div class="var-row-control">
-                        <label>Variable Type</label>
-                        <select class="control-select var-type-select" data-col="${escapeHtml(col)}">
+                        <label for="var-type-${colIdx}">Variable Type</label>
+                        <select id="var-type-${colIdx}" class="control-select var-type-select" data-col="${escapeHtml(col)}">
                             <option value="continuous" ${cfg.type === 'continuous' ? 'selected' : ''}>Continuous (Numerical / Scale)</option>
                             <option value="ordinal" ${cfg.type === 'ordinal' ? 'selected' : ''}>Ordinal (Ranked Categorical)</option>
                             <option value="nominal" ${cfg.type === 'nominal' ? 'selected' : ''}>Nominal (Unordered Categorical)</option>
                         </select>
                     </div>
+                    ${renderTargetAndOrdinalControls(col, colIdx, a, cfg)}
                 </div>
             `;
         });
@@ -1365,11 +1511,8 @@
                 }
 
                 AppState.columnConfigs[col].role = newRole;
-                const card = document.getElementById(`card-col-${col}`);
-                if (card) {
-                    card.classList.toggle('is-target', newRole === 'target');
-                    card.classList.toggle('is-meta', newRole === 'meta');
-                }
+                // Re-render so target-only controls (positive class) appear/disappear
+                renderVariableConfigGrid();
             });
         });
 
@@ -1383,8 +1526,63 @@
                 } else {
                     AppState.columnConfigs[col].imputationStrategy = 'mode';
                 }
+                // Re-render so ordinal / positive-class controls reflect the new type
+                renderVariableConfigGrid();
             });
         });
+
+        document.querySelectorAll('.var-positive-select').forEach(sel => {
+            sel.addEventListener('change', (e) => {
+                AppState.columnConfigs[e.target.dataset.col].positiveClass = e.target.value;
+            });
+        });
+
+        document.querySelectorAll('.var-ordinal-order').forEach(input => {
+            input.addEventListener('change', (e) => {
+                const col = e.target.dataset.col;
+                const levels = e.target.value.split(',').map(v => v.trim()).filter(v => v.length > 0);
+                const known = (AppState.columnAnalysis[col]?.distinctValues || []).map(v => String(v).trim().toLowerCase());
+                const unknown = levels.filter(l => !known.includes(l.toLowerCase()));
+                AppState.columnConfigs[col].ordinalOrder = levels.length > 0 ? levels : undefined;
+                const hint = document.getElementById(e.target.id + '-hint');
+                if (hint) {
+                    hint.textContent = unknown.length > 0
+                        ? `⚠️ Not found in the data (ignored): ${unknown.join(', ')}`
+                        : (levels.length > 0 ? '✓ Custom order saved' : 'Using automatic order');
+                }
+            });
+        });
+    }
+
+    // Extra Step 2 controls: positive (event) class for a binary target, level order for ordinals
+    function renderTargetAndOrdinalControls(col, colIdx, a, cfg) {
+        let html = '';
+        const levels = (a.distinctValues || []).map(v => String(v));
+        if (cfg.role === 'target' && cfg.type !== 'continuous' && levels.length === 2) {
+            const sorted = [...levels].sort();
+            const positive = cfg.positiveClass !== undefined && levels.includes(String(cfg.positiveClass)) ? String(cfg.positiveClass) : sorted[1];
+            html += `
+                <div class="var-row-control">
+                    <label for="var-positive-${colIdx}">Positive (event) class</label>
+                    <select id="var-positive-${colIdx}" class="control-select var-positive-select" data-col="${escapeHtml(col)}">
+                        ${sorted.map(v => `<option value="${escapeHtml(v)}" ${v === positive ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+                    </select>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted);">Used as "positive" for ROC-AUC, Brier score, sensitivity, PPV and TP/FN.</div>
+            `;
+        }
+        if (cfg.type === 'ordinal' && cfg.role !== 'meta' && levels.length > 1) {
+            const autoOrder = DataEngine.sortOrdinalLevels(levels);
+            const current = Array.isArray(cfg.ordinalOrder) && cfg.ordinalOrder.length ? cfg.ordinalOrder : autoOrder;
+            html += `
+                <div class="var-row-control" style="flex-direction: column; align-items: stretch; gap: 4px;">
+                    <label for="var-order-${colIdx}">Level order (lowest &rarr; highest, comma-separated)</label>
+                    <input type="text" id="var-order-${colIdx}" class="control-input var-ordinal-order" data-col="${escapeHtml(col)}" value="${escapeHtml(current.join(', '))}">
+                    <span id="var-order-${colIdx}-hint" style="font-size: 11px; color: var(--text-muted);">${Array.isArray(cfg.ordinalOrder) && cfg.ordinalOrder.length ? '✓ Custom order saved' : 'Automatic order: please check it matches the clinical order'}</span>
+                </div>
+            `;
+        }
+        return html;
     }
 
     // =========================================================================
@@ -1849,8 +2047,32 @@
                     }
                 }
 
-                const split = DataEngine.trainTestSplit(prep.X, prep.y, trainRatio, prep.isClassification, splitSeed);
+                // LEAK-FREE OPTION A: split the raw patient records FIRST, then fit imputation, encoding and
+                // scaling on the training partition only and apply them unchanged to the test partition.
+                const targetCol = prep.targetCol;
+                const rawRows = AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol]) &&
+                    (prep.isClassification || !isNaN(Number(r[targetCol]))));
+                const rowSplit = DataEngine.trainTestSplit(
+                    rawRows,
+                    rawRows.map(r => String(r[targetCol]).trim()),
+                    trainRatio,
+                    prep.isClassification,
+                    splitSeed
+                );
+                const trainImp = DataEngine.imputeDataset(rowSplit.trainX, AppState.columnConfigs, AppState.columnAnalysis);
+                const testImp = DataEngine.imputeDataset(rowSplit.testX, AppState.columnConfigs, AppState.columnAnalysis, trainImp.plan);
+                const splitPrep = DataEngine.prepareFeaturesAndTarget(trainImp.imputedRows, AppState.columnConfigs);
+                const testData = DataEngine.prepareTestingDataset(testImp.imputedRows, splitPrep);
+                const split = { trainX: splitPrep.X, trainY: splitPrep.y, testX: testData.X, testY: testData.y };
                 AppState.trainTestData = split;
+
+                if (split.testX.length === 0) {
+                    throw new Error(`The test partition is empty (${rawRows.length} usable rows at a ${Math.round(trainRatio * 100)}/${testPct} split). Use a larger cohort, a smaller training percentage, or Option B.`);
+                }
+                if (split.trainX.length < 5) {
+                    throw new Error(`Only ${split.trainX.length} training case(s) after splitting; at least 5 are required.`);
+                }
+                const splitThreshold = prep.isClassification ? null : trainingMedian(split.trainY);
 
                 const shouldRetrain = DOM.retrainYes ? DOM.retrainYes.checked : true;
 
@@ -1875,21 +2097,22 @@
                     const valModel = ModelEngine.createModel(
                         mId,
                         prep.isClassification,
-                        prep.targetClasses.length || 2,
+                        splitPrep.targetClasses.length || 2,
                         hyperparams
                     );
 
                     if (mId === 'nn') {
-                        await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (epoch, total, logs) => {
+                        // Test split is never shown to the model: the NN carves its own validation split from the training data
+                        await valModel.fit(split.trainX, split.trainY, null, null, (epoch, total, logs) => {
                             if (watchdog && watchdog.aborted) return;
-                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Internal Val Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
                             if (watchdog && (epoch % 4 === 0 || epoch === total)) {
                                 watchdog.tick(i + 1, `${mInfo.name}: Epoch ${epoch}/${total} (Loss: ${logs.loss.toFixed(4)})`);
                             }
                         });
                     } else if (mId === 'ensemble') {
-                        await valModel.fit(split.trainX, split.trainY, split.testX, split.testY, (curr, total, info) => {
+                        await valModel.fit(split.trainX, split.trainY, null, null, (curr, total, info) => {
                             if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})...</span>`;
                             if (watchdog) {
@@ -1903,21 +2126,29 @@
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Benchmark out-of-sample accuracy on held-out test split
-                    const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, prep.targetClasses);
+                    const evalRes = ModelEngine.evaluate(valModel, split.testX, split.testY, prep.isClassification, splitPrep.targetClasses, {
+                        regressionThreshold: splitThreshold,
+                        thresholdSource: 'median of the training-split outcomes'
+                    });
                     evalRes.protocol = 'option-a';
+                    evalRes.testImputedCells = testImp.audit.filter(a => a.type === 'impute_column').reduce((acc, a) => acc + a.imputedCount, 0);
+                    evalRes.testDroppedRows = rowSplit.testX.length - testImp.imputedRows.length;
+                    evalRes.unknownClassCount = testData.unknownClassCount;
                     evalRes.retrainOn100 = shouldRetrain;
                     evalRes.trainRatio = trainRatio;
                     evalRes.trainPct = Math.round(trainRatio * 100);
                     evalRes.testPct = testPct;
                     evalRes.trainCount = split.trainX.length;
                     evalRes.testCount = split.testX.length;
-                    evalRes.totalCount = prep.X.length;
+                    evalRes.totalCount = rawRows.length;
                     evalRes.splitSeed = splitSeed;
                     evalRes.seed = hyperparams.seed;
+                    if (valModel.trainingInfo) evalRes.nnNote = describeNNTraining(valModel.trainingInfo);
                     if (valModel.usedFallback) {
                         evalRes.fallbackNote = `TensorFlow.js training failed (${valModel.fallbackReason}); a linear (logistic/ridge) fallback model was evaluated instead of a neural network.`;
                     }
                     if (valModel.weightingNote) evalRes.weightingNote = valModel.weightingNote;
+                    if (valModel.fallbackNote) evalRes.fallbackNote = valModel.fallbackNote;
 
                     let activeModelInstance = valModel;
 
@@ -1967,6 +2198,9 @@
                         splitSeed: splitSeed
                     });
                 }
+                // Predictions must use the encoding the deployed models were fitted with:
+                // full-cohort encoding after 100% retraining, otherwise the training-split encoding.
+                AppState.prepMeta = shouldRetrain ? prep : splitPrep;
             } else {
                 // =============================================================
                 // OPTION B: SEPARATE TRAINING (i) AND TESTING (ii) DATASETS
@@ -2017,16 +2251,17 @@
                     );
 
                     if (mId === 'nn') {
-                        await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (epoch, total, logs) => {
+                        // Dataset (ii) is never shown to the model: the NN carves its own validation split from Dataset (i)
+                        await model.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
                             if (watchdog && watchdog.aborted) return;
-                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| External Test Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
+                            DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Internal Val Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
                             if (watchdog && (epoch % 4 === 0 || epoch === total)) {
                                 watchdog.tick(i + 1, `${mInfo.name}: Epoch ${epoch}/${total}`);
                             }
                         });
                     } else if (mId === 'ensemble') {
-                        await model.fit(prep.X, prep.y, testPrep.X, testPrep.y, (curr, total, info) => {
+                        await model.fit(prep.X, prep.y, null, null, (curr, total, info) => {
                             if (watchdog && watchdog.aborted) return;
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})...</span>`;
                             if (watchdog) {
@@ -2040,7 +2275,10 @@
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
 
                     // Evaluate on independent Dataset (ii)
-                    const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses);
+                    const evalRes = ModelEngine.evaluate(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses, {
+                        regressionThreshold: prep.isClassification ? null : trainingMedian(prep.y),
+                        thresholdSource: 'median of the Dataset (i) training outcomes'
+                    });
                     evalRes.protocol = 'option-b';
                     evalRes.retrainOn100 = false;
                     evalRes.trainCount = prep.X.length;
@@ -2051,10 +2289,12 @@
                     evalRes.unknownClassCount = testPrep.unknownClassCount;
                     evalRes.imputedFeatureCells = testPrep.imputedFeatureCells;
                     evalRes.seed = hyperparams.seed;
+                    if (model.trainingInfo) evalRes.nnNote = describeNNTraining(model.trainingInfo);
                     if (model.usedFallback) {
                         evalRes.fallbackNote = `TensorFlow.js training failed (${model.fallbackReason}); a linear (logistic/ridge) fallback model was evaluated instead of a neural network.`;
                     }
                     if (model.weightingNote) evalRes.weightingNote = model.weightingNote;
+                    if (model.fallbackNote) evalRes.fallbackNote = model.fallbackNote;
 
                     testedResults.push({
                         modelId: mId,
@@ -2079,7 +2319,7 @@
             AppState.selectedModelId = champion.modelId;
 
             if (watchdog) {
-                watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Champion: ${champion.info.name}!`);
+                watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Top-ranked on ${rankingMetricLabel(prep.isClassification)}: ${champion.info.name}`);
             }
 
             // Update train status banner
@@ -2087,7 +2327,7 @@
                 const singleRes = champion.evalRes;
                 const accText = singleRes.isClassification
                     ? `Test Accuracy: ${(singleRes.accuracy * 100).toFixed(1)}% (ROC-AUC: ${singleRes.rocAuc !== null && singleRes.rocAuc !== undefined ? singleRes.rocAuc.toFixed(3) : 'N/A'})`
-                    : `Test R²: ${singleRes.r2.toFixed(3)} (RMSE: ${singleRes.rmse.toFixed(3)})`;
+                    : `Test R²: ${fmtR2(singleRes.r2)} (RMSE: ${singleRes.rmse.toFixed(3)})`;
                 DOM.trainStatus.innerHTML = `
                     <div style="display: flex; flex-direction: column; gap: 3px;">
                         <span style="color: var(--accent-emerald); font-weight: 700;">
@@ -2101,14 +2341,14 @@
             } else {
                 const topAccText = champion.evalRes.isClassification
                     ? `Macro F1: ${(champion.evalRes.macroF1 * 100).toFixed(1)}%, Accuracy: ${(champion.evalRes.accuracy * 100).toFixed(1)}%`
-                    : `R²: ${champion.evalRes.r2.toFixed(3)}`;
+                    : `R²: ${fmtR2(champion.evalRes.r2)}`;
                 DOM.trainStatus.innerHTML = `
                     <div style="display: flex; flex-direction: column; gap: 3px;">
                         <span style="color: var(--accent-emerald); font-weight: 700;">
                             🏆 Tournament Complete: Tested &amp; Evaluated ${testedResults.length} Models!
                         </span>
                         <span style="font-size: 11.5px; color: var(--text-secondary);">
-                            Leader: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds are listed below.
+                            Top-ranked on ${escapeHtml(rankingMetricLabel(prep.isClassification))}: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds are listed below.
                         </span>
                         <span style="font-size: 11px; color: var(--accent-amber);">
                             ⚠️ The leader was chosen using the same test cases it is scored on, so its test score is optimistically biased. Confirm the chosen model on an independent cohort (Option B).
@@ -2134,6 +2374,26 @@
         }
     }
 
+    // Shows the ranking metric that applies to the current outcome type in both selectors
+    function syncRankingSelectors(isClassification) {
+        const value = `${isClassification ? 'clf' : 'reg'}:${rankingMetricKey(isClassification)}`;
+        document.querySelectorAll('.ranking-metric-select').forEach(sel => { sel.value = value; });
+    }
+
+    // Re-sorts already-computed results after the ranking metric changes (no retraining, no redeployment)
+    function rerankExistingResults() {
+        if (AppState.allTestedResults && AppState.allTestedResults.length > 0 && AppState.prepMeta) {
+            const isClf = AppState.allTestedResults[0].evalRes.isClassification;
+            AppState.allTestedResults.sort((a, b) => compareEvalResults(a.evalRes, b.evalRes, isClf));
+            if (AppState.evalResults) renderEvaluationDashboard();
+        }
+        if (AppState.pipeline && AppState.pipeline.benchmarkResults && AppState.pipeline.benchmarkResults.length > 0) {
+            const isClf = AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous';
+            AppState.pipeline.benchmarkResults.sort((a, b) => compareEvalResults(a.eval, b.eval, isClf));
+            renderPipelineLeaderboardOnly();
+        }
+    }
+
     function setupTrainingLossChart() {
         const ctx = DOM.trainLossChartCanvas.getContext('2d');
         if (AppState.charts.loss) {
@@ -2156,7 +2416,7 @@
                         pointRadius: 2
                     },
                     {
-                        label: 'Validation Loss',
+                        label: 'Internal Validation Loss (held out from training data)',
                         data: [],
                         borderColor: '#a855f7',
                         backgroundColor: 'rgba(168, 85, 247, 0.1)',
@@ -2254,6 +2514,7 @@
         DOM.resultsDashboard.style.display = 'flex';
 
         const isOptionB = evalRes.protocol === 'option-b';
+        syncRankingSelectors(evalRes.isClassification);
         const trainPct = evalRes.trainPct || 80;
         const testPct = evalRes.testPct || 20;
         const trainCount = evalRes.trainCount || Math.round(evalRes.totalCount * 0.8);
@@ -2318,7 +2579,7 @@
             const notes = [];
             const resultsForNotes = allResults.length ? allResults.map(r => r.evalRes) : [evalRes];
             if (prep && prep.isClassification && prep.positiveClass !== null && prep.positiveClass !== undefined) {
-                notes.push(`Binary metrics (ROC-AUC, sensitivity, TP/FN) treat <strong>${escapeHtml(prep.positiveClass)}</strong> as the positive class (second label in sorted order).`);
+                notes.push(`Positive (event) class for ROC-AUC, Brier score, sensitivity and TP/FN: <strong>${escapeHtml(prep.positiveClass)}</strong>. Change it in Step 2 (target card) if this is not the outcome of interest.`);
             }
             if (isOptionB && evalRes.imputedFeatureCells > 0) {
                 notes.push(`${evalRes.imputedFeatureCells} missing/unrecognised predictor cell(s) in Dataset (ii) were filled from training-cohort statistics.`);
@@ -2327,11 +2588,22 @@
                 notes.push(`Dataset (ii) rows excluded: ${evalRes.missingTargetCount || 0} with a missing outcome, ${evalRes.unknownClassCount || 0} with an outcome class not seen in training.`);
             }
             if (!isOptionB) {
-                notes.push('Option A: imputation and feature scaling were fitted on the whole cohort before splitting, so the held-out estimate is mildly optimistic. Use the 7-Step Pipeline or Option B for a strictly separated estimate.');
+                notes.push('Option A: records were split first; imputation, category encoding and scaling were fitted on the training split only and applied unchanged to the test split. The split is random at row level: if patients contribute several rows, or the data are temporal or multicentre, use a patient-level, temporal or external split (Option B) instead.');
+                if (evalRes.testImputedCells > 0) {
+                    notes.push(`${evalRes.testImputedCells} missing predictor value(s) in the test split were filled with training-derived values.`);
+                }
+                if (evalRes.unknownClassCount > 0) {
+                    notes.push(`${evalRes.unknownClassCount} test row(s) had an outcome class absent from the training split and were excluded.`);
+                }
             }
+            if (prep && prep.isClassification) {
+                notes.push(`Class "probabilities" are uncalibrated: Random Forest and hard voting give vote shares, k-NN gives neighbour shares. The Brier score (lower is better) summarises probability accuracy; a calibration plot is recommended before clinical use.`);
+            }
+            summariseHeldOutSet(evalRes).forEach(n => notes.push(n));
             resultsForNotes.forEach(r => {
                 if (r && r.fallbackNote) notes.push(`⚠️ ${escapeHtml(r.fallbackNote)}`);
                 if (r && r.weightingNote) notes.push(`Ensemble: ${escapeHtml(r.weightingNote)}`);
+                if (r && r.nnNote) notes.push(`Neural network: ${escapeHtml(r.nnNote)}`);
             });
             if (notes.length > 0) {
                 DOM.retrainStatusBanner.innerHTML += `
@@ -2361,10 +2633,10 @@
                     const isChampion = idx === 0;
                     const isDeployed = AppState.deployedModelId === resItem.modelId;
 
-                    const rankBadge = isChampion ? '🥇 #1 Champion' : (idx === 1 ? '🥈 #2 Runner-Up' : (idx === 2 ? '🥉 #3' : `#${idx + 1}`));
+                    const rankBadge = isChampion ? '🥇 #1' : (idx === 1 ? '🥈 #2' : (idx === 2 ? '🥉 #3' : `#${idx + 1}`));
                     const scoreDisplay = rEval.isClassification 
-                        ? `<strong style="color: var(--accent-cyan); font-size: 14.5px;">${(rEval.accuracy * 100).toFixed(1)}%</strong>`
-                        : `<strong style="color: var(--accent-cyan); font-size: 14.5px;">R²: ${rEval.r2.toFixed(3)}</strong>`;
+                        ? `<strong style="color: var(--accent-cyan); font-size: 14.5px;">${(rEval.accuracy * 100).toFixed(1)}%</strong>${rEval.accuracyCI ? `<div style="font-size: 10px; color: var(--text-muted);">95% CI ${(rEval.accuracyCI[0] * 100).toFixed(0)}–${(rEval.accuracyCI[1] * 100).toFixed(0)}%</div>` : ''}`
+                        : `<strong style="color: var(--accent-cyan); font-size: 14.5px;">R²: ${fmtR2(rEval.r2)}</strong>`;
 
                     const rocAucDisplay = rEval.isClassification 
                         ? (rEval.rocAuc !== null ? rEval.rocAuc.toFixed(3) : '<span style="color:var(--text-muted)">N/A</span>')
@@ -2381,6 +2653,10 @@
                     const recDisplay = rEval.isClassification 
                         ? `${(rEval.macroRecall * 100).toFixed(1)}%`
                         : '-';
+                    const balDisplay = rEval.isClassification && typeof rEval.balancedAccuracy === 'number'
+                        ? `${(rEval.balancedAccuracy * 100).toFixed(1)}%` : '-';
+                    const brierDisplay = rEval.isClassification && typeof rEval.brierScore === 'number'
+                        ? rEval.brierScore.toFixed(3) : '-';
 
                     const seedDisplay = (rEval.seed !== null && rEval.seed !== undefined)
                         ? `<span class="seed-pill" title="Click to copy reproducibility seed: ${rEval.seed}" onclick="window.copySeedToClipboard(${rEval.seed})">🌱 ${rEval.seed} <span class="copy-icon">📋</span></span>`
@@ -2397,7 +2673,7 @@
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <span style="font-size: 16px;">${mInfo.icon}</span>
                                     <div>
-                                        <div style="font-weight: 700; color: var(--text-primary);">${mInfo.name}</div>
+                                        <div style="font-weight: 700; color: var(--text-primary);">${escapeHtml(displayModelName(resItem.modelId, resItem.model))}</div>
                                         <div style="font-size: 11px; color: var(--text-muted);">${resItem.retrained ? '100% Cohort Retrained' : (isOptionB ? 'External Validated' : 'Split-Trained')}</div>
                                     </div>
                                 </div>
@@ -2408,6 +2684,8 @@
                             <td>${f1Display}</td>
                             <td>${precDisplay}</td>
                             <td>${recDisplay}</td>
+                            <td>${balDisplay}</td>
+                            <td>${brierDisplay}</td>
                             <td>${seedDisplay}</td>
                             <td>${deployBtn}</td>
                         </tr>
@@ -2422,7 +2700,7 @@
                                     <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked
                                 </h3>
                                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                                    Comparative performance on ${cohortDesc}, ranked by ${prep.isClassification ? 'macro F1 (then ROC-AUC)' : 'R² (then RMSE)'}. The top-ranked model (${allResults[0].info.name}) is set as the active predictor; because it was selected on these same test cases, its score is optimistically biased. Click any seed pill to copy it.
+                                    Comparative performance on ${cohortDesc}, ranked by <strong>${escapeHtml(rankingMetricLabel(prep.isClassification))}</strong> (change the primary metric above). The top-ranked model (${allResults[0].info.name}) is set as the active predictor. A single train/test split does not show that one model is generally superior, and because the leader was selected on these same test cases its score is optimistically biased. Report all metrics, not only the winner. Click any seed pill to copy it.
                                 </div>
                             </div>
                             <span class="pill pill-target" style="font-size: 12px; font-weight: 700;">
@@ -2438,9 +2716,11 @@
                                         <th>Paradigm</th>
                                         <th>${prep.isClassification ? 'Test Accuracy' : 'Test R²'}</th>
                                         <th>${prep.isClassification ? 'ROC-AUC' : 'RMSE'}</th>
-                                        <th>${prep.isClassification ? 'Macro F1 (rank key)' : 'MAE'}</th>
+                                        <th>${prep.isClassification ? 'Macro F1' : 'MAE'}</th>
                                         <th>${prep.isClassification ? 'Precision' : 'MSE'}</th>
                                         <th>${prep.isClassification ? 'Recall' : '-'}</th>
+                                        <th>${prep.isClassification ? 'Balanced Acc' : '-'}</th>
+                                        <th>${prep.isClassification ? 'Brier ↓' : '-'}</th>
                                         <th>Seed (Ref)</th>
                                         <th>Status / Deploy</th>
                                     </tr>
@@ -2493,46 +2773,11 @@
                             </div>
                         `;
                     } else {
-                        const cm = rEval.confMatrix || [[0, 0], [0, 0]];
-                        const thresh = rEval.threshold !== undefined ? rEval.threshold : 0;
-                        const regClasses = [`< ${thresh}`, `≥ ${thresh}`];
-                        const accPct = rEval.thresholdAccuracy !== undefined ? (rEval.thresholdAccuracy * 100).toFixed(1) : 'N/A';
-                        const sensPct = rEval.sensitivity !== undefined ? (rEval.sensitivity * 100).toFixed(1) : 'N/A';
-                        const specPct = rEval.specificity !== undefined ? (rEval.specificity * 100).toFixed(1) : 'N/A';
                         cmContent = `
-                            <div class="table-container" style="margin-top: 10px;">
-                                <div style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
-                                    <span>2×2 Concordance Matrix (Cutoff: ${thresh})</span>
-                                    <span style="color: var(--accent-emerald); font-weight: 700;">${accPct}% Acc</span>
-                                </div>
-                                <table class="cm-table" style="font-size: 11.5px; width: 100%;">
-                                    <thead>
-                                        <tr>
-                                            <th style="padding: 6px 8px; font-size: 10px;">Actual \\ Pred</th>
-                                            ${regClasses.map(c => `<th style="padding: 6px 8px; font-size: 10.5px;">${escapeHtml(c)}</th>`).join('')}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${regClasses.map((actualClass, r) => `
-                                            <tr>
-                                                <th style="text-align: left; padding: 6px 8px; font-size: 10.5px;">${escapeHtml(actualClass)}</th>
-                                                ${regClasses.map((_, c) => {
-                                                    const val = cm[r][c];
-                                                    const isHit = r === c;
-                                                    return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}" style="padding: 6px 8px; font-weight: 700;">${val}</td>`;
-                                                }).join('')}
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                                <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-secondary); padding: 0 4px;">
-                                    <span>Sens: <strong>${sensPct}%</strong></span>
-                                    <span>Spec: <strong>${specPct}%</strong></span>
-                                    <span>MAE: <strong>${rEval.mae.toFixed(3)}</strong></span>
-                                </div>
-                                <div style="margin-top: 6px; padding: 6px 8px; background: var(--bg-surface-subtle); border-radius: var(--radius-sm); font-size: 10.5px; color: var(--text-muted); line-height: 1.35;">
-                                    💡 <em>2×2 matrix dichotomized at median cutoff (${thresh}). For discrete binary categories, choose <strong>Nominal</strong> or <strong>Ordinal</strong> in Step 2.</em>
-                                </div>
+                            ${renderExploratoryCutoffTable(rEval, true)}
+                            <div style="display: flex; justify-content: space-between; margin-top: 6px; font-size: 11px; color: var(--text-secondary); padding: 0 4px;">
+                                <span>RMSE: <strong>${rEval.rmse.toFixed(3)}</strong></span>
+                                <span>MAE: <strong>${rEval.mae.toFixed(3)}</strong></span>
                             </div>
                         `;
                     }
@@ -2547,12 +2792,12 @@
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <span style="font-size: 18px;">${mInfo.icon}</span>
                                     <div>
-                                        <div class="cm-card-title">${mInfo.name}</div>
+                                        <div class="cm-card-title">${escapeHtml(displayModelName(resItem.modelId, resItem.model))}</div>
                                         <span class="pill ${mInfo.pillClass}" style="font-size: 10px; padding: 1px 6px;">${mInfo.tag}</span>
                                     </div>
                                 </div>
                                 <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
-                                    ${isChampion ? `<span class="champion-badge">🏆 #1 Champion</span>` : `<span class="pill" style="font-size: 10.5px;">Rank #${idx + 1}</span>`}
+                                    ${isChampion ? `<span class="champion-badge">🏆 Top-ranked (${escapeHtml(rankingMetricLabel(prep.isClassification))})</span>` : `<span class="pill" style="font-size: 10.5px;">Rank #${idx + 1}</span>`}
                                     ${isDeployed ? `<span class="pill pill-target" style="font-size: 10px; background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald);">⭐ Active</span>` : ''}
                                 </div>
                             </div>
@@ -2560,7 +2805,7 @@
                             <div class="cm-card-metrics">
                                 <div class="cm-metric-item">
                                     <span class="cm-m-label">${rEval.isClassification ? 'Test Accuracy' : 'R² Score'}</span>
-                                    <span class="cm-m-val">${rEval.isClassification ? `${(rEval.accuracy * 100).toFixed(1)}%` : rEval.r2.toFixed(3)}</span>
+                                    <span class="cm-m-val">${rEval.isClassification ? `${(rEval.accuracy * 100).toFixed(1)}%` : fmtR2(rEval.r2)}</span>
                                 </div>
                                 <div class="cm-metric-item">
                                     <span class="cm-m-label">${rEval.isClassification ? 'ROC-AUC' : 'RMSE'}</span>
@@ -2580,7 +2825,7 @@
                             </div>
 
                             <div style="font-size: 12px; font-weight: 700; color: var(--text-primary); margin-top: 10px;">
-                                ${rEval.isClassification ? 'Confusion Matrix:' : '2×2 Confusion Matrix &amp; Diagnostics:'}
+                                ${rEval.isClassification ? 'Confusion Matrix:' : 'Error metrics &amp; exploratory 2×2 split:'}
                             </div>
                             ${cmContent}
 
@@ -2630,7 +2875,18 @@
                     <div class="metric-pill-card">
                         <span class="m-title">${testAccLabel}</span>
                         <span class="m-val">${(evalRes.accuracy * 100).toFixed(1)}%</span>
+                        ${evalRes.accuracyCI ? `<span style="font-size: 11px; color: var(--text-muted);">95% CI ${(evalRes.accuracyCI[0] * 100).toFixed(1)}–${(evalRes.accuracyCI[1] * 100).toFixed(1)}% (Wilson)</span>` : ''}
                     </div>
+                    ${typeof evalRes.balancedAccuracy === 'number' ? `
+                    <div class="metric-pill-card">
+                        <span class="m-title">Balanced Accuracy</span>
+                        <span class="m-val">${(evalRes.balancedAccuracy * 100).toFixed(1)}%</span>
+                    </div>` : ''}
+                    ${typeof evalRes.brierScore === 'number' ? `
+                    <div class="metric-pill-card">
+                        <span class="m-title">Brier Score (lower is better)</span>
+                        <span class="m-val">${evalRes.brierScore.toFixed(3)}</span>
+                    </div>` : ''}
                     <div class="metric-pill-card">
                         <span class="m-title">Macro F1-Score</span>
                         <span class="m-val">${(evalRes.macroF1 * 100).toFixed(1)}%</span>
@@ -2691,7 +2947,7 @@
                 DOM.metricsSummaryRow.innerHTML = `
                     <div class="metric-pill-card">
                         <span class="m-title">${testR2Label}</span>
-                        <span class="m-val">${evalRes.r2.toFixed(3)}</span>
+                        <span class="m-val">${fmtR2(evalRes.r2)}</span>
                     </div>
                     <div class="metric-pill-card">
                         <span class="m-title">RMSE</span>
@@ -2702,8 +2958,8 @@
                         <span class="m-val">${evalRes.mae.toFixed(3)}</span>
                     </div>
                     <div class="metric-pill-card">
-                        <span class="m-title">2×2 Concordance Acc</span>
-                        <span class="m-val" style="color: var(--accent-emerald);">${evalRes.thresholdAccuracy !== undefined ? `${(evalRes.thresholdAccuracy * 100).toFixed(1)}%` : evalRes.mse.toFixed(3)}</span>
+                        <span class="m-title">MSE</span>
+                        <span class="m-val">${evalRes.mse.toFixed(3)}</span>
                     </div>
                     <div class="metric-pill-card" style="cursor: pointer;" onclick="window.copySeedToClipboard(${evalRes.seed})" title="Click to copy reproducibility seed: ${evalRes.seed}">
                         <span class="m-title">Reproducibility Seed</span>
@@ -2711,55 +2967,15 @@
                     </div>
                 `;
 
-                const cm = evalRes.confMatrix;
-                const thresh = evalRes.threshold !== undefined ? evalRes.threshold : 0;
-                const regClasses = [`< ${thresh}`, `≥ ${thresh}`];
-                let regCmHtml = '';
-                if (cm) {
-                    regCmHtml = `
-                        <div style="display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px;">
-                            <div style="display: flex; justify-content: space-between; align-items: baseline; max-width: 500px;">
-                                <h3 style="font-size: 15px; color: var(--text-primary); margin: 0;">2×2 Concordance Confusion Matrix (${cohortDesc})</h3>
-                                <span class="pill pill-target" style="font-size: 11px;">Cutoff: ${thresh}</span>
-                            </div>
-                            <div class="table-container" style="max-width: 500px;">
-                                <table class="cm-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Actual \\ Predicted</th>
-                                            ${regClasses.map(c => `<th>${escapeHtml(c)}</th>`).join('')}
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        ${regClasses.map((actualClass, r) => `
-                                            <tr>
-                                                <th style="text-align: left;">${escapeHtml(actualClass)}</th>
-                                                ${regClasses.map((_, c) => {
-                                                    const val = cm[r][c];
-                                                    const isHit = r === c;
-                                                    return `<td class="${isHit ? 'cm-cell-hit' : 'cm-cell-miss'}">${val}</td>`;
-                                                }).join('')}
-                                            </tr>
-                                        `).join('')}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <div style="max-width: 500px; display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); background: var(--bg-surface-subtle); padding: 8px 12px; border-radius: var(--radius-sm);">
-                                <span>Sensitivity: <strong style="color: var(--text-primary);">${(evalRes.sensitivity * 100).toFixed(1)}%</strong></span>
-                                <span>Specificity: <strong style="color: var(--text-primary);">${(evalRes.specificity * 100).toFixed(1)}%</strong></span>
-                                <span>Concordance Acc: <strong style="color: var(--accent-emerald);">${(evalRes.thresholdAccuracy * 100).toFixed(1)}%</strong></span>
-                            </div>
-                        </div>
-                    `;
-                }
+                const regCmHtml = renderExploratoryCutoffTable(evalRes, false);
 
                 DOM.evaluationDetailContainer.innerHTML = `
                     ${regCmHtml}
                     <p style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
-                        Model validated on ${cohortDesc} with R² = ${evalRes.r2} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
+                        Model validated on ${cohortDesc} with R² = ${fmtR2(evalRes.r2)} and Mean Absolute Error = ${evalRes.mae}. ${isOptionB ? `Fitted strictly on 100% of Training Dataset (i) (${trainCount} patients).` : (evalRes.retrainOn100 ? `Active model was then retrained on 100% of data (${totalCount} patients).` : `Active model maintained strictly on ${trainPct}% training split (${trainCount} patients; 100% retraining declined).`)}
                     </p>
                     <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">
-                        💡 <em>Note: For continuous regression targets, the 2×2 Confusion Matrix is generated by clinical dichotomization at the median threshold (${thresh}). To train as categorical classification, select <strong>Nominal</strong> or <strong>Ordinal</strong> in Step 2.</em>
+                        💡 <em>R², RMSE and MAE are the primary performance measures for a continuous outcome. If the outcome has a prespecified clinical decision threshold, analyse it as a binary outcome (Nominal) instead of relying on the exploratory split above.</em>
                     </div>
                 `;
             }
@@ -2775,29 +2991,29 @@
         const { featureCols, featureMetadata } = AppState.prepMeta;
         let formHtml = '';
 
-        featureCols.forEach(col => {
+        featureCols.forEach((col, colIdx) => {
             const meta = featureMetadata[col];
-            const cfg = AppState.columnConfigs[col];
+            const fieldId = `predict-field-${colIdx}`;
 
             if (meta.type === 'continuous') {
                 const step = (meta.max - meta.min) > 20 ? '1' : '0.01';
                 formHtml += `
                     <div class="form-field">
-                        <label>
+                        <label for="${fieldId}">
                             <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Range: ${meta.min} &ndash; ${meta.max}</span>
                         </label>
-                        <input type="number" step="any" class="control-input single-input-field" data-col="${escapeHtml(col)}" value="${meta.mean.toFixed(2)}">
+                        <input type="number" step="any" id="${fieldId}" class="control-input single-input-field" data-col="${escapeHtml(col)}" value="${meta.mean.toFixed(2)}">
                     </div>
                 `;
             } else if (meta.type === 'ordinal') {
                 formHtml += `
                     <div class="form-field">
-                        <label>
+                        <label for="${fieldId}">
                             <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Ordinal Rank</span>
                         </label>
-                        <select class="control-select single-input-field" data-col="${escapeHtml(col)}">
+                        <select id="${fieldId}" class="control-select single-input-field" data-col="${escapeHtml(col)}">
                             ${meta.ranks.map(rk => `<option value="${escapeHtml(rk)}">${escapeHtml(rk)}</option>`).join('')}
                         </select>
                     </div>
@@ -2806,11 +3022,11 @@
                 // Nominal
                 formHtml += `
                     <div class="form-field">
-                        <label>
+                        <label for="${fieldId}">
                             <span>${escapeHtml(col)}</span>
                             <span class="field-hint">Categorical</span>
                         </label>
-                        <select class="control-select single-input-field" data-col="${escapeHtml(col)}">
+                        <select id="${fieldId}" class="control-select single-input-field" data-col="${escapeHtml(col)}">
                             ${meta.categories.map(cat => `<option value="${escapeHtml(cat)}">${escapeHtml(cat)}</option>`).join('')}
                         </select>
                     </div>
@@ -2887,16 +3103,16 @@
                     <h3>Predicted ${escapeHtml(prep.targetCol)}</h3>
                     <div class="pred-outcome-val">${escapeHtml(predictedLabel)}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Target: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
+                        Active Model: <strong>${escapeHtml(displayModelName(AppState.deployedModelId || AppState.selectedModelId, AppState.trainedModel))}</strong> &bull; Target: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
                     ${inputWarningHtml}
                     <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
-                        Model-estimated class probability (not a calibrated clinical risk). For research and educational use only.
+                        ${probabilityLabel(result.probabilityType).note}: not a calibrated clinical risk or a measure of certainty (check the Brier score in Step 4). For research and educational use only.
                     </div>
                 </div>
                 <div class="banner-confidence">
-                    <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">Model Probability</span>
+                    <span style="font-size: 12px; color: var(--text-muted); text-transform: uppercase;">${probabilityLabel(result.probabilityType).title}</span>
                     <span style="font-size: 26px; font-weight: 800; color: var(--accent-emerald);">${hasConfidence ? `${confidencePercent}%` : 'N/A'}</span>
                     <div class="prob-meter-bar">
                         <div class="prob-meter-fill" style="width: ${hasConfidence ? confidencePercent : 0}%;"></div>
@@ -2912,7 +3128,7 @@
                     <h3>Predicted Continuous ${escapeHtml(prep.targetCol)}</h3>
                     <div class="pred-outcome-val">${result.pred}</div>
                     <div style="font-size: 13px; color: var(--text-secondary); margin-top: 6px;">
-                        Active Model: <strong>${MODEL_INFO[AppState.deployedModelId || AppState.selectedModelId]?.name || (AppState.deployedModelId || AppState.selectedModelId).toUpperCase()}</strong> &bull; Unit/Scale: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
+                        Active Model: <strong>${escapeHtml(displayModelName(AppState.deployedModelId || AppState.selectedModelId, AppState.trainedModel))}</strong> &bull; Unit/Scale: <em>${escapeHtml(prep.targetCol)}</em>${seedSnippet}
                     </div>
                     ${ensembleDetailsHtml}
                     ${inputWarningHtml}
@@ -2971,6 +3187,7 @@
             ? AppState.trainedModel.seed
             : (AppState.evalResults?.seed !== null && AppState.evalResults?.seed !== undefined ? AppState.evalResults.seed : 'Auto');
 
+        const batchModelName = displayModelName(AppState.deployedModelId || AppState.selectedModelId, AppState.trainedModel);
         // Predictor columns the model needs but the batch file lacks entirely
         const absentCols = prep.featureCols.filter(c => !headers.includes(c));
         let rowsWithImputation = 0;
@@ -2996,7 +3213,9 @@
             const rowCopy = { ...r };
             rowCopy[`Predicted_${prep.targetCol}`] = predictedLabel;
             rowCopy[`Prediction_Probability`] = confidence;
+            rowCopy[`Probability_Type`] = prep.isClassification ? probabilityLabel(predRes.probabilityType).title : 'N/A (continuous outcome)';
             rowCopy[`Imputed_Inputs`] = rowIssues.length > 0 ? rowIssues.map(i => `${i.column}:${i.kind}`).join('; ') : '';
+            rowCopy[`Model`] = batchModelName;
             rowCopy[`Model_Seed`] = activeSeed;
             results.push(rowCopy);
         });
@@ -3335,7 +3554,7 @@
             return;
         }
 
-        const corrRes = DataEngine.checkPairwiseCorrelations(AppState.pipeline.trainRows, contCols, 0.8);
+        const corrRes = DataEngine.checkPairwiseCorrelations(AppState.pipeline.trainRows, contCols, 0.8, AppState.pipeline.columnConfigs);
         AppState.pipeline.normalityMap = corrRes.normalityMap;
         AppState.pipeline.corrPairs = corrRes.allPairs;
 
@@ -3867,7 +4086,7 @@
                 chartHtml += `
                     <div class="cutoff-line-notice">
                         <span>✂️</span>
-                        <span><strong>Bottom 30% Cutoff:</strong> Features below this line are removed for k-NN and Gaussian Naive Bayes only in Step 7 (other models use all surviving features). MDI importance is computed on the SMOTENC-balanced training set and can favour features with many distinct values.</span>
+                        <span><strong>Bottom 30% Cutoff:</strong> Features below this line are removed for k-NN and Naive Bayes only in Step 7 (other models use all surviving features). MDI importance is computed on the SMOTENC-balanced training set and can favour features with many distinct values.</span>
                     </div>
                 `;
             }
@@ -3964,6 +4183,11 @@
 
             // Transform unaltered Test set using full training metadata
             const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
+            // Exploratory 2×2 cutoff for continuous outcomes: median of the (real, non-synthetic) training outcomes
+            const pipeEvalOptions = {
+                regressionThreshold: isClassification ? null : trainingMedian(AppState.pipeline.trainRows.map(r => Number(r[targetCol]))),
+                thresholdSource: 'median of the training-split outcomes'
+            };
 
             // 2. Prepare reduced Top 70% dataset (strictly for k-NN & Naive Bayes)
             const top70Configs = {};
@@ -3985,25 +4209,25 @@
             await new Promise(r => setTimeout(r, 60));
             const knn = new KNNModel(isClassification, 5, 'euclidean', 'distance', AppState.pipeline.evalSeed);
             knn.fit(top70Prep.X, top70Prep.y);
-            const knnEval = ModelEngine.evaluate(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
+            const knnEval = ModelEngine.evaluate(knn, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
             knnEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
             knnEval.constraintNote = "Bottom 30% RF-importance features removed to reduce distance noise in high dimensions.";
             benchmarkList.push({ id: 'knn', name: 'k-Nearest Neighbors (k-NN)', model: knn, prep: top70Prep, eval: knnEval });
 
             // B. Gaussian Naive Bayes (Strict constraint: Bottom 30% features dropped)
             if (isClassification) {
-                if (watchdog) watchdog.tick(2, "Training Model 2/5: Gaussian Naive Bayes (Top 70% features only)...");
+                if (watchdog) watchdog.tick(2, "Training Model 2/5: Naive Bayes (Top 70% features only)...");
                 await new Promise(r => setTimeout(r, 60));
                 const nb = new GaussianNaiveBayes(1e-4, 'empirical', AppState.pipeline.evalSeed);
                 nb.fit(top70Prep.X, top70Prep.y);
-                const nbEval = ModelEngine.evaluate(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses);
+                const nbEval = ModelEngine.evaluate(nb, top70TestTrans.X, top70TestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
                 nbEval.featuresUsed = `Top 70% (${top70Cols.length} features)`;
                 nbEval.constraintNote = "Bottom 30% RF-importance features removed (fewer noisy inputs; does not make features conditionally independent).";
-                benchmarkList.push({ id: 'nb', name: 'Gaussian Naive Bayes', model: nb, prep: top70Prep, eval: nbEval });
+                benchmarkList.push({ id: 'nb', name: 'Naive Bayes (Gaussian + Bernoulli)', model: nb, prep: top70Prep, eval: nbEval });
             }
 
             // C. Deep Neural Network (Strict constraint: L2 Weight Decay + Dropout)
-            if (watchdog) watchdog.tick(3, "Training Model 3/5: Deep Neural Network (L2 Regularization + Dropout)...");
+            if (watchdog) watchdog.tick(3, "Training Model 3/5: Neural Network (MLP; L2 + dropout + early stopping)...");
             await new Promise(r => setTimeout(r, 60));
             const dnnParams = {
                 epochs: 25,
@@ -4017,17 +4241,18 @@
                 seed: AppState.pipeline.evalSeed
             };
             const dnn = new DeepNeuralNetwork(isClassification, numClasses, dnnParams);
-            await dnn.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (ep, tot) => {
+            // The test split is never shown to the model: the NN carves its own validation split from the training rows
+            await dnn.fit(fullPrep.X, fullPrep.y, null, null, (ep, tot) => {
                 if (watchdog && (ep % 4 === 0 || ep === tot)) {
-                    watchdog.tick(3, `Training Model 3/5: Deep Neural Network (Epoch ${ep}/${tot})...`);
+                    watchdog.tick(3, `Training Model 3/5: Neural Network (Epoch ${ep}/${tot})...`);
                 }
             });
-            const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
             dnnEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             dnnEval.constraintNote = dnn.usedFallback
                 ? `⚠️ TensorFlow.js failed (${dnn.fallbackReason}); a linear fallback model was trained instead of a neural network.`
-                : "L2 weight decay (0.001) and dropout (0.15) to limit overfitting.";
-            benchmarkList.push({ id: 'nn', name: 'Deep Neural Network (DNN / MLP)', model: dnn, prep: fullPrep, eval: dnnEval });
+                : `L2 weight decay (0.001) and dropout (0.15); ${dnn.trainingInfo ? describeNNTraining(dnn.trainingInfo) : ''}`;
+            benchmarkList.push({ id: 'nn', name: displayModelName('nn', dnn), model: dnn, prep: fullPrep, eval: dnnEval });
 
             // D. Logistic / Ridge Regression (Strict constraint: L2 penalization against collinearity)
             if (watchdog) watchdog.tick(4, "Training Model 4/5: Logistic / Ridge Regression (L2 lambda = 0.02)...");
@@ -4042,13 +4267,13 @@
                 AppState.pipeline.evalSeed
             );
             glm.fit(fullPrep.X, fullPrep.y);
-            const glmEval = ModelEngine.evaluate(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            const glmEval = ModelEngine.evaluate(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
             glmEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             glmEval.constraintNote = "Applied Ridge L2 penalization (λ = 0.02) to stabilize against minor collinearity.";
             benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', model: glm, prep: fullPrep, eval: glmEval });
 
             // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
-            if (watchdog) watchdog.tick(5, "Training Model 5/5: Ensemble Super Learner...");
+            if (watchdog) watchdog.tick(5, "Training Model 5/5: Voting Ensemble...");
             await new Promise(r => setTimeout(r, 60));
             const ensembleConfig = {
                 voting: 'soft',
@@ -4057,15 +4282,16 @@
                 seed: AppState.pipeline.evalSeed
             };
             const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
-            await ensemble.fit(fullPrep.X, fullPrep.y, fullTestTrans.X, fullTestTrans.y, (curr, tot, info) => {
+            await ensemble.fit(fullPrep.X, fullPrep.y, null, null, (curr, tot, info) => {
                 if (watchdog) {
                     watchdog.tick(5, `Training Model 5/5: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`);
                 }
             });
-            const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses);
+            const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
             ensEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
+            if (ensemble.fallbackNote) ensEval.fallbackNote = ensemble.fallbackNote;
             ensEval.constraintNote = `Equal-weight soft vote of ${ensembleConfig.baseModels.map(b => b.toUpperCase()).join(', ')}; scaling fitted on Train only.`;
-            benchmarkList.push({ id: 'ensemble', name: 'Ensemble Super Learner', model: ensemble, prep: fullPrep, eval: ensEval });
+            benchmarkList.push({ id: 'ensemble', name: 'Voting / Weighted Ensemble', model: ensemble, prep: fullPrep, eval: ensEval });
 
             // Store ranked best-first (macro-F1 then AUC for classification; R² for regression),
             // so benchmarkResults[0] is genuinely the top model everywhere it is used
@@ -4097,7 +4323,7 @@
 
         let tableHtml = `
             <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                Ranked by ${isClassification ? 'macro F1 (then ROC-AUC)' : 'R² (then RMSE)'} on the held-out 20% test split.
+                Ranked by <strong>${escapeHtml(rankingMetricLabel(isClassification))}</strong> on the held-out 20% test split (change the ranking metric above).
                 The top model is selected on these same test cases, so its score is optimistically biased; confirm on an independent cohort.
             </p>`;
         tableHtml += `
@@ -4110,6 +4336,8 @@
                         <th>${isClassification ? 'Precision' : 'MAE'}</th>
                         <th>${isClassification ? 'Recall' : 'RMSE'}</th>
                         <th>AUC-ROC</th>
+                        <th>${isClassification ? 'Balanced Acc' : '-'}</th>
+                        <th>${isClassification ? 'Brier ↓' : '-'}</th>
                         <th>${isClassification ? 'Test Accuracy' : 'MSE'}</th>
                         <th>Algorithm Constraint</th>
                         <th style="text-align: right; width: 140px;">Deployment</th>
@@ -4120,11 +4348,13 @@
 
         sorted.forEach(item => {
             const ev = item.eval;
-            const f1 = isClassification ? (ev.macroF1 !== undefined ? (ev.macroF1 * 100).toFixed(1) + '%' : 'N/A') : `${ev.r2}`;
+            const f1 = isClassification ? (ev.macroF1 !== undefined ? (ev.macroF1 * 100).toFixed(1) + '%' : 'N/A') : fmtR2(ev.r2);
             const prec = isClassification ? (ev.macroPrecision !== undefined ? (ev.macroPrecision * 100).toFixed(1) + '%' : 'N/A') : `${ev.mae}`;
             const rec = isClassification ? (ev.macroRecall !== undefined ? (ev.macroRecall * 100).toFixed(1) + '%' : 'N/A') : `${ev.rmse}`;
             const auc = isClassification ? (ev.rocAuc !== null && ev.rocAuc !== undefined ? ev.rocAuc.toFixed(3) : 'N/A') : 'N/A';
             const acc = isClassification ? (ev.accuracy !== undefined ? (ev.accuracy * 100).toFixed(1) + '%' : 'N/A') : `${ev.mse}`;
+            const bal = isClassification && typeof ev.balancedAccuracy === 'number' ? (ev.balancedAccuracy * 100).toFixed(1) + '%' : '-';
+            const brier = isClassification && typeof ev.brierScore === 'number' ? ev.brierScore.toFixed(3) : '-';
 
             const isDeployed = AppState.deployedSource === '7step' && AppState.deployedModelId === item.id;
 
@@ -4136,6 +4366,8 @@
                     <td>${prec}</td>
                     <td>${rec}</td>
                     <td><strong style="color: var(--accent-cyan);">${auc}</strong></td>
+                    <td>${bal}</td>
+                    <td>${brier}</td>
                     <td><strong>${acc}</strong></td>
                     <td style="font-size: 11.5px; color: var(--text-secondary);">${escapeHtml(ev.constraintNote)}</td>
                     <td style="text-align: right;">
@@ -4154,7 +4386,21 @@
         });
 
         tableHtml += `</tbody></table>`;
+        const caveats = new Set();
+        sorted.forEach(item => {
+            summariseHeldOutSet(item.eval).forEach(n => caveats.add(n));
+            if (item.eval.fallbackNote) caveats.add(`⚠️ ${escapeHtml(item.eval.fallbackNote)}`);
+        });
+        if (isClassification && sorted[0] && sorted[0].eval.positiveClass !== null && sorted[0].eval.positiveClass !== undefined) {
+            caveats.add(`Positive (event) class for AUC, Brier, sensitivity and PPV: <strong>${escapeHtml(sorted[0].eval.positiveClass)}</strong> (set in Step 2).`);
+        }
+        if (caveats.size > 0) {
+            tableHtml += `<div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--accent-amber); background: var(--bg-surface-subtle);">
+                ${[...caveats].map(c => `<div>• ${c}</div>`).join('')}
+            </div>`;
+        }
         DOM.pipelineLeaderboardContainer.innerHTML = tableHtml;
+        syncRankingSelectors(isClassification);
     }
 
     function renderPipelineBenchmarkResults(benchmarkList, targetClasses, isClassification) {
@@ -4176,7 +4422,7 @@
                     <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                             <strong style="font-size: 13.5px; color: var(--text-primary);">${escapeHtml(item.name)}</strong>
-                            <span class="pill pill-continuous" style="font-size: 10.5px;">R²: ${ev.r2}</span>
+                            <span class="pill pill-continuous" style="font-size: 10.5px;">R²: ${fmtR2(ev.r2)}</span>
                         </div>
                         <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
                             ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
@@ -4209,7 +4455,7 @@
                             ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
                         </div>
                         <div style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 6px;">
-                            "Positive" = <strong>${escapeHtml(targetClasses[1])}</strong> (second label in sorted order); check this matches your clinical event of interest.
+                            "Positive" = <strong>${escapeHtml(targetClasses[1])}</strong> (the positive/event class chosen in Step 2); check this matches your clinical event of interest.
                         </div>
                         <div class="cm-table-wrapper" style="margin-bottom: 10px;">
                             <table class="cm-table">
@@ -4375,7 +4621,7 @@
                             Active Predictor: ${mInfo.name} &bull; Trained via Pre-existing Standard Workflow
                         </div>
                         <div style="font-size: 11.5px; color: var(--text-secondary); margin-top: 2px;">
-                            Standard Workflow &bull; Imputation & scaling fitted on the full cohort &bull; ${featCount} features
+                            Standard Workflow &bull; ${AppState.evalResults && AppState.evalResults.protocol === 'option-b' ? 'Preprocessing fitted on Dataset (i)' : (AppState.evalResults && AppState.evalResults.retrainOn100 ? 'Final model refitted on the full cohort after split-first evaluation' : 'Preprocessing fitted on the training split only')} &bull; ${featCount} features
                         </div>
                     </div>
                 </div>
@@ -4600,7 +4846,7 @@
                 <tbody>
                     ${row('Top-ranked model', escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()), escapeHtml(pipeBest.name), '')}
                     ${metricRows}
-                    ${row('Imputation / scaling', '<span style="color: var(--text-muted);">Fitted on the full cohort before splitting</span>', 'Fitted on the training split only', '')}
+                    ${row('Imputation / scaling', bEv.protocol === 'option-b' ? 'Fitted on Dataset (i) only' : 'Fitted on the training split only (split first)', 'Fitted on the training split only', '')}
                     ${row('Collinearity handling', '<span style="color: var(--text-muted);">None (all features kept)</span>', `Correlation & VIF review; ${AppState.pipeline.droppedFeatures.size} feature(s) excluded overall`, '')}
                     ${row('Class imbalance', '<span style="color: var(--text-muted);">Original distribution</span>',
                         isClassification ? (sm && sm.applied ? `SMOTENC on training split (+${sm.syntheticCountGenerated} synthetic rows)` : 'SMOTENC not applied (not imbalanced)') : 'Not applicable (regression)', '')}
@@ -4666,24 +4912,34 @@
                     top_70_features: AppState.pipeline.top70Features,
                     bottom_30_features: AppState.pipeline.bottom30Features
                 },
-                step_7_model_selection_note: 'Models are ranked best-first on the held-out test split; the top model is selected on that same split, so its score is optimistically biased.',
+                step_7_ranking_metric: rankingMetricLabel(AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous'),
+                step_7_model_selection_note: 'Models are ranked best-first on the held-out test split; the top model is selected on that same split, so its score is optimistically biased. A single split does not establish general superiority.',
                 step_7_constrained_model_benchmark: AppState.pipeline.benchmarkResults.map(b => ({
                     model_id: b.id,
                     model_name: b.name,
                     features_used: b.eval.featuresUsed,
                     constraint_note: b.eval.constraintNote,
+                    neural_network_fell_back_to_linear_model: Boolean(b.model && b.model.usedFallback),
+                    nn_training: b.model && b.model.trainingInfo ? b.model.trainingInfo : undefined,
                     metrics: b.eval.isClassification ? {
                         f1_score_macro: b.eval.macroF1,
                         precision_macro: b.eval.macroPrecision,
                         recall_macro: b.eval.macroRecall,
+                        balanced_accuracy: b.eval.balancedAccuracy,
                         auc_roc: b.eval.rocAuc,
+                        brier_score: b.eval.brierScore,
                         accuracy: b.eval.accuracy,
-                        positive_class: b.eval.positiveClass
+                        accuracy_95ci_wilson: b.eval.accuracyCI,
+                        probability_type: b.eval.probabilityType,
+                        positive_class: b.eval.positiveClass,
+                        classes_missing_from_test: b.eval.classesMissingFromTest
                     } : {
                         r2: b.eval.r2,
                         rmse: b.eval.rmse,
                         mae: b.eval.mae,
-                        mse: b.eval.mse
+                        mse: b.eval.mse,
+                        exploratory_cutoff: b.eval.threshold,
+                        exploratory_cutoff_source: b.eval.thresholdSource
                     },
                     confusion_matrix: b.eval.confMatrix
                 }))

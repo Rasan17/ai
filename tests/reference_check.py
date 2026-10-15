@@ -1,0 +1,64 @@
+import json, numpy as np, warnings
+from scipy import stats
+from sklearn import metrics
+from sklearn.linear_model import Ridge, LogisticRegression
+from sklearn.naive_bayes import GaussianNB, BernoulliNB
+from statsmodels.stats.proportion import proportion_confint
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import statsmodels.api as sm
+warnings.filterwarnings('ignore')
+# Compares the app's statistics with SciPy / scikit-learn / statsmodels (requires those packages).
+import os
+o=json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)),'reference_values.json'))); R=o['rows']
+res=[]
+def chk(name, app, ref, tol):
+    app=np.atleast_1d(np.array(app,dtype=float)); ref=np.atleast_1d(np.array(ref,dtype=float))
+    d=float(np.max(np.abs(app-ref)))
+    res.append((('PASS' if d<=tol else 'FAIL'), name, d, tol))
+col=lambda k:np.array([r[k] for r in R])
+# Univariate: regression target
+u={r['feature']:r for r in o['univ_reg']}
+r_,p_=stats.pearsonr(col('x1'),col('y')); chk('Pearson r (x1 vs y)',u['x1']['statisticValue'],r_,6e-4); chk('Pearson t-test p',u['x1']['pValue'],p_,max(1e-6,abs(p_)*1e-3))
+F,p=stats.f_oneway(*[col('y')[col('g')==k] for k in 'ABC']); chk('ANOVA F (nominal vs continuous target)',u['g']['statisticValue'],F,6e-4); chk('ANOVA p',u['g']['pValue'],p,max(1e-6,p*1e-3))
+u={r['feature']:r for r in o['univ_cls']}
+F,p=stats.f_oneway(*[col('x3')[col('cls')==k] for k in ['No','Yes']]); chk('t-test/ANOVA F (continuous vs binary)',u['x3']['statisticValue'],F,6e-4); chk('  p',u['x3']['pValue'],p,max(1e-6,p*1e-3))
+for f in ['grp','g']:
+    tab=np.array([[np.sum((col(f)==a)&(col('cls')==b)) for b in ['No','Yes']] for a in sorted(set(col(f)))])
+    c2,p,dof,_=stats.chi2_contingency(tab,correction=False); chk(f'Chi-square stat ({f})',u[f]['statisticValue'],c2,6e-4); chk(f'Chi-square p ({f})',u[f]['pValue'],p,max(1e-6,p*1e-3))
+chk('Pearson r (x1,x2)',o['pearson'],stats.pearsonr(col('x1'),col('x2'))[0],6e-5)
+chk('Spearman rho (x1,x3)',o['spearman'],stats.spearmanr(col('x1'),col('x3'))[0],6e-5)
+chk('Skewness g1 (bias-corrected)',o['skew'],stats.skew(col('x3'),bias=False),6e-4)
+Xv=sm.add_constant(np.column_stack([col('x1'),col('x2'),col('x3')]))
+vif={v['feature']:v['vif'] for v in o['vif']}
+for i,f in enumerate(['x1','x2','x3']): chk(f'VIF {f}',vif[f],variance_inflation_factor(Xv,i+1),6e-3)
+# classification metrics
+y=np.array(o['auc_y']); s=np.array(o['auc_s'])
+chk('ROC-AUC with ties',o['auc'],metrics.roc_auc_score(y,s),6e-5)
+e=o['cls_eval']; pred=(s>=0.5).astype(int)
+chk('Brier score (binary)',e['brierScore'],metrics.brier_score_loss(y,s),6e-5)
+chk('Accuracy',e['accuracy'],metrics.accuracy_score(y,pred),6e-5)
+chk('Balanced accuracy',e['balancedAccuracy'],metrics.balanced_accuracy_score(y,pred),6e-5)
+chk('Macro F1',e['macroF1'],metrics.f1_score(y,pred,average='macro',zero_division=0),2e-4)
+lo,hi=proportion_confint((pred==y).sum(),len(y),method='wilson'); chk('Wilson 95% CI',e['accuracyCI'],[lo,hi],6e-5)
+yt3=np.array(o['yt3']); yp3=np.array(o['yp3']); m=o['mc_eval']
+chk('Multiclass macro precision',m['macroPrecision'],metrics.precision_score(yt3,yp3,average='macro',zero_division=0),2e-4)
+chk('Multiclass macro recall',m['macroRecall'],metrics.recall_score(yt3,yp3,average='macro',zero_division=0),2e-4)
+chk('Multiclass macro F1',m['macroF1'],metrics.f1_score(yt3,yp3,average='macro',zero_division=0),2e-4)
+P=np.array([[0.7 if c==p else 0.15 for c in range(3)] for p in yp3]); Y=np.eye(3)[yt3]
+chk('Multiclass Brier',m['brierScore'],np.mean(np.sum((P-Y)**2,axis=1)),6e-5)
+yR=np.array(o['regY']); pR=np.array(o['regP']); r=o['reg_eval']
+chk('R²',r['r2'],metrics.r2_score(yR,pR),6e-5); chk('RMSE',r['rmse'],np.sqrt(metrics.mean_squared_error(yR,pR)),6e-5); chk('MAE',r['mae'],metrics.mean_absolute_error(yR,pR),6e-5)
+X=np.column_stack([col('x1'),col('x2'),col('x3')]); n=len(X)
+rd=Ridge(alpha=n*o['ridge']['lambda']).fit(X,yR)
+chk('Ridge coefficients (GD vs closed form)',o['ridge']['w'],rd.coef_,1e-3); chk('Ridge intercept',o['ridge']['b'],rd.intercept_,1e-3)
+yc=np.array(o['logit']['yc'])
+# 2-class softmax with L2 on BOTH class vectors (lambda/2 each) is equivalent to binary logistic
+# regression with penalty (lambda/4)||w||^2, i.e. scikit-learn C = 2/(n*lambda)
+lr=LogisticRegression(C=2/(n*o['logit']['lambda']),tol=1e-12,max_iter=20000).fit(X,yc)
+chk('Logistic probabilities (GD vs L-BFGS)',o['logit']['probs'],lr.predict_proba(X)[:,1],2e-3)
+g=GaussianNB(var_smoothing=1e-12).fit(X,yc); chk('Gaussian NB probabilities',o['nbG'],g.predict_proba(X)[:,1],2e-4)
+XB=np.array(o['XB']); b=BernoulliNB(alpha=1.0,binarize=None).fit(XB,yc); chk('Bernoulli NB probabilities',o['nbB'],b.predict_proba(XB)[:,1],2e-4)
+w=max(len(x[1]) for x in res)
+for st,nm,d,t in res: print(f'{st}  {nm:<{w}}  max|diff|={d:.2e}  (tol {t:.0e})')
+print(f"\n{sum(1 for x in res if x[0]=='PASS')}/{len(res)} checks passed")
+import sys; sys.exit(0 if all(x[0]=='PASS' for x in res) else 1)

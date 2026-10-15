@@ -293,10 +293,10 @@
                 });
                 const probs = {};
                 Object.keys(counts).forEach(k => probs[k] = counts[k] / votes.length);
-                return { pred: majority, probabilities: probs, confidence: maxCount / votes.length };
+                return { pred: majority, probabilities: probs, confidence: maxCount / votes.length, probabilityType: 'vote' };
             } else {
                 const mean = votes.reduce((a, b) => a + b, 0) / votes.length;
-                return { pred: Number(mean.toFixed(4)), confidence: 1 };
+                return { pred: Number(mean.toFixed(4)), confidence: null };
             }
         }
     }
@@ -447,13 +447,13 @@
                     }
                 });
 
-                return { pred: bestClass, probabilities: probMap, confidence: Number(maxP.toFixed(4)) };
+                return { pred: bestClass, probabilities: probMap, confidence: Number(maxP.toFixed(4)), probabilityType: 'model' };
             } else {
                 let pred = this.bias;
                 for (let j = 0; j < p; j++) {
                     pred += this.weights[j] * x[j];
                 }
-                return { pred: Number(pred.toFixed(4)), confidence: 1 };
+                return { pred: Number(pred.toFixed(4)), confidence: null };
             }
         }
 
@@ -532,7 +532,8 @@
                 return {
                     pred: majority,
                     probabilities: probs,
-                    confidence: Number((maxW / (totalWeight || 1)).toFixed(4))
+                    confidence: Number((maxW / (totalWeight || 1)).toFixed(4)),
+                    probabilityType: 'neighbours'
                 };
             } else {
                 let weightedSum = 0;
@@ -543,7 +544,7 @@
                     totalWeight += w;
                 });
                 const mean = weightedSum / (totalWeight || 1);
-                return { pred: Number(mean.toFixed(4)), confidence: 1 };
+                return { pred: Number(mean.toFixed(4)), confidence: null };
             }
         }
 
@@ -553,7 +554,10 @@
     }
 
     // ==========================================
-    // 4. GAUSSIAN NAIVE BAYES
+    // 4. NAIVE BAYES (mixed likelihoods)
+    // Features that take only the values 0/1 in the training data (one-hot category indicators,
+    // binary flags) use a Bernoulli likelihood with Laplace smoothing; all other features use a
+    // Gaussian likelihood. (Class name kept for backwards compatibility.)
     // ==========================================
     class GaussianNaiveBayes {
         constructor(varSmoothing = 1e-4, priorMode = 'empirical', seed = null) {
@@ -564,6 +568,8 @@
             this.priors = {};
             this.means = {};
             this.variances = {};
+            this.bernoulliP = {};
+            this.isBinaryFeature = [];
         }
 
         fit(X, y) {
@@ -571,6 +577,11 @@
             const n = X.length;
             const p = X[0].length;
             const numK = this.classes.length;
+            this.priors = {};
+            this.means = {};
+            this.variances = {};
+            this.bernoulliP = {};
+            this.isBinaryFeature = Array.from({ length: p }, (_, j) => X.every(r => r[j] === 0 || r[j] === 1));
 
             this.classes.forEach(c => {
                 const classX = X.filter((_, idx) => y[idx] === c);
@@ -587,9 +598,16 @@
 
                 this.means[c] = new Array(p).fill(0);
                 this.variances[c] = new Array(p).fill(this.varSmoothing);
+                this.bernoulliP[c] = new Array(p).fill(0.5);
 
                 for (let j = 0; j < p; j++) {
                     const vals = classX.map(r => r[j]);
+                    if (this.isBinaryFeature[j]) {
+                        // Laplace-smoothed P(feature = 1 | class)
+                        const ones = vals.reduce((a, b) => a + b, 0);
+                        this.bernoulliP[c][j] = (ones + 1) / (vals.length + 2);
+                        continue;
+                    }
                     const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
                     this.means[c][j] = mean;
                     const variance = vals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (vals.length || 1);
@@ -605,6 +623,11 @@
             this.classes.forEach(c => {
                 let logP = Math.log(this.priors[c] || 1e-6);
                 for (let j = 0; j < p; j++) {
+                    if (this.isBinaryFeature[j]) {
+                        const pj = this.bernoulliP[c][j];
+                        logP += x[j] >= 0.5 ? Math.log(pj) : Math.log(1 - pj);
+                        continue;
+                    }
                     const mean = this.means[c][j];
                     const v = this.variances[c][j];
                     const diff = x[j] - mean;
@@ -634,7 +657,7 @@
                 }
             });
 
-            return { pred: bestClass, probabilities: probMap, confidence: Number(maxProb.toFixed(4)) };
+            return { pred: bestClass, probabilities: probMap, confidence: Number(maxProb.toFixed(4)), probabilityType: 'model' };
         }
 
         predict(X) {
@@ -662,15 +685,76 @@
             this.tfModel = null;
             this.fallbackGLM = null;
             this.history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
+            // Internal validation split (carved from the TRAINING data) used for early stopping
+            this.earlyStopping = config.earlyStopping !== false;
+            this.validationFraction = config.validationFraction !== undefined ? config.validationFraction : 0.15;
+            this.patience = config.patience || Math.max(5, Math.round(this.epochs * 0.2));
+            this.trainingInfo = null;
         }
 
-        async fit(trainX, trainY, testX = null, testY = null, onEpochCallback = null) {
+        /**
+         * Splits training data into fit / validation parts (stratified by class for classification),
+         * using the model's seeded RNG. Returns null when there are too few cases to hold any out.
+         */
+        _carveValidationSplit(X, Y) {
+            const n = X.length;
+            if (!this.earlyStopping || this.validationFraction <= 0 || n < 20) return null;
+            const idx = Array.from({ length: n }, (_, i) => i);
+            for (let i = n - 1; i > 0; i--) {
+                const j = Math.floor(this.rng() * (i + 1));
+                [idx[i], idx[j]] = [idx[j], idx[i]];
+            }
+            const fitIdx = [];
+            const valIdx = [];
+            if (this.isClassification) {
+                const byClass = {};
+                idx.forEach(i => { (byClass[Y[i]] = byClass[Y[i]] || []).push(i); });
+                Object.values(byClass).forEach(list => {
+                    // Keep at least 2 cases of every class for fitting
+                    const nVal = list.length >= 4 ? Math.max(1, Math.round(list.length * this.validationFraction)) : 0;
+                    valIdx.push(...list.slice(0, nVal));
+                    fitIdx.push(...list.slice(nVal));
+                });
+            } else {
+                const nVal = Math.max(1, Math.round(n * this.validationFraction));
+                valIdx.push(...idx.slice(0, nVal));
+                fitIdx.push(...idx.slice(nVal));
+            }
+            if (valIdx.length < 3) return null;
+            return {
+                fitX: fitIdx.map(i => X[i]), fitY: fitIdx.map(i => Y[i]),
+                valX: valIdx.map(i => X[i]), valY: valIdx.map(i => Y[i])
+            };
+        }
+
+        /**
+         * validX / validY: optional explicit validation data. It must come from the training data,
+         * NEVER the test set. When omitted, an internal stratified validation split is carved from
+         * trainX (see validationFraction) and used for early stopping with best-weight restoration.
+         */
+        async fit(trainX, trainY, validX = null, validY = null, onEpochCallback = null) {
             const hasTF = typeof window.tf !== 'undefined' && window.tf !== null;
             const inputDim = trainX[0].length;
             this.usedFallback = false;
             this.fallbackReason = null;
+            this.trainingInfo = null;
             // Fresh seeded RNG per fit so refits with the same seed reproduce the same shuffles
             this.rng = createPRNG(this.seed);
+
+            const allTrainX = trainX;
+            const allTrainY = trainY;
+            if (!(validX && validY && validX.length > 0)) {
+                const carved = this._carveValidationSplit(trainX, trainY);
+                if (carved) {
+                    trainX = carved.fitX;
+                    trainY = carved.fitY;
+                    validX = carved.valX;
+                    validY = carved.valY;
+                } else {
+                    validX = null;
+                    validY = null;
+                }
+            }
 
             if (hasTF) {
                 // Dispose existing model instance if retraining to prevent GPU memory leak
@@ -682,6 +766,11 @@
                 let model = null;
                 let valXTensor = null;
                 let valYTensor = null;
+                let bestWeights = null;
+                const disposeBest = () => {
+                    if (bestWeights) bestWeights.forEach(w => { try { w.dispose(); } catch (e) {} });
+                    bestWeights = null;
+                };
 
                 try {
                     const tf = window.tf;
@@ -760,20 +849,25 @@
                         metrics: this.isClassification ? ['accuracy'] : ['mse']
                     });
 
-                    // Validation data is used for loss monitoring only (no early stopping / model selection)
+                    // Validation data (from the training data only) drives early stopping
                     let validationData = undefined;
-                    if (testX && testY && testX.length > 0) {
-                        valXTensor = tf.tensor2d(testX, [testX.length, inputDim]);
+                    if (validX && validY && validX.length > 0) {
+                        valXTensor = tf.tensor2d(validX, [validX.length, inputDim]);
                         // Class indices as float32: TF.js 4.x's accuracy metric fails on int32 labels
                         valYTensor = this.isClassification ?
-                            tf.tensor1d(testY, 'float32') :
-                            tf.tensor2d(testY.map(v => [v]), [testY.length, 1]);
+                            tf.tensor1d(validY, 'float32') :
+                            tf.tensor2d(validY.map(v => [v]), [validY.length, 1]);
                         validationData = [valXTensor, valYTensor];
                     }
 
                     const history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
                     const n = trainX.length;
                     const batchSize = Math.min(this.batchSize, n);
+                    let bestValLoss = Infinity;
+                    let bestEpoch = 0;
+                    let epochsWithoutImprovement = 0;
+                    let stoppedEpoch = this.epochs;
+                    let earlyStopped = false;
 
                     // Epoch loop with our own seeded shuffle (TF.js's built-in shuffle uses an unseeded RNG)
                     for (let epoch = 0; epoch < this.epochs; epoch++) {
@@ -826,8 +920,37 @@
                                 throw cbErr;
                             }
                         }
+                        // Early stopping on internal validation loss, keeping the best weights
+                        if (validationData && this.earlyStopping && Number.isFinite(logs.val_loss)) {
+                            if (logs.val_loss < bestValLoss - 1e-6) {
+                                bestValLoss = logs.val_loss;
+                                bestEpoch = epoch + 1;
+                                epochsWithoutImprovement = 0;
+                                disposeBest();
+                                bestWeights = model.getWeights().map(w => w.clone());
+                            } else if (++epochsWithoutImprovement >= this.patience) {
+                                stoppedEpoch = epoch + 1;
+                                earlyStopped = true;
+                                await yieldToBrowser();
+                                break;
+                            }
+                        }
                         await yieldToBrowser();
                     }
+
+                    if (bestWeights) {
+                        model.setWeights(bestWeights);
+                        disposeBest();
+                    }
+                    this.trainingInfo = {
+                        fitCases: trainX.length,
+                        validationCases: validationData ? validX.length : 0,
+                        earlyStopping: Boolean(validationData && this.earlyStopping),
+                        earlyStopped,
+                        bestEpoch: bestEpoch || null,
+                        stoppedEpoch,
+                        maxEpochs: this.epochs
+                    };
 
                     this.tfModel = model;
                     model = null; // ownership transferred
@@ -839,6 +962,7 @@
                     this.fallbackReason = e && e.message ? e.message : String(e);
                 } finally {
                     // Guaranteed cleanup of intermediate tensors and of a partially-built model
+                    disposeBest();
                     if (model) { try { model.dispose(); } catch (e) {} }
                     if (valXTensor) { try { valXTensor.dispose(); } catch (e) {} }
                     if (valYTensor) { try { valYTensor.dispose(); } catch (e) {} }
@@ -860,7 +984,8 @@
                 'momentum',
                 this.seed
             );
-            this.fallbackGLM.fit(trainX, trainY);
+            // The fallback has no early stopping, so it uses all of the training data
+            this.fallbackGLM.fit(allTrainX, allTrainY);
             // No epoch-level training history exists for the fallback model
             this.history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
         }
@@ -886,9 +1011,9 @@
                             bestClass = c;
                         }
                     }
-                    return { pred: bestClass, probabilities: probMap, confidence: Number(maxP.toFixed(4)) };
+                    return { pred: bestClass, probabilities: probMap, confidence: Number(maxP.toFixed(4)), probabilityType: 'model' };
                 } else {
-                    return { pred: Number(data[0].toFixed(4)), confidence: 1 };
+                    return { pred: Number(data[0].toFixed(4)), confidence: null };
                 }
             } else if (this.fallbackGLM) {
                 return this.fallbackGLM.predictSingle(x);
@@ -980,6 +1105,9 @@
                 }
 
                 if (subModel) {
+                    if (subModel.usedFallback) {
+                        this.fallbackNote = `Ensemble base neural network fell back to a linear model (${subModel.fallbackReason}).`;
+                    }
                     models.push({ id: mId, model: subModel });
                 }
                 // Yield to the browser between base models so the UI (and Force Stop) stays responsive
@@ -998,6 +1126,7 @@
             this.weights = [];
             this.baseMetrics = [];
             this.weightingNote = null;
+            this.fallbackNote = null;
             this.rng = createPRNG(this.seed);
 
             const power = this.userHyperparams.power || 2;
@@ -1037,12 +1166,20 @@
                     weightingModels.forEach(item => {
                         const preds = item.model.predict(ivX);
                         if (this.isClassification) {
-                            let correct = 0;
-                            for (let i = 0; i < ivY.length; i++) if (preds[i] === ivY[i]) correct++;
-                            const acc = correct / ivY.length;
-                            const w = Math.pow(Math.max(0.05, acc), power);
+                            // Balanced accuracy (mean per-class recall) so a model that ignores a
+                            // clinically important minority class is not rewarded
+                            const perClass = {};
+                            for (let i = 0; i < ivY.length; i++) {
+                                const c = ivY[i];
+                                if (!perClass[c]) perClass[c] = { n: 0, hit: 0 };
+                                perClass[c].n++;
+                                if (preds[i] === c) perClass[c].hit++;
+                            }
+                            const recalls = Object.values(perClass).map(o => o.hit / o.n);
+                            const balAcc = recalls.reduce((a, b) => a + b, 0) / (recalls.length || 1);
+                            const w = Math.pow(Math.max(0.05, balAcc), power);
                             rawWeights.push(w);
-                            this.baseMetrics.push({ id: item.id, accuracy: acc, weight: w });
+                            this.baseMetrics.push({ id: item.id, balancedAccuracy: balAcc, weight: w });
                         } else {
                             let sumSq = 0;
                             for (let i = 0; i < ivY.length; i++) sumSq += Math.pow(ivY[i] - preds[i], 2);
@@ -1112,6 +1249,7 @@
                         pred: bestClass,
                         probabilities: probMap,
                         confidence: Number((maxVotes / totalVotes).toFixed(4)),
+                        probabilityType: 'vote',
                         ensembleDetails: this.baseMetrics
                     };
                 } else {
@@ -1149,6 +1287,7 @@
                         pred: bestClass,
                         probabilities: probMap,
                         confidence: Number(maxP.toFixed(4)),
+                        probabilityType: 'blend',
                         ensembleDetails: this.baseMetrics
                     };
                 }
@@ -1165,7 +1304,7 @@
 
                 return {
                     pred: Number(weightedSum.toFixed(4)),
-                    confidence: 1.0,
+                    confidence: null,
                     subPredictions,
                     ensembleDetails: this.baseMetrics
                 };
@@ -1182,12 +1321,12 @@
     // ==========================================
     const ModelEngine = {
         SUPPORTED_MODELS: [
-            { id: 'ensemble', name: 'Ensemble Meta-Learner (Voting & Blending)', type: 'both', desc: 'Clinical ensemble combining Deep Neural Networks, Random Forests, Logistic Regression, and k-NN with soft probability blending.' },
-            { id: 'nn', name: 'Deep Neural Network (MLP / TF.js)', type: 'both', desc: 'Multi-layer perceptron with backpropagation, dense hidden layers, dropout & Adam optimizer.' },
-            { id: 'rf', name: 'Random Forest (Ensemble Trees)', type: 'both', desc: 'Ensemble of bootstrap-sampled decision trees with random feature subsets and impurity-based feature importance ranking.' },
+            { id: 'ensemble', name: 'Voting / Performance-Weighted Ensemble', type: 'both', desc: 'Combines the selected base models (neural network, random forest, logistic/ridge, k-NN, naive Bayes) by soft probability averaging, hard majority voting, or weights learned on an internal validation split of the training data. Not a cross-validated stacked Super Learner.' },
+            { id: 'nn', name: 'Neural Network (Multilayer Perceptron, TF.js)', type: 'both', desc: 'Multilayer perceptron with dense hidden layers, dropout, L2 weight decay and early stopping on an internal validation split. Falls back to a linear model (and says so) if TensorFlow.js fails.' },
+            { id: 'rf', name: 'Random Forest (Ensemble Trees)', type: 'both', desc: 'Bootstrap-sampled decision trees with random feature subsets. Splits use Gini impurity (classification) or variance reduction (regression) over an approximate grid of about 10 candidate thresholds per feature. Feature importance is impurity-based (MDI): useful for ranking, not evidence of causal or clinical effect.' },
             { id: 'glm', name: 'Logistic / Ridge Regression', type: 'both', desc: 'L2-regularized linear (ridge) or logistic/softmax model fitted by gradient descent on standardised features.' },
-            { id: 'knn', name: 'k-Nearest Neighbors (k-NN)', type: 'both', desc: 'Non-parametric distance-based instance retrieval model for local pattern recognition.' },
-            { id: 'nb', name: 'Gaussian Naive Bayes', type: 'classification', desc: 'Probabilistic baseline utilizing Gaussian likelihood distribution per feature.' }
+            { id: 'knn', name: 'k-Nearest Neighbors (k-NN)', type: 'both', desc: 'Non-parametric distance-based model; "probabilities" are (weighted) neighbour vote shares.' },
+            { id: 'nb', name: 'Naive Bayes (Gaussian + Bernoulli)', type: 'classification', desc: 'Naive Bayes with Gaussian likelihoods for continuous features and Laplace-smoothed Bernoulli likelihoods for 0/1 indicator features (one-hot categories, binary flags).' }
         ],
 
         /**
@@ -1241,19 +1380,23 @@
         },
 
         /**
-         * Evaluate model performance on test set
+         * Evaluate model performance on a held-out set.
+         * options.regressionThreshold: cutoff for the exploratory 2×2 table of a continuous outcome.
+         *   It should come from the TRAINING data (or be a prespecified clinical cutoff); if omitted,
+         *   no 2×2 table is produced.
+         * options.thresholdSource: free-text description of where that cutoff came from.
          */
-        evaluate(model, testX, testY, isClassification, targetClasses = []) {
+        evaluate(model, testX, testY, isClassification, targetClasses = [], options = {}) {
             if (!testX || testX.length === 0) {
                 return null;
             }
 
-            const preds = model.predict(testX);
-
             if (isClassification) {
                 const numClasses = targetClasses.length || [...new Set(testY)].length;
-                let correct = 0;
                 const total = testX.length;
+                const outputs = testX.map(x => model.predictSingle(x));
+                const preds = outputs.map(o => o.pred);
+                let correct = 0;
 
                 // Confusion Matrix [actual][pred]
                 const confMatrix = Array.from({ length: numClasses }, () => new Array(numClasses).fill(0));
@@ -1267,10 +1410,19 @@
                     }
                 }
 
-                const accuracy = Number((correct / total).toFixed(4));
+                const accuracyRaw = correct / total;
+                const accuracy = Number(accuracyRaw.toFixed(4));
+
+                // Wilson score 95% confidence interval for accuracy
+                const z = 1.959964;
+                const denom = 1 + (z * z) / total;
+                const centre = (accuracyRaw + (z * z) / (2 * total)) / denom;
+                const half = (z * Math.sqrt((accuracyRaw * (1 - accuracyRaw)) / total + (z * z) / (4 * total * total))) / denom;
+                const accuracyCI = [Number(Math.max(0, centre - half).toFixed(4)), Number(Math.min(1, centre + half).toFixed(4))];
 
                 // Per-class metrics
-                const classMetrics = targetClasses.map((clsName, cIdx) => {
+                const classList = targetClasses.length ? targetClasses : Array.from({ length: numClasses }, (_, i) => String(i));
+                const classMetrics = classList.map((clsName, cIdx) => {
                     let tp = confMatrix[cIdx][cIdx];
                     let fp = 0;
                     let fn = 0;
@@ -1297,34 +1449,63 @@
                     };
                 });
 
-                // Macro-averaged metrics
+                // Macro-averaged metrics (all classes, as in scikit-learn's default)
                 const macroPrecision = Number((classMetrics.reduce((a, b) => a + b.precision, 0) / numClasses).toFixed(4));
                 const macroRecall = Number((classMetrics.reduce((a, b) => a + b.recall, 0) / numClasses).toFixed(4));
                 const macroF1 = Number((classMetrics.reduce((a, b) => a + b.f1, 0) / numClasses).toFixed(4));
+                // Balanced accuracy: mean recall over classes present in the test set
+                const present = classMetrics.filter(c => c.support > 0);
+                const balancedAccuracy = present.length ? Number((present.reduce((a, b) => a + b.recall, 0) / present.length).toFixed(4)) : null;
+                const classesMissingFromTest = classMetrics.filter(c => c.support === 0).map(c => c.className);
+
+                // Class-probability vectors (vote shares for RF / hard voting; neighbour weights for k-NN)
+                const probVectors = outputs.map(o => {
+                    const v = new Array(numClasses).fill(0);
+                    if (o.probabilities) {
+                        for (let c = 0; c < numClasses; c++) {
+                            const p = Number(o.probabilities[c]);
+                            v[c] = isNaN(p) ? 0 : p;
+                        }
+                    } else if (o.pred >= 0 && o.pred < numClasses) {
+                        v[o.pred] = 1;
+                    }
+                    return v;
+                });
+
+                // Brier score (lower is better): binary = mean (p_positive − y)²; multiclass = mean Σ_c (p_c − y_c)²
+                let brierScore = null;
+                if (numClasses === 2) {
+                    brierScore = probVectors.reduce((acc, v, i) => acc + Math.pow(v[1] - (testY[i] === 1 ? 1 : 0), 2), 0) / total;
+                } else if (numClasses > 2) {
+                    brierScore = probVectors.reduce((acc, v, i) => acc + v.reduce((s2, p, c) => s2 + Math.pow(p - (testY[i] === c ? 1 : 0), 2), 0), 0) / total;
+                }
+                if (brierScore !== null) brierScore = Number(brierScore.toFixed(4));
 
                 // ROC-AUC for binary classification
                 let rocAuc = null;
                 if (numClasses === 2) {
                     try {
-                        const probs = testX.map(x => {
-                            const res = model.predictSingle(x);
-                            const p = res.probabilities && res.probabilities[1] !== undefined ? Number(res.probabilities[1]) : (res.pred === 1 ? 1 : 0);
-                            return isNaN(p) ? 0 : p;
-                        });
-                        rocAuc = this._calculateBinaryAUC(testY, probs);
+                        rocAuc = this._calculateBinaryAUC(testY, probVectors.map(v => v[1]));
                     } catch (e) {
                         rocAuc = null;
                     }
                 }
 
+                const probabilityType = outputs.length ? (outputs[0].probabilityType || 'model') : 'model';
+
                 return {
                     isClassification: true,
                     totalSamples: total,
                     accuracy,
+                    accuracyCI,
+                    balancedAccuracy,
                     macroPrecision,
                     macroRecall,
                     macroF1,
                     rocAuc,
+                    brierScore,
+                    probabilityType,
+                    classesMissingFromTest,
                     // For binary outcomes, class index 1 is the "positive" class for AUC / sensitivity / TP
                     positiveClass: numClasses === 2 && targetClasses.length === 2 ? targetClasses[1] : null,
                     confMatrix,
@@ -1335,6 +1516,7 @@
                 };
             } else {
                 // Regression Metrics: R2, MSE, RMSE, MAE
+                const preds = model.predict(testX);
                 const total = testX.length;
                 let sumSqErr = 0;
                 let sumAbsErr = 0;
@@ -1351,39 +1533,12 @@
                 }
 
                 const mse = Number((sumSqErr / total).toFixed(4));
-                const rmse = Number((Math.sqrt(mse)).toFixed(4));
+                const rmse = Number((Math.sqrt(sumSqErr / total)).toFixed(4));
                 const mae = Number((sumAbsErr / total).toFixed(4));
-                const r2 = totalSq > 0 ? Number((1 - (sumSqErr / totalSq)).toFixed(4)) : 0;
+                // R² is undefined when the test outcomes have no variance
+                const r2 = totalSq > 0 ? Number((1 - (sumSqErr / totalSq)).toFixed(4)) : null;
 
-                // 2x2 Clinical Dichotomization / Concordance Confusion Matrix for Continuous Target
-                const sortedActuals = [...testY].sort((a, b) => a - b);
-                const medianThreshold = sortedActuals.length % 2 === 0
-                    ? Number(((sortedActuals[sortedActuals.length / 2 - 1] + sortedActuals[sortedActuals.length / 2]) / 2).toFixed(2))
-                    : Number(sortedActuals[Math.floor(sortedActuals.length / 2)].toFixed(2));
-                const threshold = medianThreshold;
-
-                // 2x2 table: Row 0 = Actual < Thresh, Row 1 = Actual >= Thresh
-                // Col 0 = Pred < Thresh, Col 1 = Pred >= Thresh
-                const confMatrix2x2 = [
-                    [0, 0],
-                    [0, 0]
-                ];
-                let hits = 0;
-                for (let i = 0; i < total; i++) {
-                    const actBin = testY[i] >= threshold ? 1 : 0;
-                    const predBin = preds[i] >= threshold ? 1 : 0;
-                    confMatrix2x2[actBin][predBin]++;
-                    if (actBin === predBin) hits++;
-                }
-                const thresholdAccuracy = Number((hits / total).toFixed(4));
-                const tp = confMatrix2x2[1][1];
-                const fn = confMatrix2x2[1][0];
-                const fp = confMatrix2x2[0][1];
-                const tn = confMatrix2x2[0][0];
-                const sensitivity = (tp + fn) > 0 ? Number((tp / (tp + fn)).toFixed(4)) : 0;
-                const specificity = (tn + fp) > 0 ? Number((tn / (tn + fp)).toFixed(4)) : 0;
-
-                return {
+                const result = {
                     isClassification: false,
                     totalSamples: total,
                     r2,
@@ -1392,13 +1547,34 @@
                     mae,
                     actuals: testY,
                     predictions: preds,
-                    confMatrix: confMatrix2x2,
-                    threshold: threshold,
-                    thresholdAccuracy: thresholdAccuracy,
-                    sensitivity: sensitivity,
-                    specificity: specificity,
                     seed: model.seed !== undefined ? model.seed : null
                 };
+
+                // Exploratory 2×2 dichotomisation at a cutoff fixed BEFORE looking at the test outcomes
+                const threshold = options.regressionThreshold;
+                if (typeof threshold === 'number' && isFinite(threshold)) {
+                    // Row 0 = Actual < cutoff, Row 1 = Actual >= cutoff; Col 0/1 likewise for predictions
+                    const confMatrix2x2 = [[0, 0], [0, 0]];
+                    let hits = 0;
+                    for (let i = 0; i < total; i++) {
+                        const actBin = testY[i] >= threshold ? 1 : 0;
+                        const predBin = preds[i] >= threshold ? 1 : 0;
+                        confMatrix2x2[actBin][predBin]++;
+                        if (actBin === predBin) hits++;
+                    }
+                    const tp = confMatrix2x2[1][1];
+                    const fn = confMatrix2x2[1][0];
+                    const fp = confMatrix2x2[0][1];
+                    const tn = confMatrix2x2[0][0];
+                    result.confMatrix = confMatrix2x2;
+                    result.threshold = Number(threshold.toFixed(4));
+                    result.thresholdSource = options.thresholdSource || 'user-supplied cutoff';
+                    result.thresholdAccuracy = Number((hits / total).toFixed(4));
+                    // Undefined (null) when no test cases fall on that side of the cutoff
+                    result.sensitivity = (tp + fn) > 0 ? Number((tp / (tp + fn)).toFixed(4)) : null;
+                    result.specificity = (tn + fp) > 0 ? Number((tn / (tn + fp)).toFixed(4)) : null;
+                }
+                return result;
             }
         },
 

@@ -1,8 +1,8 @@
 # Universal Medical ML/NeuralNet Predictor
 
-An interactive, in-browser client-side Machine Learning and Deep Neural Network predictive modeling suite for **Clinical Medicine and Healthcare Research**, running 100% in the web browser with zero server dependencies and complete patient data privacy.
+An interactive, in-browser client-side Machine Learning and Neural Network (multilayer perceptron) predictive modeling suite for **Clinical Medicine and Healthcare Research**, running 100% in the web browser with zero server dependencies and complete patient data privacy.
 
-Conceived, designed and directed by **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)** ([g_narenthiran@hotmail.com](mailto:g_narenthiran@hotmail.com)), Neurosurgery Research Listserv, United Kingdom (Implemented with Antigravity AI pair programming).
+Conceived, designed and directed by **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)** ([g_narenthiran@hotmail.com](mailto:g_narenthiran@hotmail.com)), Neurosurgery Research Listserv, United Kingdom (Implemented with AI pair programming: Google Antigravity & Anthropic Claude Code).
 
 **&copy; 2026 Dr G Narenthiran. All rights reserved.**
 
@@ -47,14 +47,15 @@ Context-aware imputation strategies dynamically selectable based on variable sca
 ### 4. Deep Learning & Machine Learning Algorithms with Advanced Fine-Tuning
 Every model includes fine-tuning controls specifically designed to maximize predictive accuracy, adapt to patient cohort characteristics, and prevent overfitting:
 
-- **Ensemble Super Learner (Meta-Ensemble):**
-  - Clinical consensus ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge Regression, and k-NN.
+- **Voting / Weighted Ensemble:**
+  - Combines the neural network, Random Forest, Logistic/Ridge Regression, k-NN (and optionally Naive Bayes). This is a voting ensemble, not a cross-validated stacked Super Learner; performance weights use balanced accuracy (classification) or inverse MSE (regression) on an internal validation split of the training data.
   - **Fine-Tuning Controls:**
     - Combination Strategy: *Soft Voting* (probability blending), *Performance-Weighted* (dynamic validation weighting), or *Hard Majority Voting*.
     - Validation Weighting Power ($\gamma$): Linear, Quadratic ($\gamma=2$ sharply boosts best models), or Cubic.
     - Capacity Presets: *Balanced*, *Fast*, or *High-Capacity Deep Ensemble*.
     - Dynamic constituent model inclusion checkboxes.
-- **Deep Neural Network (MLP / TensorFlow.js):**
+- **Neural Network (Multilayer Perceptron, TensorFlow.js):**
+  - Early stopping on an internal validation split carved from the training data (the test set is never used in training). If TensorFlow.js fails, a linear fallback model is used and flagged in every results view, the batch CSV and the JSON report.
   - **Fine-Tuning Controls:**
     - Optimizer selection: *Adam* (Adaptive Moments), *RMSprop*, or *SGD* (Stochastic Gradient Descent).
     - Batch Size: *8* (Fine mini-batch), *16*, *32*, *64*, or *Full Batch* (entire cohort).
@@ -76,7 +77,7 @@ Every model includes fine-tuning controls specifically designed to maximize pred
     - Number of Neighbors ($k = 1$ to $25$).
     - Distance Metric: *Euclidean ($L_2$)*, *Manhattan ($L_1$ Cityblock - robust to outliers)*, or *Chebyshev ($L_\infty$)*.
     - Neighbor Weighting: *Uniform* or *Distance-Weighted ($1/\text{dist}$)* to give closer patient cases higher influence.
-- **Gaussian Naive Bayes:**
+- **Naive Bayes (Gaussian + Bernoulli):** Gaussian likelihoods for continuous features; Laplace-smoothed Bernoulli likelihoods for 0/1 indicator features (one-hot categories, binary flags).
   - **Fine-Tuning Controls:**
     - Variance Smoothing ($\epsilon = 10^{-9}, 10^{-4}, 10^{-2}, 0.1$) for numerical stability with sparse or noisy biomarkers.
     - Class Prior Calculation: *Empirical* (cohort frequency), *Balanced / Uniform* (equal $1/K$ priors to correct for class imbalance), or *Laplace-Smoothed*.
@@ -100,16 +101,16 @@ The platform provides two rigorous clinical evaluation paradigms selectable in S
 ### 6. Flexible Model Testing Scope & Tournament Benchmarking
 
 Clinicians and researchers can choose the exact scope of models to train and benchmark:
-1. **Test One Model:** Select an individual algorithm (e.g. Deep Neural Network or Random Forest) for focused training and single-model evaluation.
+1. **Test One Model:** Select an individual algorithm (e.g. Neural Network or Random Forest) for focused training and single-model evaluation.
 2. **Test More Than One Model (Custom Subset):** Pick any custom combination of algorithms via interactive card checkboxes (e.g. compare Ensemble vs. Random Forest vs. Logistic Regression).
 3. **Test All Models (Full Tournament):** Benchmark all 6 available algorithms simultaneously in a head-to-head competition with a single click.
 
 #### Multi-Model Diagnostic Results & Confusion Matrices:
-- **Comparative Benchmark Leaderboard:** Ranks all tested models by out-of-sample test accuracy (or $R^2$), displaying ROC-AUC, Macro F1, Precision, Recall, and rank medals (🥇 #1 Champion, 🥈 #2 Runner-Up, etc.).
+- **Comparative Benchmark Leaderboard:** Ranks all tested models by a user-selected primary metric (default: Macro F1 for classification, $R^2$ for regression; alternatives: balanced accuracy, ROC-AUC, Brier score, accuracy, RMSE, MAE), and reports all metrics including the Wilson 95% CI for accuracy. The same policy applies in Step 4 and the 7-Step Pipeline. The top-ranked model is selected on the same test cases it is scored on, so its score is optimistically biased; a single split does not establish general superiority.
 - **Individual Confusion Matrices & Accuracy Cards:** Renders an individual diagnostic card for **every chosen model**, featuring:
   - **Prominent Test Accuracy** (and ROC-AUC / Macro F1 scores).
   - **Complete Confusion Matrix Table** displaying actual vs. predicted classifications with hit/miss cell coloration.
-  - **One-Click Model Deployment:** The champion model is auto-designated as active, but researchers can click *"Set as Active Predictor"* on any tested model card or leaderboard row to immediately deploy it for Single and Batch Inference.
+  - **One-Click Model Deployment:** The top-ranked model is auto-designated as active, but researchers can click *"Set as Active Predictor"* on any tested model card or leaderboard row to immediately deploy it for Single and Batch Inference.
 
 ### 7. Exact Scientific Reproducibility & Random Seed Management
 
@@ -126,7 +127,7 @@ Reproducibility is a fundamental prerequisite in scientific and clinical researc
   - Ensures identical, platform-independent deterministic execution across browsers for:
     - Train/test data shuffling.
     - Random Forest bootstrap resamples and feature subsampling.
-    - Deep Neural Network layer kernel and dropout initialization.
+    - Neural network layer kernel and dropout initialization, plus a seeded per-epoch shuffle.
     - Ensemble derived sub-model seed propagation.
     - k-NN neighbor distance tie-breaking.
 - **Prominent Output of Reproducibility Seeds for Future Reference:**
@@ -176,5 +177,5 @@ Because the application is built entirely with client-side web technologies, no 
 - **Conception, Design & Direction:** **Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)**
 - **Email:** [g_narenthiran@hotmail.com](mailto:g_narenthiran@hotmail.com)
 - **Affiliation:** Neurosurgery Research Listserv, United Kingdom
-- **Implementation:** Implemented with Antigravity AI pair programming
+- **Implementation:** Implemented with AI pair programming (Google Antigravity; statistical audit and corrections with Anthropic Claude Code)
 - **Copyright:** &copy; 2026 Dr G Narenthiran. All rights reserved.

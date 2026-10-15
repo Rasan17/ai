@@ -66,10 +66,36 @@
         },
 
         /**
+         * Returns a function mapping a cell to a number for statistical tests: ordinal columns with text
+         * levels (or a user-defined level order) map to their ordered rank; everything else to Number().
+         * Missing / non-numeric cells map to NaN.
+         */
+        numericValueFn(rows, col, conf = {}) {
+            const vals = rows.map(r => r[col]).filter(v => !this.isMissing(v));
+            const hasCustomOrder = Array.isArray(conf.ordinalOrder) && conf.ordinalOrder.length > 0;
+            const isTextOrdinal = conf.type === 'ordinal' && vals.some(v => isNaN(Number(v)));
+            if (conf.type === 'ordinal' && (isTextOrdinal || hasCustomOrder)) {
+                const { rankMap } = this.buildOrdinalRankMap(vals, conf.ordinalOrder);
+                return (v) => (this.isMissing(v) || rankMap[String(v).trim()] === undefined ? NaN : rankMap[String(v).trim()]);
+            }
+            return (v) => (this.isMissing(v) ? NaN : Number(v));
+        },
+
+        /**
          * Builds a value -> rank lookup for an ordinal column
          */
-        buildOrdinalRankMap(values) {
-            const ranks = this.sortOrdinalLevels(values);
+        buildOrdinalRankMap(values, customOrder = null) {
+            let ranks = this.sortOrdinalLevels(values);
+            if (Array.isArray(customOrder) && customOrder.length > 0) {
+                // User-defined clinical order first; any observed levels not listed keep their default order after it
+                const norm = v => String(v).trim().toLowerCase();
+                const ordered = [];
+                customOrder.forEach(level => {
+                    const match = ranks.find(r => norm(r) === norm(level));
+                    if (match !== undefined && !ordered.includes(match)) ordered.push(match);
+                });
+                ranks = ordered.concat(ranks.filter(r => !ordered.includes(r)));
+            }
             const rankMap = {};
             ranks.forEach((val, rk) => { rankMap[String(val)] = rk; });
             return { ranks, rankMap };
@@ -333,12 +359,16 @@
         },
 
         /**
-         * Perform data imputation across columns based on user configuration
-         * @param {Array} rows - array of row objects
-         * @param {Object} columnConfigs - { [colName]: { role, type, imputationStrategy, customImputeVal } }
-         * @param {Object} columnAnalysis - analysis output from analyzeColumns
+         * Imputes missing predictor values according to each column's configured strategy.
+         *
+         * Fit/apply semantics (to keep test data out of model development):
+         *  - Called WITHOUT `fittedPlan`: fill values are computed from `rows` themselves and the
+         *    returned `plan` records them (use this on the TRAINING rows).
+         *  - Called WITH `fittedPlan`: the stored training-derived fill values are applied unchanged,
+         *    and KNN neighbours are drawn only from the training reference rows (use this on TEST rows).
+         * Row deletion ('drop' strategy, missing outcome) is decided per row from that row's own data.
          */
-        imputeDataset(rows, columnConfigs, columnAnalysis) {
+        imputeDataset(rows, columnConfigs, columnAnalysis, fittedPlan = null) {
             let workingRows = rows.map(r => ({ ...r }));
             const audit = [];
             const rowsToDrop = new Set();
@@ -380,135 +410,141 @@
                 workingRows = workingRows.filter((_, idx) => !rowsToDrop.has(idx) && !targetMissingRows.has(idx));
             }
 
-            // Second pass: Compute imputation values on the filtered rows
+            // Pristine (pre-imputation) copy: the KNN neighbour pool when fitting, and the stored reference
+            const snapshotRows = workingRows.map(r => ({ ...r }));
+            const plan = fittedPlan || { columns: {}, referenceRows: snapshotRows };
+            const knnPool = plan.referenceRows;
+            const poolIsSelf = !fittedPlan;
+
+            // Second pass: compute (or reuse) fill values and impute
             Object.keys(columnConfigs).forEach(col => {
                 const config = columnConfigs[col];
                 if (config.role === 'meta') return;
                 if (config.role === 'target') return;
                 if (config.imputationStrategy === 'drop') return;
 
-                let strategy = config.imputationStrategy;
                 const colType = config.type;
+                let colPlan = fittedPlan ? fittedPlan.columns[col] : null;
 
-                // Collect valid values from workingRows
-                const validValues = [];
-                const validNumbers = [];
-
-                workingRows.forEach(r => {
-                    const val = r[col];
-                    if (!this.isMissing(val)) {
-                        validValues.push(val);
-                        const n = Number(val);
-                        if (!isNaN(n)) validNumbers.push(n);
-                    }
-                });
-
-                let fillValue = null;
-
-                // Mean/median/KNN need numbers: text-valued columns fall back to the most frequent value
-                if ((strategy === 'mean' || strategy === 'median' || strategy === 'knn') && validNumbers.length < validValues.length) {
-                    strategy = 'mode';
-                }
-
-                if (strategy === 'mean') {
-                    if (validNumbers.length > 0) {
-                        const sum = validNumbers.reduce((a, b) => a + b, 0);
-                        fillValue = Number((sum / validNumbers.length).toFixed(4));
-                    } else {
-                        fillValue = 0;
-                    }
-                } else if (strategy === 'median') {
-                    if (validNumbers.length > 0) {
-                        const sorted = [...validNumbers].sort((a, b) => a - b);
-                        const mid = Math.floor(sorted.length / 2);
-                        if (colType === 'ordinal') {
-                            // Lower median keeps the fill value on an observed ordinal level
-                            fillValue = sorted[Math.floor((sorted.length - 1) / 2)];
-                        } else {
-                            fillValue = sorted.length % 2 === 0 ? Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(4)) : sorted[mid];
-                        }
-                    } else {
-                        fillValue = 0;
-                    }
-                } else if (strategy === 'mode') {
-                    const freqMap = new Map();
-                    validValues.forEach(v => freqMap.set(String(v), (freqMap.get(String(v)) || 0) + 1));
-                    let topCount = 0;
-                    let topVal = null;
-                    freqMap.forEach((count, v) => {
-                        if (count > topCount) {
-                            topCount = count;
-                            topVal = v;
+                if (!colPlan) {
+                    let strategy = config.imputationStrategy;
+                    const validValues = [];
+                    const validNumbers = [];
+                    snapshotRows.forEach(r => {
+                        const val = r[col];
+                        if (!this.isMissing(val)) {
+                            validValues.push(val);
+                            const n = Number(val);
+                            if (!isNaN(n)) validNumbers.push(n);
                         }
                     });
-                    if (colType === 'continuous' || colType === 'ordinal') {
-                        fillValue = topVal !== null && !isNaN(Number(topVal)) ? Number(topVal) : 0;
-                    } else {
-                        fillValue = topVal !== null ? topVal : 'Unknown';
-                    }
-                } else if (strategy === 'constant') {
-                    if (colType === 'continuous' || colType === 'ordinal') {
-                        fillValue = Number(config.customImputeVal !== undefined && config.customImputeVal !== '' ? config.customImputeVal : 0);
-                    } else {
-                        fillValue = String(config.customImputeVal || 'Missing');
-                    }
-                } else if (strategy === 'knn') {
-                    // KNN Imputation for continuous variables
-                    // Will fill cell-by-cell in third pass
-                    fillValue = 'knn_dynamic';
-                }
 
-                // Perform the imputation
-                let imputedCount = 0;
-                if (strategy === 'knn') {
-                    // Precompute continuous reference columns
+                    // Mean/median/KNN need numbers: text-valued columns fall back to the most frequent value
+                    if ((strategy === 'mean' || strategy === 'median' || strategy === 'knn') && validNumbers.length < validValues.length) {
+                        strategy = 'mode';
+                    }
+
+                    const meanValue = validNumbers.length > 0 ? validNumbers.reduce((a, b) => a + b, 0) / validNumbers.length : 0;
+                    let fillValue = null;
+                    if (strategy === 'mean') {
+                        fillValue = Number(meanValue.toFixed(4));
+                    } else if (strategy === 'median') {
+                        if (validNumbers.length > 0) {
+                            const sorted = [...validNumbers].sort((a, b) => a - b);
+                            const mid = Math.floor(sorted.length / 2);
+                            if (colType === 'ordinal') {
+                                // Lower median keeps the fill value on an observed ordinal level
+                                fillValue = sorted[Math.floor((sorted.length - 1) / 2)];
+                            } else {
+                                fillValue = sorted.length % 2 === 0 ? Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(4)) : sorted[mid];
+                            }
+                        } else {
+                            fillValue = 0;
+                        }
+                    } else if (strategy === 'mode') {
+                        const freqMap = new Map();
+                        validValues.forEach(v => freqMap.set(String(v), (freqMap.get(String(v)) || 0) + 1));
+                        let topCount = 0;
+                        let topVal = null;
+                        freqMap.forEach((count, v) => {
+                            if (count > topCount) {
+                                topCount = count;
+                                topVal = v;
+                            }
+                        });
+                        if ((colType === 'continuous' || colType === 'ordinal') && topVal !== null && !isNaN(Number(topVal))) {
+                            fillValue = Number(topVal);
+                        } else {
+                            fillValue = topVal !== null ? topVal : (colType === 'nominal' ? 'Unknown' : 0);
+                        }
+                    } else if (strategy === 'constant') {
+                        if (colType === 'continuous' || colType === 'ordinal') {
+                            fillValue = Number(config.customImputeVal !== undefined && config.customImputeVal !== '' ? config.customImputeVal : 0);
+                        } else {
+                            fillValue = String(config.customImputeVal || 'Missing');
+                        }
+                    } else if (strategy === 'knn') {
+                        fillValue = 'knn_dynamic'; // filled cell-by-cell below
+                    }
+
+                    // Scales for KNN distances (from the fitting rows only)
+                    const refScale = {};
                     const numericCols = Object.keys(columnConfigs).filter(c =>
                         columnConfigs[c].type === 'continuous' && columnConfigs[c].role === 'feature' && c !== col);
-                    // Standardise reference columns so no single unit/scale dominates the distance
-                    const refScale = {};
-                    numericCols.forEach(nCol => {
-                        const vals = workingRows.map(r => r[nCol]).filter(v => !this.isMissing(v)).map(Number).filter(n => !isNaN(n));
-                        const m = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-                        const sd = vals.length ? Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length) : 0;
-                        refScale[nCol] = sd > 0 ? sd : 1;
-                    });
+                    if (strategy === 'knn') {
+                        numericCols.forEach(nCol => {
+                            const vals = snapshotRows.map(r => r[nCol]).filter(v => !this.isMissing(v)).map(Number).filter(n => !isNaN(n));
+                            const m = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+                            const sd = vals.length ? Math.sqrt(vals.reduce((a, b) => a + (b - m) * (b - m), 0) / vals.length) : 0;
+                            refScale[nCol] = sd > 0 ? sd : 1;
+                        });
+                    }
+
+                    colPlan = { strategy, fillValue, meanValue, numericCols, refScale };
+                    plan.columns[col] = colPlan;
+                }
+
+                const { strategy, fillValue } = colPlan;
+
+                let imputedCount = 0;
+                if (strategy === 'knn') {
+                    const k = 3;
                     workingRows.forEach((row, rowIdx) => {
-                        if (this.isMissing(row[col])) {
-                            // Find k nearest rows that have non-missing col
-                            const k = 3;
-                            const distances = [];
-                            workingRows.forEach((otherRow, otherIdx) => {
-                                if (otherIdx === rowIdx || this.isMissing(otherRow[col]) || isNaN(Number(otherRow[col]))) return;
-                                let distSq = 0;
-                                let matchedFeatures = 0;
-                                numericCols.forEach(nCol => {
-                                    if (!this.isMissing(row[nCol]) && !this.isMissing(otherRow[nCol])) {
-                                        const d = (Number(row[nCol]) - Number(otherRow[nCol])) / refScale[nCol];
-                                        if (!isNaN(d)) {
-                                            distSq += d * d;
-                                            matchedFeatures++;
-                                        }
+                        if (!this.isMissing(row[col])) {
+                            const n = Number(row[col]);
+                            if (!isNaN(n)) row[col] = n;
+                            return;
+                        }
+                        // Neighbours come from the (pre-imputation) fitting rows only
+                        const distances = [];
+                        knnPool.forEach((otherRow, otherIdx) => {
+                            if ((poolIsSelf && otherIdx === rowIdx) || this.isMissing(otherRow[col]) || isNaN(Number(otherRow[col]))) return;
+                            let distSq = 0;
+                            let matchedFeatures = 0;
+                            colPlan.numericCols.forEach(nCol => {
+                                if (!this.isMissing(row[nCol]) && !this.isMissing(otherRow[nCol])) {
+                                    const d = (Number(row[nCol]) - Number(otherRow[nCol])) / colPlan.refScale[nCol];
+                                    if (!isNaN(d)) {
+                                        distSq += d * d;
+                                        matchedFeatures++;
                                     }
-                                });
-                                if (matchedFeatures > 0) {
-                                    // Mean squared distance over shared features, so rows sharing fewer features are not favoured
-                                    distances.push({ val: Number(otherRow[col]), dist: Math.sqrt(distSq / matchedFeatures) });
                                 }
                             });
-
-                            if (distances.length > 0) {
-                                distances.sort((a, b) => a.dist - b.dist);
-                                const neighbors = distances.slice(0, Math.min(k, distances.length));
-                                const avg = neighbors.reduce((acc, item) => acc + item.val, 0) / neighbors.length;
-                                row[col] = Number(avg.toFixed(4));
-                                imputedCount++;
-                            } else {
-                                // fallback to mean
-                                const fallback = validNumbers.length > 0 ? (validNumbers.reduce((a, b) => a + b, 0) / validNumbers.length) : 0;
-                                row[col] = Number(fallback.toFixed(4));
-                                imputedCount++;
+                            if (matchedFeatures > 0) {
+                                // Mean squared distance over shared features, so rows sharing fewer features are not favoured
+                                distances.push({ val: Number(otherRow[col]), dist: Math.sqrt(distSq / matchedFeatures) });
                             }
+                        });
+
+                        if (distances.length > 0) {
+                            distances.sort((a, b) => a.dist - b.dist);
+                            const neighbors = distances.slice(0, Math.min(k, distances.length));
+                            const avg = neighbors.reduce((acc, item) => acc + item.val, 0) / neighbors.length;
+                            row[col] = Number(avg.toFixed(4));
+                        } else {
+                            row[col] = Number(colPlan.meanValue.toFixed(4)); // fallback: training mean
                         }
+                        imputedCount++;
                     });
                 } else {
                     workingRows.forEach(row => {
@@ -528,7 +564,7 @@
                         column: col,
                         strategy,
                         imputedCount,
-                        filledValue: fillValue === 'knn_dynamic' ? 'KNN: mean of 3 nearest neighbours (standardised distance)' : fillValue
+                        filledValue: fillValue === 'knn_dynamic' ? 'KNN: mean of 3 nearest training neighbours (standardised distance)' : fillValue
                     });
                 }
             });
@@ -536,7 +572,8 @@
             return {
                 imputedRows: workingRows,
                 audit,
-                totalRowsAfter: workingRows.length
+                totalRowsAfter: workingRows.length,
+                plan
             };
         },
 
@@ -623,6 +660,13 @@
                 targetClasses = Array.from(classSet);
                 // Sort classes naturally
                 targetClasses.sort();
+                // Binary outcome: the user-chosen positive (event) class is placed at index 1, which every
+                // binary metric (AUC, sensitivity, PPV, TP/FN) treats as the positive class
+                const chosenPositive = targetConf.positiveClass !== undefined && targetConf.positiveClass !== null
+                    ? String(targetConf.positiveClass) : null;
+                if (targetClasses.length === 2 && chosenPositive !== null && targetClasses.includes(chosenPositive)) {
+                    targetClasses = [targetClasses.find(c => c !== chosenPositive), chosenPositive];
+                }
                 targetClasses.forEach((cls, idx) => {
                     targetClassToIdx[cls] = idx;
                     targetIdxToClass[idx] = cls;
@@ -675,7 +719,7 @@
                     totalEncodedFeatures += categories.length;
                 } else if (conf.type === 'ordinal') {
                     // Ordinal mapping: map ordered distinct levels to integers 0, 1, 2...
-                    const { ranks, rankMap } = this.buildOrdinalRankMap(rows.map(r => r[col]));
+                    const { ranks, rankMap } = this.buildOrdinalRankMap(rows.map(r => r[col]), conf.ordinalOrder);
                     // Median rank of the training rows: fallback for missing / unseen levels at prediction time
                     const rankVals = rows.map(r => rankMap[String(r[col])]).filter(v => v !== undefined).sort((a, b) => a - b);
                     const defaultRank = rankVals.length ? rankVals[Math.floor((rankVals.length - 1) / 2)] : 0;
@@ -865,7 +909,9 @@
 
                 Object.keys(classIndices).forEach(cls => {
                     const cIdxs = classIndices[cls];
-                    const trainCount = Math.max(1, Math.round(cIdxs.length * trainRatio));
+                    let trainCount = Math.max(1, Math.round(cIdxs.length * trainRatio));
+                    // Any class with >= 2 cases keeps at least one case in the test set
+                    if (cIdxs.length >= 2 && trainCount >= cIdxs.length) trainCount = cIdxs.length - 1;
                     trainIndices.push(...cIdxs.slice(0, trainCount));
                     testIndices.push(...cIdxs.slice(trainCount));
                 });
@@ -1155,10 +1201,12 @@
          * Checks pairwise continuous variable correlation using Training set
          * Applies Pearson when both are normal; Spearman when one/both are skewed
          */
-        checkPairwiseCorrelations(trainRows, continuousCols, threshold = 0.8) {
+        checkPairwiseCorrelations(trainRows, continuousCols, threshold = 0.8, columnConfigs = {}) {
             const normalityMap = {};
+            const toNum = {};
             continuousCols.forEach(col => {
-                const vals = trainRows.map(r => Number(r[col])).filter(n => !isNaN(n));
+                toNum[col] = this.numericValueFn(trainRows, col, columnConfigs[col] || {});
+                const vals = trainRows.map(r => toNum[col](r[col])).filter(n => !isNaN(n));
                 normalityMap[col] = this.calculateSkewness(vals);
             });
 
@@ -1167,8 +1215,17 @@
                 for (let j = i + 1; j < continuousCols.length; j++) {
                     const cA = continuousCols[i];
                     const cB = continuousCols[j];
-                    const valsA = trainRows.map(r => Number(r[cA]));
-                    const valsB = trainRows.map(r => Number(r[cB]));
+                    // Pairwise-complete observations only
+                    const valsA = [];
+                    const valsB = [];
+                    trainRows.forEach(r => {
+                        const a = toNum[cA](r[cA]);
+                        const b = toNum[cB](r[cB]);
+                        if (!isNaN(a) && !isNaN(b)) {
+                            valsA.push(a);
+                            valsB.push(b);
+                        }
+                    });
 
                     const normA = normalityMap[cA];
                     const normB = normalityMap[cB];
@@ -1260,13 +1317,14 @@
                         });
                     });
                 } else {
-                    // Continuous or Ordinal
+                    // Continuous or Ordinal (text ordinal levels -> ordered ranks)
+                    const toNum = this.numericValueFn(trainRows, col, conf || {});
                     encodedCols.push({
                         name: col,
                         originalCol: col,
                         type: 'numeric',
                         extract: (r) => {
-                            const n = Number(r[col]);
+                            const n = toNum(r[col]);
                             return isNaN(n) ? 0 : n;
                         }
                     });
@@ -1538,16 +1596,7 @@
             };
 
             // Numeric value of a feature cell (ordinal text levels are converted to their ordered rank)
-            const numericValueFn = (col) => {
-                const conf = columnConfigs[col] || {};
-                const vals = rows.map(r => r[col]).filter(v => !this.isMissing(v));
-                const isTextOrdinal = conf.type === 'ordinal' && vals.some(v => isNaN(Number(v)));
-                if (isTextOrdinal) {
-                    const { rankMap } = this.buildOrdinalRankMap(vals);
-                    return (v) => (this.isMissing(v) || rankMap[String(v)] === undefined ? NaN : rankMap[String(v)]);
-                }
-                return (v) => (this.isMissing(v) ? NaN : Number(v));
-            };
+            const numericValueFn = (col) => this.numericValueFn(rows, col, columnConfigs[col] || {});
 
             const fmtStat = (v) => (v === Infinity ? Infinity : Number(v.toFixed(3)));
 

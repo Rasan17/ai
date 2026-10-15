@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
-    <meta name="description" content="Universal in-browser client-side Machine Learning and Deep Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
+    <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=6">
+    <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -20,10 +20,10 @@
                 <div class="brand-icon">🩺</div>
                 <div class="brand-details">
                     <h1>Universal Medical ML/NeuralNet Predictor</h1>
-                    <div class="subtitle">Universal Clinical Machine Learning & Deep Neural Network Inference Suite</div>
+                    <div class="subtitle">Universal Clinical Machine Learning & Neural Network Inference Suite</div>
                     <div class="attribution">
                         Conceived, designed and directed by <strong>Dr G Narenthiran</strong> MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN) &bull; <a href="mailto:g_narenthiran@hotmail.com" style="color: var(--accent-cyan); text-decoration: none;">g_narenthiran@hotmail.com</a><br>
-                        Neurosurgery Research Listserv, UK &bull; <em>Implemented with Antigravity AI pair programming</em><br>
+                        Neurosurgery Research Listserv, UK &bull; <em>Implemented with AI pair programming (Google Antigravity &amp; Anthropic Claude Code)</em><br>
                         <span style="font-size: 11px; opacity: 0.9;">&copy; 2026 Dr G Narenthiran. All rights reserved.</span>
                     </div>
                 </div>
@@ -218,8 +218,8 @@
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title-group">
-                            <h2>🧠 Machine Learning & Deep Neural Network Models</h2>
-                            <p>Select from deep neural networks and classic machine learning algorithms tailored for clinical medicine prediction.</p>
+                            <h2>🧠 Machine Learning & Neural Network Models</h2>
+                            <p>Select from a multilayer perceptron neural network and classic machine learning algorithms for clinical prediction.</p>
                         </div>
                     </div>
 
@@ -240,7 +240,7 @@
                                     ⚡ Select All Models
                                 </button>
                                 <button type="button" id="btn-select-top-models" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
-                                    ✨ DL + Ensemble + RF
+                                    ✨ NN + Ensemble + RF
                                 </button>
                                 <button type="button" id="btn-clear-model-selection" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;">
                                     Reset Selection
@@ -252,6 +252,23 @@
                                     🎲 Randomize All
                                 </button>
                             </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: var(--text-secondary);">
+                            <label for="ranking-metric-select" style="font-weight: 600;">Primary ranking metric (prespecify to match your study objective):</label>
+                            <select id="ranking-metric-select" class="control-select ranking-metric-select" style="max-width: 260px;">
+                                    <optgroup label="Categorical outcome (classification)">
+                                        <option value="clf:macroF1" selected>Macro F1 (default)</option>
+                                        <option value="clf:balancedAccuracy">Balanced accuracy</option>
+                                        <option value="clf:rocAuc">ROC-AUC (binary only)</option>
+                                        <option value="clf:brierScore">Brier score (lower is better)</option>
+                                        <option value="clf:accuracy">Accuracy</option>
+                                    </optgroup>
+                                    <optgroup label="Continuous outcome (regression)">
+                                        <option value="reg:r2">R² (default)</option>
+                                        <option value="reg:rmse">RMSE (lower is better)</option>
+                                        <option value="reg:mae">MAE (lower is better)</option>
+                                    </optgroup>
+                            </select>
                         </div>
 
                         <!-- Scope Radio Pills -->
@@ -288,12 +305,12 @@
                             <div class="model-card-header">
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <input type="checkbox" class="model-select-checkbox" data-model-id="nn" checked style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
-                                    <span class="model-card-title">Deep Neural Network (MLP)</span>
+                                    <span class="model-card-title">Neural Network (MLP)</span>
                                 </div>
-                                <span class="pill pill-target">Deep Learning</span>
+                                <span class="pill pill-target">Neural Network</span>
                             </div>
                             <div class="model-card-desc">
-                                Multi-Layer Perceptron (MLP) with dense hidden layers, dropout regularization, Adam optimizer and live epoch loss tracking.
+                                Multilayer perceptron (2–3 dense hidden layers) with dropout, L2 weight decay, Adam optimizer and early stopping on an internal validation split of the training data. If TensorFlow.js fails, a linear fallback is used and clearly flagged.
                             </div>
                             <!-- Model Seed Control -->
                             <div class="model-seed-box" data-model="nn" onclick="event.stopPropagation()">
@@ -329,7 +346,7 @@
                                 <span class="pill pill-feature">Ensemble</span>
                             </div>
                             <div class="model-card-desc">
-                                Ensemble of bootstrap decision trees with Gini/variance reduction splits and feature importance quantification.
+                                Bootstrap decision trees with random feature subsets; Gini (classification) or variance-reduction (regression) splits over an approximate grid of ~10 candidate thresholds per feature. Impurity-based (MDI) importance ranks features but is not evidence of causal or clinical effect.
                             </div>
                             <!-- Model Seed Control -->
                             <div class="model-seed-box" data-model="rf" onclick="event.stopPropagation()">
@@ -432,12 +449,12 @@
                             <div class="model-card-header">
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <input type="checkbox" class="model-select-checkbox" data-model-id="nb" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
-                                    <span class="model-card-title">Gaussian Naive Bayes</span>
+                                    <span class="model-card-title">Naive Bayes (Gaussian + Bernoulli)</span>
                                 </div>
                                 <span class="pill pill-nominal">Probabilistic</span>
                             </div>
                             <div class="model-card-desc">
-                                Fast probabilistic classifier computing posterior probabilities via Gaussian class-conditional likelihoods.
+                                Probabilistic classifier assuming conditional independence of features: Gaussian likelihoods for continuous features, Laplace-smoothed Bernoulli likelihoods for 0/1 indicators (one-hot categories, binary flags).
                             </div>
                             <!-- Model Seed Control -->
                             <div class="model-seed-box" data-model="nb" onclick="event.stopPropagation()">
@@ -468,12 +485,12 @@
                             <div class="model-card-header">
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <input type="checkbox" class="model-select-checkbox" data-model-id="ensemble" style="accent-color: var(--accent-cyan); width: 16px; height: 16px; cursor: pointer;">
-                                    <span class="model-card-title">Ensemble Super Learner</span>
+                                    <span class="model-card-title">Voting / Weighted Ensemble</span>
                                 </div>
-                                <span class="pill pill-target" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(6, 182, 212, 0.2)); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.4);">Meta-Ensemble</span>
+                                <span class="pill pill-target" style="background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(6, 182, 212, 0.2)); color: #c084fc; border: 1px solid rgba(192, 132, 252, 0.4);">Voting Ensemble</span>
                             </div>
                             <div class="model-card-desc">
-                                Clinical meta-ensemble combining Deep Neural Networks, Random Forests, Logistic/Ridge, and k-NN via soft probability blending or performance-weighted voting.
+                                Combines neural network, random forest, logistic/ridge, k-NN (and optionally naive Bayes) by soft probability averaging, hard majority voting, or balanced-accuracy weights learned on an internal validation split of the training data. This is a voting ensemble, not a cross-validated stacked Super Learner.
                             </div>
                             <!-- Model Seed Control -->
                             <div class="model-seed-box" data-model="ensemble" onclick="event.stopPropagation()">
@@ -508,12 +525,12 @@
                             <div style="display: flex; align-items: center; gap: 8px;">
                                 <span style="font-size: 11.5px; color: var(--text-muted);">Tune Parameters for:</span>
                                 <select id="active-hyperparam-select" class="control-select" style="font-size: 12px; padding: 4px 10px;">
-                                    <option value="nn" selected>Deep Neural Network (MLP)</option>
+                                    <option value="nn" selected>Neural Network (MLP)</option>
                                     <option value="rf">Random Forest</option>
                                     <option value="glm">Logistic / Ridge Regression</option>
                                     <option value="knn">k-Nearest Neighbors (k-NN)</option>
-                                    <option value="nb">Gaussian Naive Bayes</option>
-                                    <option value="ensemble">Ensemble Super Learner</option>
+                                    <option value="nb">Naive Bayes (Gaussian + Bernoulli)</option>
+                                    <option value="ensemble">Voting / Weighted Ensemble</option>
                                 </select>
                             </div>
                         </div>
@@ -539,7 +556,7 @@
                                             Option A: Internal Train / Test Split
                                         </div>
                                         <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px; line-height: 1.45;">
-                                            Use part of the loaded dataset to train the model, and hold out the remainder to test accuracy. Optionally retrain on 100% afterward.
+                                            Records are split first (stratified, seeded); imputation, encoding and scaling are fitted on the training part only, and the held-out remainder tests performance. Optionally retrain on 100% afterward. <strong>Row-level random split:</strong> if patients contribute several rows, or data are temporal or multicentre, use a patient-level, temporal or external split (Option B) instead.
                                         </div>
                                     </div>
                                 </label>
@@ -563,7 +580,7 @@
                                 <!-- Split percentage slider -->
                                 <div style="background: var(--bg-surface-elevated); padding: 14px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); margin-bottom: 14px;">
                                     <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px;">
-                                        <label style="font-weight: 700; font-size: 13px; color: var(--text-primary);">
+                                        <label for="train-ratio-slider" style="font-weight: 700; font-size: 13px; color: var(--text-primary);">
                                             Cohort Partitioning Ratio
                                         </label>
                                         <div style="display: flex; gap: 8px; align-items: center;">
@@ -579,16 +596,16 @@
 
                                     <div style="display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap;">
                                         <div class="param-group" style="flex: 1; min-width: 130px;">
-                                            <label style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
+                                            <label for="train-pct-input" style="font-size: 11px; text-transform: uppercase;">Training Percentage (%)</label>
                                             <input type="number" id="train-pct-input" class="control-input" value="80" min="50" max="95" step="1">
                                         </div>
                                         <div class="param-group" style="flex: 1; min-width: 130px;">
-                                            <label style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
+                                            <label for="test-pct-input" style="font-size: 11px; text-transform: uppercase;">Testing Percentage (%)</label>
                                             <input type="number" id="test-pct-input" class="control-input" value="20" min="5" max="50" step="1">
                                         </div>
                                         <div class="param-group" style="flex: 1; min-width: 170px;">
-                                            <label style="font-size: 11px; text-transform: uppercase;">Split Seed (Reproducibility)</label>
-                                            <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                            <span class="group-label" id="group-label-split-seed-mode" style="font-size: 11px; text-transform: uppercase;">Split Seed (Reproducibility)</span>
+                                            <div role="radiogroup" aria-labelledby="group-label-split-seed-mode" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                                 <label class="seed-mode-pill" style="font-size: 10px; padding: 2px 6px;">
                                                     <input type="radio" name="split-seed-mode" value="default" id="split-seed-mode-default" checked>
                                                     <span>Default (42)</span>
@@ -615,11 +632,11 @@
 
                                 <!-- Post-Testing Retraining Decision -->
                                 <div style="background: var(--bg-surface-elevated); padding: 14px 16px; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">
-                                    <label style="font-weight: 700; font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 8px;">
+                                    <span class="group-label" id="group-label-opt-a-retrain" style="font-weight: 700; font-size: 13px; color: var(--text-primary); display: block; margin-bottom: 8px;">
                                         After calculating test accuracy, retrain the model with 100% of the training data?
-                                    </label>
+                                    </span>
 
-                                    <div style="display: flex; flex-direction: column; gap: 10px;">
+                                    <div role="radiogroup" aria-labelledby="group-label-opt-a-retrain" style="display: flex; flex-direction: column; gap: 10px;">
                                         <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 12.5px; line-height: 1.45;">
                                             <input type="radio" name="opt-a-retrain" id="retrain-yes" value="yes" checked style="margin-top: 3px; accent-color: var(--accent-emerald); cursor: pointer;">
                                             <span>
@@ -685,15 +702,15 @@
                         <!-- Neural Net Hyperparams -->
                         <div id="nn-params-box" class="hyperparam-box">
                             <div class="param-group">
-                                <label>Epochs</label>
+                                <label for="nn-epochs-input">Epochs</label>
                                 <input type="number" id="nn-epochs-input" class="control-input" value="50" min="10" max="300">
                             </div>
                             <div class="param-group">
-                                <label>Learning Rate</label>
+                                <label for="nn-lr-input">Learning Rate</label>
                                 <input type="number" id="nn-lr-input" class="control-input" value="0.005" step="0.001">
                             </div>
                             <div class="param-group">
-                                <label>Optimizer</label>
+                                <label for="nn-optimizer-select">Optimizer</label>
                                 <select id="nn-optimizer-select" class="control-select">
                                     <option value="adam" selected>Adam (Adaptive Moments - Recommended)</option>
                                     <option value="rmsprop">RMSprop (Adaptive Rate)</option>
@@ -701,7 +718,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Batch Size</label>
+                                <label for="nn-batch-select">Batch Size</label>
                                 <select id="nn-batch-select" class="control-select">
                                     <option value="8">8 (Fine Mini-Batch)</option>
                                     <option value="16" selected>16 (Standard Mini-Batch)</option>
@@ -711,23 +728,23 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Hidden Layer 1 Units</label>
+                                <label for="nn-h1-input">Hidden Layer 1 Units</label>
                                 <input type="number" id="nn-h1-input" class="control-input" value="64" min="8" max="256">
                             </div>
                             <div class="param-group">
-                                <label>Hidden Layer 2 Units</label>
+                                <label for="nn-h2-input">Hidden Layer 2 Units</label>
                                 <input type="number" id="nn-h2-input" class="control-input" value="32" min="0" max="128">
                             </div>
                             <div class="param-group">
-                                <label>Hidden Layer 3 Units (Optional)</label>
+                                <label for="nn-h3-input">Hidden Layer 3 Units (Optional)</label>
                                 <input type="number" id="nn-h3-input" class="control-input" value="0" min="0" max="64" placeholder="0 = Disabled">
                             </div>
                             <div class="param-group">
-                                <label>Dropout Regularization</label>
+                                <label for="nn-dropout-input">Dropout Regularization</label>
                                 <input type="number" id="nn-dropout-input" class="control-input" value="0.1" step="0.05" min="0" max="0.5">
                             </div>
                             <div class="param-group">
-                                <label>L2 Weight Decay (λ Penalty)</label>
+                                <label for="nn-l2-select">L2 Weight Decay (λ Penalty)</label>
                                 <select id="nn-l2-select" class="control-select">
                                     <option value="0">None (λ = 0)</option>
                                     <option value="0.0001" selected>Light (λ = 0.0001)</option>
@@ -736,7 +753,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Activation Function</label>
+                                <label for="nn-act-select">Activation Function</label>
                                 <select id="nn-act-select" class="control-select">
                                     <option value="relu" selected>ReLU (Rectified Linear)</option>
                                     <option value="tanh">Tanh (Hyperbolic Tangent)</option>
@@ -744,8 +761,8 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Random Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-nn">Random Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-nn" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-nn" value="default" class="hp-seed-mode-radio" data-model="nn" checked>
                                         <span>Default (42)</span>
@@ -766,15 +783,15 @@
                         <!-- Random Forest Hyperparams -->
                         <div id="rf-params-box" class="hyperparam-box" style="display: none;">
                             <div class="param-group">
-                                <label>Number of Trees (Estimators)</label>
+                                <label for="rf-trees-input">Number of Trees (Estimators)</label>
                                 <input type="number" id="rf-trees-input" class="control-input" value="30" min="5" max="100">
                             </div>
                             <div class="param-group">
-                                <label>Maximum Tree Depth</label>
+                                <label for="rf-depth-input">Maximum Tree Depth</label>
                                 <input type="number" id="rf-depth-input" class="control-input" value="6" min="2" max="15">
                             </div>
                             <div class="param-group">
-                                <label>Min Samples to Split (Regularization)</label>
+                                <label for="rf-minsplit-select">Min Samples to Split (Regularization)</label>
                                 <select id="rf-minsplit-select" class="control-select">
                                     <option value="2" selected>2 (Deep Splits)</option>
                                     <option value="4">4 (Mild Pruning)</option>
@@ -783,7 +800,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Feature Subsampling (Max Features)</label>
+                                <label for="rf-maxfeatures-select">Feature Subsampling (Max Features)</label>
                                 <select id="rf-maxfeatures-select" class="control-select">
                                     <option value="sqrt" selected>√p (Square Root - Recommended)</option>
                                     <option value="0.5">50% of Features</option>
@@ -793,8 +810,8 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Random Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-rf">Random Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-rf" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-rf" value="default" class="hp-seed-mode-radio" data-model="rf" checked>
                                         <span>Default (42)</span>
@@ -815,15 +832,15 @@
                         <!-- Logistic / Ridge Hyperparams -->
                         <div id="glm-params-box" class="hyperparam-box" style="display: none;">
                             <div class="param-group">
-                                <label>Learning Rate</label>
+                                <label for="glm-lr-input">Learning Rate</label>
                                 <input type="number" id="glm-lr-input" class="control-input" value="0.05" step="0.01">
                             </div>
                             <div class="param-group">
-                                <label>Iterations / Epochs</label>
+                                <label for="glm-epochs-input">Iterations / Epochs</label>
                                 <input type="number" id="glm-epochs-input" class="control-input" value="150" min="20" max="500">
                             </div>
                             <div class="param-group">
-                                <label>L2 Ridge Penalty (λ Regularization)</label>
+                                <label for="glm-lambda-select">L2 Ridge Penalty (λ Regularization)</label>
                                 <select id="glm-lambda-select" class="control-select">
                                     <option value="0">None (Pure Logistic / OLS)</option>
                                     <option value="0.001">Light (λ = 0.001)</option>
@@ -834,15 +851,15 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Optimization Solver</label>
+                                <label for="glm-solver-select">Optimization Solver</label>
                                 <select id="glm-solver-select" class="control-select">
                                     <option value="momentum" selected>Momentum GD (Accelerated Convergence)</option>
                                     <option value="gd">Standard Batch Gradient Descent</option>
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Random Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-glm">Random Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-glm" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-glm" value="default" class="hp-seed-mode-radio" data-model="glm" checked>
                                         <span>Default (42)</span>
@@ -863,11 +880,11 @@
                         <!-- k-NN Hyperparams -->
                         <div id="knn-params-box" class="hyperparam-box" style="display: none;">
                             <div class="param-group">
-                                <label>k (Number of Neighbors)</label>
+                                <label for="knn-k-input">k (Number of Neighbors)</label>
                                 <input type="number" id="knn-k-input" class="control-input" value="5" min="1" max="25">
                             </div>
                             <div class="param-group">
-                                <label>Distance Metric</label>
+                                <label for="knn-metric-select">Distance Metric</label>
                                 <select id="knn-metric-select" class="control-select">
                                     <option value="euclidean" selected>Euclidean (L₂ Distance)</option>
                                     <option value="manhattan">Manhattan (L₁ Cityblock - Robust to Outliers)</option>
@@ -875,15 +892,15 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Neighbor Weighting Scheme</label>
+                                <label for="knn-weighting-select">Neighbor Weighting Scheme</label>
                                 <select id="knn-weighting-select" class="control-select">
                                     <option value="uniform" selected>Uniform (All k neighbors vote equally)</option>
                                     <option value="distance">Distance-Weighted (1/dist - Closer cases vote more heavily)</option>
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Random Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-knn">Random Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-knn" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-knn" value="default" class="hp-seed-mode-radio" data-model="knn" checked>
                                         <span>Default (42)</span>
@@ -901,10 +918,10 @@
                             </div>
                         </div>
 
-                        <!-- Gaussian Naive Bayes Hyperparams -->
+                        <!-- Naive Bayes Hyperparams -->
                         <div id="nb-params-box" class="hyperparam-box" style="display: none;">
                             <div class="param-group">
-                                <label>Variance Smoothing (ε Stability)</label>
+                                <label for="nb-smoothing-select">Variance Smoothing (ε Stability)</label>
                                 <select id="nb-smoothing-select" class="control-select">
                                     <option value="0.000000001">1e-9 (Standard Minimum Epsilon)</option>
                                     <option value="0.0001" selected>1e-4 (Balanced Clinical Smoothing)</option>
@@ -913,7 +930,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Class Prior Calculation</label>
+                                <label for="nb-priors-select">Class Prior Calculation</label>
                                 <select id="nb-priors-select" class="control-select">
                                     <option value="empirical" selected>Empirical (Cohort Class Frequency)</option>
                                     <option value="uniform">Balanced / Uniform (Equal Priors 1/K - Adjusts for Class Imbalance)</option>
@@ -921,8 +938,8 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Random Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-nb">Random Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-nb" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-nb" value="default" class="hp-seed-mode-radio" data-model="nb" checked>
                                         <span>Default (42)</span>
@@ -943,7 +960,7 @@
                         <!-- Ensemble Hyperparams -->
                         <div id="ensemble-params-box" class="hyperparam-box" style="display: none;">
                             <div class="param-group">
-                                <label>Ensemble Combination Strategy</label>
+                                <label for="ensemble-voting-select">Ensemble Combination Strategy</label>
                                 <select id="ensemble-voting-select" class="control-select">
                                     <option value="soft">Soft Voting (Calibrated Probability Blending - Recommended)</option>
                                     <option value="weighted" selected>Performance-Weighted (weights from an internal validation split of the training data)</option>
@@ -951,7 +968,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Validation Weighting Power (γ)</label>
+                                <label for="ens-power-select">Validation Weighting Power (γ)</label>
                                 <select id="ens-power-select" class="control-select">
                                     <option value="1">Linear (w ∝ Score)</option>
                                     <option value="2" selected>Quadratic (w ∝ Score² - Sharply boosts best models)</option>
@@ -959,7 +976,7 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Base Models Capacity Preset</label>
+                                <label for="ens-capacity-select">Base Models Capacity Preset</label>
                                 <select id="ens-capacity-select" class="control-select">
                                     <option value="balanced" selected>Balanced (Optimal Clinical Accuracy & Speed)</option>
                                     <option value="fast">Fast (Lower trees & epochs for rapid execution)</option>
@@ -967,8 +984,8 @@
                                 </select>
                             </div>
                             <div class="param-group">
-                                <label>Master Seed (Reproducibility)</label>
-                                <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
+                                <span class="group-label" id="group-label-hp-seed-mode-ensemble">Master Seed (Reproducibility)</span>
+                                <div role="radiogroup" aria-labelledby="group-label-hp-seed-mode-ensemble" style="display: flex; gap: 6px; align-items: center; margin-bottom: 4px;">
                                     <label class="seed-mode-pill" style="font-size: 10.5px; padding: 2px 7px;">
                                         <input type="radio" name="hp-seed-mode-ensemble" value="default" class="hp-seed-mode-radio" data-model="ensemble" checked>
                                         <span>Default (42)</span>
@@ -985,10 +1002,10 @@
                                 <div class="seed-hint">Choose Default (42) or input any custom seed.</div>
                             </div>
                             <div class="param-group" style="grid-column: 1 / -1;">
-                                <label>Constituent Base Models to Include</label>
-                                <div style="display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 13px;">
+                                <span class="group-label" id="group-label-ens-include-nn">Constituent Base Models to Include</span>
+                                <div role="group" aria-labelledby="group-label-ens-include-nn" style="display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px; font-size: 13px;">
                                     <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-                                        <input type="checkbox" id="ens-include-nn" checked> Deep Neural Network (MLP)
+                                        <input type="checkbox" id="ens-include-nn" checked> Neural Network (MLP)
                                     </label>
                                     <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
                                         <input type="checkbox" id="ens-include-rf" checked> Random Forest
@@ -1000,7 +1017,7 @@
                                         <input type="checkbox" id="ens-include-knn"> k-Nearest Neighbors
                                     </label>
                                     <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-                                        <input type="checkbox" id="ens-include-nb"> Gaussian Naive Bayes
+                                        <input type="checkbox" id="ens-include-nb"> Naive Bayes
                                     </label>
                                 </div>
                             </div>
@@ -1244,13 +1261,13 @@
 
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;">
                             <div class="form-group">
-                                <label class="form-label">Train / Test Split Ratio:</label>
+                                <label for="pipeline-split-ratio" class="form-label">Train / Test Split Ratio:</label>
                                 <select id="pipeline-split-ratio" class="form-select" disabled>
                                     <option value="0.8" selected>80% Training / 20% Testing (Standard Protocol)</option>
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Continuous Imputation Strategy:</label>
+                                <label for="pipeline-impute-strategy" class="form-label">Continuous Imputation Strategy:</label>
                                 <select id="pipeline-impute-strategy" class="form-select">
                                     <option value="median" selected>Median (Recommended for Clinical Data)</option>
                                     <option value="mean">Mean</option>
@@ -1258,7 +1275,7 @@
                                 <span style="font-size: 11px; color: var(--text-muted); margin-top: 4px; display: block;">Categorical variables strictly imputed via Training Mode.</span>
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Reproducibility Seed:</label>
+                                <label for="pipeline-seed-input" class="form-label">Reproducibility Seed:</label>
                                 <div style="display: flex; gap: 8px;">
                                     <input type="number" id="pipeline-seed-input" class="form-input" value="42" placeholder="42">
                                     <button id="pipeline-seed-random-btn" class="btn btn-secondary btn-sm" title="Generate New Seed">🎲</button>
@@ -1500,7 +1517,7 @@
 
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                             <div style="font-size: 12.5px; color: var(--text-secondary);">
-                                💡 k-NN & Gaussian Naive Bayes will automatically train only on the Top 70% features.
+                                💡 k-NN & Naive Bayes will automatically train only on the Top 70% features.
                             </div>
                             <button id="pipeline-to-step7-btn" class="btn btn-emerald" disabled>
                                 Proceed to Step 7: Train Constrained Models &rarr;
@@ -1518,19 +1535,34 @@
                                 <strong>Step 7: Algorithm-Specific Training & Constraints</strong><br>
                                 Applies strict stability constraints to each algorithm:
                                 <ul style="margin: 6px 0 0 20px; font-size: 12.5px;">
-                                    <li><strong>k-NN & Gaussian Naive Bayes:</strong> Use only the top 70% of features by Step 6 RF importance (fewer noisy inputs for distance- and likelihood-based models).</li>
-                                    <li><strong>Deep Neural Network (DNN):</strong> Enforces L2 Regularization (weight decay) + Dropout layers against overfitting.</li>
+                                    <li><strong>k-NN & Naive Bayes:</strong> Use only the top 70% of features by Step 6 RF importance (fewer noisy inputs for distance- and likelihood-based models).</li>
+                                    <li><strong>Neural Network (MLP):</strong> L2 weight decay + dropout, with early stopping on an internal validation split of the training rows (the test set is never used in training).</li>
                                     <li><strong>Logistic / Ridge Regression:</strong> Applies L2 penalization to stabilize any remaining minor collinearity.</li>
-                                    <li><strong>Super Learner (Ensemble):</strong> Equal-weight soft vote of its base models; scaling and one-hot encoding fitted on the Training set only (as for every model).</li>
+                                    <li><strong>Voting Ensemble:</strong> Equal-weight soft vote of its base models; scaling and one-hot encoding fitted on the Training set only (as for every model).</li>
                                 </ul>
-                                All models are evaluated on the held-out Testing set (never resampled) and ranked by macro F1-Score (regression: R²). Because the top model is chosen on this same Testing set, its score is optimistically biased; confirm it on an independent cohort.
+                                All models are evaluated on the held-out Testing set (never resampled) and ranked by the selected primary metric (default: macro F1-Score; regression: R²). Because the top model is chosen on this same Testing set, its score is optimistically biased; confirm it on an independent cohort.
                             </div>
                         </div>
 
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 20px;">
                             <div style="display: flex; align-items: center; gap: 10px;">
-                                <label class="form-label" style="margin: 0;">Evaluation Seed:</label>
+                                <label for="pipeline-eval-seed-input" class="form-label" style="margin: 0;">Evaluation Seed:</label>
                                 <input type="number" id="pipeline-eval-seed-input" class="form-input" style="width: 100px;" value="42">
+                                <label for="pipeline-ranking-metric-select" class="form-label" style="margin: 0 0 0 8px;">Ranking metric:</label>
+                                <select id="pipeline-ranking-metric-select" class="form-select ranking-metric-select" style="max-width: 230px;">
+                                    <optgroup label="Categorical outcome (classification)">
+                                        <option value="clf:macroF1" selected>Macro F1 (default)</option>
+                                        <option value="clf:balancedAccuracy">Balanced accuracy</option>
+                                        <option value="clf:rocAuc">ROC-AUC (binary only)</option>
+                                        <option value="clf:brierScore">Brier score (lower is better)</option>
+                                        <option value="clf:accuracy">Accuracy</option>
+                                    </optgroup>
+                                    <optgroup label="Continuous outcome (regression)">
+                                        <option value="reg:r2">R² (default)</option>
+                                        <option value="reg:rmse">RMSE (lower is better)</option>
+                                        <option value="reg:mae">MAE (lower is better)</option>
+                                    </optgroup>
+                                </select>
                             </div>
                             <button id="pipeline-train-models-btn" class="btn btn-primary" style="background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan)); font-weight: 700; padding: 12px 24px;">
                                 🚀 Train Constrained Models & Benchmark on Unaltered Test Set
@@ -1639,7 +1671,7 @@
         <footer class="app-footer">
             <div>
                 Conceived, designed and directed by <strong>Dr G Narenthiran</strong> MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN) &bull; <a href="mailto:g_narenthiran@hotmail.com" style="color: var(--accent-cyan); text-decoration: none;">g_narenthiran@hotmail.com</a><br>
-                Neurosurgery Research Listserv, United Kingdom &bull; <em>Implemented with Antigravity AI pair programming</em><br>
+                Neurosurgery Research Listserv, United Kingdom &bull; <em>Implemented with AI pair programming (Google Antigravity &amp; Anthropic Claude Code)</em><br>
                 <strong>&copy; 2026 Dr G Narenthiran. All rights reserved.</strong>
             </div>
             <div class="disclaimer">
@@ -1652,8 +1684,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=11"></script>
-    <script src="models.js?v=11"></script>
-    <script src="app.js?v=11"></script>
+    <script src="data-engine.js?v=13"></script>
+    <script src="models.js?v=13"></script>
+    <script src="app.js?v=13"></script>
 </body>
 </html>
