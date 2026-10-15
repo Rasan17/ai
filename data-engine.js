@@ -330,9 +330,9 @@
                     min = validNumbers[0];
                     max = validNumbers[validNumbers.length - 1];
                     const sum = validNumbers.reduce((acc, v) => acc + v, 0);
-                    mean = Number((sum / validNumbers.length).toFixed(4));
+                    mean = Number((sum / validNumbers.length).toPrecision(6)); // display only
                     const mid = Math.floor(validNumbers.length / 2);
-                    median = validNumbers.length % 2 === 0 ? Number(((validNumbers[mid - 1] + validNumbers[mid]) / 2).toFixed(4)) : validNumbers[mid];
+                    median = validNumbers.length % 2 === 0 ? Number(((validNumbers[mid - 1] + validNumbers[mid]) / 2).toPrecision(6)) : validNumbers[mid]; // display only
                 }
 
                 // Calculate mode for any type
@@ -470,7 +470,7 @@
                     const meanValue = validNumbers.length > 0 ? validNumbers.reduce((a, b) => a + b, 0) / validNumbers.length : 0;
                     let fillValue = null;
                     if (strategy === 'mean') {
-                        fillValue = Number(meanValue.toFixed(4));
+                        fillValue = meanValue; // full precision (fixed-decimal rounding is scale-dependent)
                     } else if (strategy === 'median') {
                         if (validNumbers.length > 0) {
                             const sorted = [...validNumbers].sort((a, b) => a - b);
@@ -479,7 +479,7 @@
                                 // Lower median keeps the fill value on an observed ordinal level
                                 fillValue = sorted[Math.floor((sorted.length - 1) / 2)];
                             } else {
-                                fillValue = sorted.length % 2 === 0 ? Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(4)) : sorted[mid];
+                                fillValue = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
                             }
                         } else {
                             fillValue = 0;
@@ -570,9 +570,9 @@
                             distances.sort((a, b) => a.dist - b.dist);
                             const neighbors = distances.slice(0, Math.min(k, distances.length));
                             const avg = neighbors.reduce((acc, item) => acc + item.val, 0) / neighbors.length;
-                            row[col] = Number(avg.toFixed(4));
+                            row[col] = avg;
                         } else {
-                            row[col] = Number(colPlan.meanValue.toFixed(4)); // fallback: training mean
+                            row[col] = colPlan.meanValue; // fallback: training mean
                         }
                         imputedCount++;
                     });
@@ -1092,16 +1092,17 @@
                             // Lower median keeps the fill value on an observed ordinal level
                             fillVal = sorted[Math.floor((sorted.length - 1) / 2)];
                         } else {
-                            fillVal = (strategy === 'mean') ? Number(mean.toFixed(4)) : Number(median.toFixed(4));
+                            fillVal = (strategy === 'mean') ? mean : median; // full precision
                         }
                         // Descriptive SD shown to the user: sample SD (n − 1), as in the Step 2 table
                         const variance = validNums.length > 1
                             ? validNums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / (validNums.length - 1)
                             : 0;
                         columnStats[col] = {
-                            mean: Number(mean.toFixed(4)),
-                            median: Number(median.toFixed(4)),
-                            std: Number(Math.sqrt(variance).toFixed(4)),
+                            // Display statistics: 6 significant figures (scale-free)
+                            mean: Number(mean.toPrecision(6)),
+                            median: Number(median.toPrecision(6)),
+                            std: Number(Math.sqrt(variance).toPrecision(6)),
                             min: sorted[0],
                             max: sorted[sorted.length - 1],
                             validCount: validNums.length
@@ -1172,8 +1173,9 @@
             return {
                 skewness: Number(g1.toFixed(3)),
                 isNormal,
-                mean: Number(mean.toFixed(3)),
-                std: Number(s.toFixed(3))
+                // Display values: significant figures, so small-unit measurements stay readable
+                mean: Number(mean.toPrecision(4)),
+                std: Number(s.toPrecision(4))
             };
         },
 
@@ -1204,7 +1206,7 @@
 
             const den = Math.sqrt(denX * denY);
             if (den === 0) return 0;
-            return Number((num / den).toFixed(4));
+            return num / den; // full precision (feeds t-tests and the |r| threshold); round only for display
         },
 
         /**
@@ -1948,7 +1950,7 @@
                             v = ordinalLevels[col].reduce((best, lvl) => (Math.abs(lvl - v) < Math.abs(best - v) ? lvl : best), ordinalLevels[col][0]);
                             newRow[col] = v;
                         } else {
-                            newRow[col] = Number(v.toFixed(4));
+                            newRow[col] = v; // full precision
                         }
                     });
 

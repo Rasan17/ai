@@ -181,7 +181,10 @@ From the project folder (Node.js; the reference check also needs Python with Sci
 ```bash
 node tests/reference_check.js && python3 tests/reference_check.py   # 41 checks against SciPy / scikit-learn / statsmodels
 node tests/edge_cases.js                                           # robustness: single class, all-missing, constant features, imbalance, zero-variance target
+python3 tests/benchmark_vs_python.py                               # app vs scikit-learn / PyTorch / imbalanced-learn (~2 min)
 ```
+
+The benchmark runs the app's own engine (with the real TensorFlow.js network) on three public datasets over 10 paired train/test splits and writes [`tests/BENCHMARK_REPORT.md`](tests/BENCHMARK_REPORT.md). Latest result: preprocessing, k-NN and naive Bayes match scikit-learn to rounding; Random Forest, the neural network (vs PyTorch), logistic/ridge regression and the voting ensemble are equivalent within pre-specified margins (AUC ±0.02, accuracy/F1 ±0.03, R² ±0.05); SMOTENC matches imbalanced-learn in synthetic-data distribution and downstream AUC. Additional requirements: Python packages `torch` and `imbalanced-learn`.
 
 ## 🚀 How to Run
 

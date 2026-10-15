@@ -145,6 +145,11 @@
         return /^-?\d+$/.test(t) ? parseInt(t, 10) : null;
     }
 
+    // Displays a stored numeric value compactly without fixed-decimal rounding (6 significant figures)
+    function fmtValue(v) {
+        return typeof v === 'number' && isFinite(v) ? String(Number(v.toPrecision(6))) : String(v);
+    }
+
     function fmtR2(v) {
         return typeof v === 'number' && isFinite(v) ? v.toFixed(3) : 'N/A';
     }
@@ -1786,7 +1791,7 @@
                         ${res.audit.length === 0 ? '<li>No missing cells required imputation.</li>' : res.audit.map(a => `
                             <li>${a.type === 'drop_rows'
                                 ? `<strong>Rows</strong>: ${escapeHtml(a.description)}`
-                                : `<strong>${escapeHtml(a.column)}</strong>: ${escapeHtml(a.strategy)} &rarr; ${a.imputedCount} value(s) imputed (fill: ${escapeHtml(a.filledValue)})`}</li>
+                                : `<strong>${escapeHtml(a.column)}</strong>: ${escapeHtml(a.strategy)} &rarr; ${a.imputedCount} value(s) imputed (fill: ${escapeHtml(fmtValue(a.filledValue))})`}</li>
                         `).join('')}
                     </ul>
                 </div>
@@ -3682,7 +3687,7 @@
                     <td><strong>${escapeHtml(col)}</strong></td>
                     <td><span class="pill pill-${conf.role || 'feature'}">${conf.role || 'feature'}</span></td>
                     <td><span class="pill pill-${conf.type || 'continuous'}">${conf.type || 'continuous'}</span></td>
-                    <td><strong style="color: var(--accent-emerald);">${escapeHtml(fillVal)}</strong></td>
+                    <td><strong style="color: var(--accent-emerald);">${escapeHtml(fmtValue(fillVal))}</strong></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${statsStr}</td>
                 </tr>
             `;
@@ -3796,7 +3801,7 @@
                                 <strong style="font-size: 14px; color: var(--text-primary);">${escapeHtml(p.var1)}</strong>
                                 <span style="color: var(--text-muted);">&harr;</span>
                                 <strong style="font-size: 14px; color: var(--text-primary);">${escapeHtml(p.var2)}</strong>
-                                <span class="vif-badge-danger">${p.method} = ${p.coeff}</span>
+                                <span class="vif-badge-danger">${p.method} = ${Number(p.coeff).toFixed(3)}</span>
                             </div>
                             <div style="font-size: 12px; color: var(--text-secondary);">
                                 <strong>Method:</strong> ${p.bothNormal ? 'Both variables approximately symmetric (|G₁| ≤ 1) &rarr; Pearson product-moment correlation.' : `Skewness detected (${escapeHtml([p.norm1.isNormal ? '' : p.var1, p.norm2.isNormal ? '' : p.var2].filter(Boolean).join(', '))}) &rarr; Spearman rank correlation.`}
