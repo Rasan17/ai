@@ -122,9 +122,12 @@
                         </div>
                     </div>
 
-                    <div style="display: flex; justify-content: flex-end;">
-                        <button id="to-step-2-btn" class="btn btn-primary" disabled>
-                            Configure Variables & Roles &rarr;
+                    <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px; flex-wrap: wrap;">
+                        <button id="to-step-2-btn" class="btn btn-secondary" disabled>
+                            Standard Workflow: Variable Roles (Step 2) &rarr;
+                        </button>
+                        <button id="pipeline-direct-launch-btn" class="btn btn-emerald" disabled>
+                            🔬 Launch 7-Step Clinical Pipeline &rarr;
                         </button>
                     </div>
                 </div>
@@ -1055,6 +1058,9 @@
                         </div>
                     </div>
 
+                    <!-- Model Provenance & Switcher Banner -->
+                    <div id="single-predict-provenance-bar" class="pipeline-alert" style="display: none; margin-bottom: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;"></div>
+
                     <div id="predict-form-grid" class="predict-form-grid">
                         <!-- Populated dynamically with inputs matching feature types -->
                     </div>
@@ -1084,6 +1090,9 @@
                             📂 Load Sample Batch Cases (10 Patients)
                         </button>
                     </div>
+
+                    <!-- Batch Model Provenance & Switcher Banner -->
+                    <div id="batch-predict-provenance-bar" class="pipeline-alert" style="display: none; margin-bottom: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;"></div>
 
                     <div id="batch-dropzone" class="upload-dropzone">
                         <input type="file" id="batch-file-input" accept=".csv" style="display: none;">
@@ -1523,6 +1532,42 @@
                                     🎯 2×2 Diagnostic Concordance & Confusion Matrices (Unaltered Test Set)
                                 </h4>
                                 <div id="pipeline-cm-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px;"></div>
+                            </div>
+
+                            <!-- Seamless Deployment & Inference Bridge Card -->
+                            <div class="card" style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(6, 182, 212, 0.08)); border: 1.5px solid var(--accent-emerald); padding: 22px; margin-top: 24px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; margin-bottom: 16px;">
+                                    <div>
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <span style="font-size: 22px;">🚀</span>
+                                            <h3 style="font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 0;">
+                                                Deploy Pipeline Model to Clinical Predictions
+                                            </h3>
+                                        </div>
+                                        <p id="pipeline-active-deployment-status" style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;">
+                                            Top-ranking model is ready for real-time patient prediction.
+                                        </p>
+                                    </div>
+                                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                                        <button id="pipeline-to-single-predict-btn" class="btn btn-primary">
+                                            🔮 Single Patient Prediction (Step 5) &rarr;
+                                        </button>
+                                        <button id="pipeline-to-batch-predict-btn" class="btn btn-emerald">
+                                            📊 Batch CSV Prediction (Step 6) &rarr;
+                                        </button>
+                                        <button id="pipeline-compare-baseline-btn" class="btn btn-secondary">
+                                            ⚖️ Compare Pipeline vs Baseline
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Side-by-side Pipeline vs Baseline Comparison Panel -->
+                                <div id="pipeline-vs-baseline-panel" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border-color);">
+                                    <h4 style="font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                                        <span>⚖️</span> Empirical Performance Comparison: Pre-existing Baseline vs 7-Step Clinical Pipeline
+                                    </h4>
+                                    <div id="pipeline-vs-baseline-content"></div>
+                                </div>
                             </div>
                         </div>
                     </div>
