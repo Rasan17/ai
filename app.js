@@ -138,6 +138,13 @@
         return model && model.usedFallback ? `${base} ⚠️ linear fallback (not a neural network)` : base;
     }
 
+    // Strict integer seed parsing: parseInt would read "1e6" as 1 and "42.5" as 42, silently using a
+    // different seed from the one typed. Returns null for anything that is not a plain integer.
+    function parseSeed(raw) {
+        const t = String(raw === undefined || raw === null ? '' : raw).trim();
+        return /^-?\d+$/.test(t) ? parseInt(t, 10) : null;
+    }
+
     function fmtR2(v) {
         return typeof v === 'number' && isFinite(v) ? v.toFixed(3) : 'N/A';
     }
@@ -199,9 +206,14 @@
         if (isClassification) {
             return ((b.macroF1 || 0) - (a.macroF1 || 0)) || ((b.rocAuc || 0) - (a.rocAuc || 0)) || ((b.accuracy || 0) - (a.accuracy || 0));
         }
-        const r2a = typeof a.r2 === 'number' ? a.r2 : -Infinity;
-        const r2b = typeof b.r2 === 'number' ? b.r2 : -Infinity;
-        return (r2b - r2a) || ((a.rmse || 0) - (b.rmse || 0));
+        // Regression fallback: higher R² first; if R² is equal or undefined for both (constant test
+        // outcomes), fall back to lower RMSE rather than declaring a tie
+        const r2a = typeof a.r2 === 'number' && isFinite(a.r2) ? a.r2 : null;
+        const r2b = typeof b.r2 === 'number' && isFinite(b.r2) ? b.r2 : null;
+        if (r2a !== null && r2b !== null && r2a !== r2b) return r2b - r2a;
+        if (r2a !== null && r2b === null) return -1;
+        if (r2a === null && r2b !== null) return 1;
+        return (a.rmse || 0) - (b.rmse || 0);
     }
 
     function summariseHeldOutSet(ev) {
@@ -209,7 +221,7 @@
         const notes = [];
         const n = ev.totalSamples || ev.testCount || 0;
         if (n > 0 && n < 30) {
-            notes.push(`Only ${n} test cases: performance estimates are imprecise${ev.accuracyCI ? ` (accuracy 95% CI ${(ev.accuracyCI[0] * 100).toFixed(0)}–${(ev.accuracyCI[1] * 100).toFixed(0)}%)` : ''}. Treat differences between models with caution.`);
+            notes.push(`Only ${n} test cases: performance estimates are imprecise${Array.isArray(ev.accuracyCI) && ev.accuracyCI.length === 2 ? ` (accuracy 95% CI ${(ev.accuracyCI[0] * 100).toFixed(0)}–${(ev.accuracyCI[1] * 100).toFixed(0)}%)` : ''}. Treat differences between models with caution.`);
         }
         if (ev.classesMissingFromTest && ev.classesMissingFromTest.length > 0) {
             notes.push(`Class(es) absent from the test set: ${ev.classesMissingFromTest.map(escapeHtml).join(', ')}. Their recall/F1 cannot be evaluated and are counted as 0 in macro averages.`);
@@ -276,7 +288,10 @@
                 this.threadStatus.style.color = 'var(--accent-emerald)';
                 this.threadStatus.innerText = 'Responsive';
             }
-            if (this.progressBar) this.progressBar.style.width = '5%';
+            if (this.progressBar) {
+                this.progressBar.style.width = '5%';
+                this.progressBar.setAttribute('aria-valuenow', '5');
+            }
             if (this.taskName) this.taskName.innerText = taskDescription;
             if (this.stepCounter) this.stepCounter.innerText = totalSteps > 1 ? `Step 1 of ${totalSteps}` : 'In progress...';
 
@@ -312,7 +327,7 @@
                 }
                 if (this.stuckHint) {
                     this.stuckHint.style.color = 'var(--accent-rose)';
-                    this.stuckHint.innerText = 'Calculations taking longer than expected. Force Stop takes effect at the next checkpoint (between epochs or models); a single tree/regression fit cannot be interrupted mid-computation.';
+                    this.stuckHint.innerText = 'Calculations taking longer than expected. Force Stop takes effect at the end of the current epoch (neural network), tree (Random Forest) or 10 iterations (logistic/ridge); k-NN and Naive Bayes stop between models. A single tree or k-NN scan cannot be interrupted mid-computation.';
                 }
             } else if (gap > 5) {
                 // Elevated compute
@@ -374,6 +389,7 @@
             if (this.progressBar) {
                 const pct = Math.min(100, Math.round((stepIndex / this.totalSteps) * 100));
                 this.progressBar.style.width = `${pct}%`;
+                this.progressBar.setAttribute('aria-valuenow', String(pct));
             }
         }
 
@@ -383,7 +399,10 @@
 
             if (this.badge) this.badge.className = 'monitor-status-badge completed';
             if (this.stateText) this.stateText.innerText = '✓ COMPLETED';
-            if (this.progressBar) this.progressBar.style.width = '100%';
+            if (this.progressBar) {
+                this.progressBar.style.width = '100%';
+                this.progressBar.setAttribute('aria-valuenow', '100');
+            }
             if (this.taskName) this.taskName.innerText = successMessage;
             if (this.stuckHint) {
                 this.stuckHint.style.color = 'var(--accent-cyan)';
@@ -834,7 +853,6 @@
         if (DOM.scopeMulti) DOM.scopeMulti.addEventListener('change', () => setModelScope('multi'));
         if (DOM.scopeAll) DOM.scopeAll.addEventListener('change', () => setModelScope('all'));
         if (DOM.scopeSingleLabel) DOM.scopeSingleLabel.addEventListener('click', () => setModelScope('single'));
-        if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.classList.remove('active-multi');
         if (DOM.scopeMultiLabel) DOM.scopeMultiLabel.addEventListener('click', () => setModelScope('multi'));
         if (DOM.scopeAllLabel) DOM.scopeAllLabel.addEventListener('click', () => setModelScope('all'));
 
@@ -1079,15 +1097,14 @@
 
     async function loadSampleTestingCohort() {
         try {
-            let filename = 'medical_batch_unseen_cases.csv';
-            let label = 'Neurosurgical External Validation Cohort';
-            if (AppState.fileName && AppState.fileName.includes('recovery')) {
-                filename = 'medical_recovery_test_cohort.csv';
-                label = 'Functional Recovery Test Cohort';
-            } else if (AppState.fileName && (AppState.fileName.includes('universal') || AppState.fileName.includes('cardio'))) {
-                filename = 'universal_medical_test_cohort.csv';
-                label = 'Cardiometabolic Risk Test Cohort';
+            // Choose the validation file from the built-in cohort actually loaded, not from the file name
+            const sample = AppState.sampleCohortFile ? SAMPLE_COHORTS[AppState.sampleCohortFile] : null;
+            if (!sample) {
+                alert("The built-in validation cohort only matches the built-in sample datasets. For your own data, please upload its separate testing CSV.");
+                return;
             }
+            const filename = sample.testFile;
+            const label = sample.testLabel;
 
             const resp = await fetch(filename);
             if (!resp.ok) throw new Error("Could not load " + filename);
@@ -1126,10 +1143,17 @@
             if (AppState.columnConfigs) {
                 const targetCol = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
                 if (targetCol) {
-                    const hasTarget = AppState.separateTestRawRows[0] && (targetCol in AppState.separateTestRawRows[0]);
+                    // Parsed rows carry every header as a key, so the first row's keys are the file's header
+                    const testHeaders = Object.keys(AppState.separateTestRawRows[0] || {});
+                    const hasTarget = testHeaders.includes(targetCol);
                     targetStatus = hasTarget 
                         ? `<span style="color: var(--accent-emerald); font-weight: 600;">✓ Target '${escapeHtml(targetCol)}' found</span>`
                         : `<span style="color: var(--accent-amber); font-weight: 600;">⚠️ Target '${escapeHtml(targetCol)}' not in header!</span>`;
+                    const predictors = Object.keys(AppState.columnConfigs).filter(c => AppState.columnConfigs[c].role === 'feature');
+                    const missingPredictors = predictors.filter(c => !testHeaders.includes(c));
+                    if (missingPredictors.length > 0) {
+                        targetStatus += `<br><span style="color: var(--accent-amber); font-weight: 600;">⚠️ Predictor column(s) missing from the testing file (would be filled from training statistics for every row): ${escapeHtml(missingPredictors.join(', '))}</span>`;
+                    }
                 }
             }
 
@@ -1173,8 +1197,21 @@
         AppState.theme = AppState.theme === 'dark' ? 'light' : 'dark';
         document.documentElement.setAttribute('data-theme', AppState.theme);
         DOM.themeToggle.innerHTML = AppState.theme === 'dark' ? '☀️ Light' : '🌙 Dark';
-        // Redraw active charts to adjust gridline contrast
-        if (AppState.charts.loss) AppState.charts.loss.update();
+        // Re-apply the theme palette to the existing chart (colours are set per option, not via CSS)
+        if (AppState.charts.loss) {
+            const isDark = AppState.theme === 'dark';
+            const grid = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
+            const tick = isDark ? '#94a3b8' : '#64748b';
+            const o = AppState.charts.loss.options;
+            ['x', 'y'].forEach(ax => {
+                o.scales[ax].grid.color = grid;
+                o.scales[ax].ticks.color = tick;
+                o.scales[ax].title.color = tick;
+            });
+            o.plugins.legend.labels.color = isDark ? '#f8fafc' : '#0f172a';
+            if (o.plugins.title) o.plugins.title.color = tick;
+            AppState.charts.loss.update('none');
+        }
     }
 
     window.launch7StepPipeline = async function(event) {
@@ -1207,7 +1244,9 @@
                 alert("Please upload a CSV file or load a sample dataset first.");
                 return;
             }
-            if (num > 3 && !AppState.imputedData) {
+            // Step 4 trains from Step 3's imputed data; Steps 5-6 only need a deployed model (which may
+            // come from the 7-step pipeline without the standard imputation step having been run)
+            if (num === 4 && !AppState.imputedData) {
                 alert("Please complete the Data Imputation step first.");
                 return;
             }
@@ -1223,6 +1262,7 @@
             const s = tab.dataset.step;
             const isActive = String(s) === String(stepNum);
             tab.classList.toggle('active', isActive);
+            if (isActive) tab.setAttribute('aria-current', 'step'); else tab.removeAttribute('aria-current');
             const num = parseInt(s, 10);
             const targetNum = parseInt(stepNum, 10);
             if (!isNaN(num) && !isNaN(targetNum) && num < targetNum) {
@@ -1263,12 +1303,21 @@
         reader.readAsText(file);
     }
 
+    // Known built-in cohorts and their matching validation (testing) files
+    const SAMPLE_COHORTS = {
+        'universal_medical_cohort.csv': { id: 'cardio', testFile: 'universal_medical_test_cohort.csv', testLabel: 'Cardiometabolic Risk Test Cohort' },
+        'medical_shunt_cohort.csv': { id: 'shunt', testFile: 'medical_batch_unseen_cases.csv', testLabel: 'Neurosurgical External Validation Cohort' },
+        'medical_recovery_score.csv': { id: 'recovery', testFile: 'medical_recovery_test_cohort.csv', testLabel: 'Functional Recovery Test Cohort' }
+    };
+
     async function loadSampleDataset(filename, displayName) {
         try {
             const resp = await fetch(filename);
             if (!resp.ok) throw new Error("Could not load sample dataset file.");
             const text = await resp.text();
             processCSVContent(text, displayName);
+            // Recorded after processCSVContent (which resets it): identifies the built-in cohort explicitly
+            AppState.sampleCohortFile = SAMPLE_COHORTS[filename] ? filename : null;
         } catch (err) {
             alert(`Error loading sample dataset: ${err.message}`);
         }
@@ -1314,6 +1363,11 @@
         AppState.batchPredictions = null;
         AppState.deployedSource = null;
         AppState.deployedPipelineModel = null;
+        AppState.baselinePrepMeta = null;
+        if (AppState.charts.loss) {
+            AppState.charts.loss.destroy();
+            AppState.charts.loss = null;
+        }
         AppState.pipeline = createEmptyPipelineState(AppState.pipeline ? AppState.pipeline.seed : 42);
 
         if (DOM.imputeAuditBox) DOM.imputeAuditBox.innerHTML = '';
@@ -1345,8 +1399,12 @@
         try {
             const parsed = DataEngine.parseCSV(csvText);
             resetDerivedState();
+            AppState.sampleCohortFile = null; // set again by loadSampleDataset for built-in cohorts
             AppState.parsedData = parsed;
             AppState.fileName = name;
+            if (parsed.raggedRowCount > 0) {
+                alert(`${parsed.raggedRowCount} row(s) have a different number of cells from the header row. Short rows were padded with blanks (treated as missing) and extra cells were ignored. Please check the file's delimiters and quoting.`);
+            }
 
             const analysis = DataEngine.analyzeColumns(parsed.headers, parsed.rows);
             AppState.columnAnalysis = analysis;
@@ -1785,6 +1843,14 @@
                 if (hpCustomRadio) hpCustomRadio.checked = true;
                 if (cardCustomRow) cardCustomRow.style.display = 'flex';
                 if (hpCustomWrap) hpCustomWrap.style.display = 'flex';
+                // "Custom" still showing 42 would be indistinguishable from Default: propose a random seed
+                const currentVal = (cardInput && cardInput.value) || (hpInput && hpInput.value) || '42';
+                if (String(currentVal).trim() === '42') {
+                    const newSeed = Math.floor(Math.random() * 90000) + 10000;
+                    if (cardInput) cardInput.value = newSeed;
+                    if (hpInput) hpInput.value = newSeed;
+                    showSeedToast(`Custom seed for ${MODEL_INFO[mId]?.name || mId}: ${newSeed} (edit if required)`);
+                }
                 if (cardInput && (!cardInput.value || cardInput.value === '42')) cardInput.focus();
                 else if (hpInput) hpInput.focus();
             }
@@ -1857,6 +1923,10 @@
                     if (splitInput) splitInput.value = 42;
                 } else {
                     if (splitCustomWrap) splitCustomWrap.style.display = 'flex';
+                    if (splitInput && String(splitInput.value).trim() === '42') {
+                        splitInput.value = Math.floor(Math.random() * 90000) + 10000;
+                        showSeedToast(`Custom split seed: ${splitInput.value} (edit if required)`);
+                    }
                     if (splitInput) splitInput.focus();
                 }
             });
@@ -1974,10 +2044,12 @@
             const cardInput = document.getElementById(`${modelId}-card-seed-input`);
             const hpInput = document.getElementById(`${modelId}-seed-input`);
             const inputVal = (cardInput && cardInput.value !== '') ? cardInput.value : (hpInput ? hpInput.value : '');
-            if (inputVal !== '' && !isNaN(parseInt(inputVal, 10))) {
-                seedVal = parseInt(inputVal, 10);
-            } else {
-                seedVal = 42;
+            const parsed = parseSeed(inputVal);
+            seedVal = parsed !== null ? parsed : 42;
+            // Keep the on-screen seed identical to the seed actually used
+            if (parsed === null) {
+                if (cardInput) cardInput.value = 42;
+                if (hpInput) hpInput.value = 42;
             }
         }
         hp.seed = seedVal;
@@ -2023,6 +2095,12 @@
                 });
             }
 
+            // Clear any loss curve from a previous run so the chart never shows another model's history
+            if (AppState.charts.loss) {
+                AppState.charts.loss.destroy();
+                AppState.charts.loss = null;
+            }
+
             const testedResults = [];
 
             if (isOptionA) {
@@ -2040,11 +2118,9 @@
                 let splitSeed = 42;
                 if (!isSplitDefault) {
                     const splitSeedInput = document.getElementById('split-seed-input');
-                    if (splitSeedInput && splitSeedInput.value !== '' && !isNaN(parseInt(splitSeedInput.value, 10))) {
-                        splitSeed = parseInt(splitSeedInput.value, 10);
-                    } else {
-                        splitSeed = 42;
-                    }
+                    const parsed = splitSeedInput ? parseSeed(splitSeedInput.value) : null;
+                    splitSeed = parsed !== null ? parsed : 42;
+                    if (parsed === null && splitSeedInput) splitSeedInput.value = 42; // show the seed actually used
                 }
 
                 // LEAK-FREE OPTION A: split the raw patient records FIRST, then fit imputation, encoding and
@@ -2104,7 +2180,7 @@
                     if (mId === 'nn') {
                         // Test split is never shown to the model: the NN carves its own validation split from the training data
                         await valModel.fit(split.trainX, split.trainY, null, null, (epoch, total, logs) => {
-                            if (watchdog && watchdog.aborted) return;
+                            if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Internal Val Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
                             if (watchdog && (epoch % 4 === 0 || epoch === total)) {
@@ -2113,14 +2189,14 @@
                         });
                     } else if (mId === 'ensemble') {
                         await valModel.fit(split.trainX, split.trainY, null, null, (curr, total, info) => {
-                            if (watchdog && watchdog.aborted) return;
+                            if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})...</span>`;
                             if (watchdog) {
                                 watchdog.tick(i + 1, `${mInfo.name}: Sub-Model ${curr}/${total} (${info.stage || ''})`);
                             }
                         });
                     } else {
-                        valModel.fit(split.trainX, split.trainY);
+                        await fitWithYields(valModel, split.trainX, split.trainY, watchdog);
                     }
 
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
@@ -2168,7 +2244,7 @@
 
                         if (mId === 'nn') {
                             await fullModel.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
-                                if (watchdog && watchdog.aborted) return;
+                                if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                                 DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Epoch ${epoch}/${total} &mdash; Loss: ${logs.loss.toFixed(4)}</span>`;
                                 if (watchdog && (epoch % 4 === 0 || epoch === total)) {
                                     watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Epoch ${epoch}/${total}`);
@@ -2176,14 +2252,14 @@
                             });
                         } else if (mId === 'ensemble') {
                             await fullModel.fit(prep.X, prep.y, null, null, (curr, total, info) => {
-                                if (watchdog && watchdog.aborted) return;
+                                if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                                 DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">[${i + 1}/${modelsToTest.length}] ${mInfo.name} 100% Retrain: Base ${curr}/${total} (${info.stage || ''})...</span>`;
                                 if (watchdog) {
                                     watchdog.tick(i + 1, `${mInfo.name} 100% Retrain: Base ${curr}/${total} (${info.stage || ''})`);
                                 }
                             });
                         } else {
-                            fullModel.fit(prep.X, prep.y);
+                            await fitWithYields(fullModel, prep.X, prep.y, watchdog);
                         }
                         activeModelInstance = fullModel;
                     }
@@ -2253,7 +2329,7 @@
                     if (mId === 'nn') {
                         // Dataset (ii) is never shown to the model: the NN carves its own validation split from Dataset (i)
                         await model.fit(prep.X, prep.y, null, null, (epoch, total, logs) => {
-                            if (watchdog && watchdog.aborted) return;
+                            if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Epoch ${epoch}/${total} &mdash; Train Loss: ${logs.loss.toFixed(4)} ${logs.val_loss !== undefined ? `| Internal Val Loss: ${logs.val_loss.toFixed(4)}` : ''}</span>`;
                             if (modelsToTest.length === 1) updateLossChart(epoch, logs.loss, logs.val_loss);
                             if (watchdog && (epoch % 4 === 0 || epoch === total)) {
@@ -2262,14 +2338,14 @@
                         });
                     } else if (mId === 'ensemble') {
                         await model.fit(prep.X, prep.y, null, null, (curr, total, info) => {
-                            if (watchdog && watchdog.aborted) return;
+                            if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stops training at this epoch/tree
                             DOM.trainStatus.innerHTML = `<span style="color: var(--accent-purple);">[${i + 1}/${modelsToTest.length}] ${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})...</span>`;
                             if (watchdog) {
                                 watchdog.tick(i + 1, `${mInfo.name}: Base ${curr}/${total} (${info.stage || ''})`);
                             }
                         });
                     } else {
-                        model.fit(prep.X, prep.y);
+                        await fitWithYields(model, prep.X, prep.y, watchdog);
                     }
 
                     if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
@@ -2317,6 +2393,9 @@
             AppState.deployedModelId = champion.modelId;
             AppState.evalResults = champion.evalRes;
             AppState.selectedModelId = champion.modelId;
+            // Remember the encoding the Step 4 models use, then mark the standard workflow as the source
+            AppState.baselinePrepMeta = AppState.prepMeta;
+            markBaselineDeployed();
 
             if (watchdog) {
                 watchdog.finish(`Tournament Complete: Evaluated ${testedResults.length} Models. Top-ranked on ${rankingMetricLabel(prep.isClassification)}: ${champion.info.name}`);
@@ -2378,6 +2457,20 @@
     function syncRankingSelectors(isClassification) {
         const value = `${isClassification ? 'clf' : 'reg'}:${rankingMetricKey(isClassification)}`;
         document.querySelectorAll('.ranking-metric-select').forEach(sel => { sel.value = value; });
+    }
+
+    // Fits a non-neural model. Random Forest and logistic/ridge regression yield to the browser between
+    // trees/iterations so the UI repaints and Force Stop can interrupt them; other models fit synchronously.
+    async function fitWithYields(model, X, y, watchdog) {
+        if (typeof model.fitAsync === 'function') {
+            await model.fitAsync(X, y, {
+                onYield: () => {
+                    if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
+                }
+            });
+        } else {
+            model.fit(X, y);
+        }
     }
 
     // Re-sorts already-computed results after the ranking metric changes (no retraining, no redeployment)
@@ -2442,7 +2535,14 @@
                     }
                 },
                 plugins: {
-                    legend: { labels: { color: isDark ? '#f8fafc' : '#0f172a' } }
+                    legend: { labels: { color: isDark ? '#f8fafc' : '#0f172a' } },
+                    title: {
+                        display: true,
+                        // The optional 100% retrain is not plotted
+                        text: 'Evaluation-phase fit (single neural network run); 100% retrain not plotted',
+                        color: isDark ? '#94a3b8' : '#64748b',
+                        font: { size: 11, weight: 'normal' }
+                    }
                 }
             }
         });
@@ -2468,6 +2568,7 @@
         AppState.trainedModel = targetItem.model;
         AppState.evalResults = targetItem.evalRes;
         AppState.selectedModelId = modelId;
+        markBaselineDeployed();
 
         // Re-render dashboard to refresh badges and active buttons
         renderEvaluationDashboard();
@@ -2477,8 +2578,20 @@
             renderSinglePredictionForm();
         }
 
-        const mInfo = MODEL_INFO[modelId] || { name: modelId.toUpperCase() };
-        alert(`✓ Model Deployed: "${mInfo.name}" is now the active predictor for Single Prediction (Step 5) and Batch Prediction (Step 6).`);
+        showSeedToast(`✓ Deployed "${displayModelName(modelId, targetItem.model)}" as the active predictor for Steps 5 & 6`);
+    }
+
+    // A Step 4 (standard workflow) model is now active: record that, and restore the encoding it was
+    // trained with (a previously deployed pipeline model may have replaced AppState.prepMeta)
+    function markBaselineDeployed() {
+        AppState.deployedSource = 'standard';
+        AppState.deployedPipelineModel = null;
+        if (AppState.baselinePrepMeta) AppState.prepMeta = AppState.baselinePrepMeta;
+        if (typeof updatePipelineActiveDeploymentStatus === 'function') updatePipelineActiveDeploymentStatus();
+        if (typeof updatePredictionProvenanceBar === 'function') updatePredictionProvenanceBar();
+        if (AppState.pipeline && AppState.pipeline.benchmarkResults && AppState.pipeline.benchmarkResults.length > 0 && DOM.pipelineLeaderboardContainer) {
+            renderPipelineLeaderboardOnly();
+        }
     }
     window.deployTestedModel = deployTestedModel;
 
@@ -2487,7 +2600,9 @@
         if (existing) existing.remove();
         const toast = document.createElement('div');
         toast.className = 'seed-toast';
-        toast.innerHTML = `<span>📋</span> <span>${msg}</span>`;
+        toast.setAttribute('role', 'status');
+        toast.innerHTML = '<span>📋</span> <span></span>';
+        toast.lastElementChild.textContent = msg;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 2600);
     }
@@ -2635,7 +2750,7 @@
 
                     const rankBadge = isChampion ? '🥇 #1' : (idx === 1 ? '🥈 #2' : (idx === 2 ? '🥉 #3' : `#${idx + 1}`));
                     const scoreDisplay = rEval.isClassification 
-                        ? `<strong style="color: var(--accent-cyan); font-size: 14.5px;">${(rEval.accuracy * 100).toFixed(1)}%</strong>${rEval.accuracyCI ? `<div style="font-size: 10px; color: var(--text-muted);">95% CI ${(rEval.accuracyCI[0] * 100).toFixed(0)}–${(rEval.accuracyCI[1] * 100).toFixed(0)}%</div>` : ''}`
+                        ? `<strong style="color: var(--accent-cyan); font-size: 14.5px;">${(rEval.accuracy * 100).toFixed(1)}%</strong>${Array.isArray(rEval.accuracyCI) && rEval.accuracyCI.length === 2 ? `<div style="font-size: 10px; color: var(--text-muted);">95% CI ${(rEval.accuracyCI[0] * 100).toFixed(0)}–${(rEval.accuracyCI[1] * 100).toFixed(0)}%</div>` : ''}`
                         : `<strong style="color: var(--accent-cyan); font-size: 14.5px;">R²: ${fmtR2(rEval.r2)}</strong>`;
 
                     const rocAucDisplay = rEval.isClassification 
@@ -2875,7 +2990,7 @@
                     <div class="metric-pill-card">
                         <span class="m-title">${testAccLabel}</span>
                         <span class="m-val">${(evalRes.accuracy * 100).toFixed(1)}%</span>
-                        ${evalRes.accuracyCI ? `<span style="font-size: 11px; color: var(--text-muted);">95% CI ${(evalRes.accuracyCI[0] * 100).toFixed(1)}–${(evalRes.accuracyCI[1] * 100).toFixed(1)}% (Wilson)</span>` : ''}
+                        ${Array.isArray(evalRes.accuracyCI) && evalRes.accuracyCI.length === 2 ? `<span style="font-size: 11px; color: var(--text-muted);">95% CI ${(evalRes.accuracyCI[0] * 100).toFixed(1)}–${(evalRes.accuracyCI[1] * 100).toFixed(1)}% (Wilson)</span>` : ''}
                     </div>
                     ${typeof evalRes.balancedAccuracy === 'number' ? `
                     <div class="metric-pill-card">
@@ -3141,6 +3256,14 @@
     // STEP 6: BATCH PREDICTION FACILITY
     // =========================================================================
     function handleBatchFileUpload(file) {
+        if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') {
+            alert("Please upload a valid .csv file for batch prediction.");
+            return;
+        }
+        if (file.size > 50 * 1024 * 1024) {
+            alert("The batch file exceeds 50 MB. Please split it into smaller files (all processing happens in the browser).");
+            return;
+        }
         const reader = new FileReader();
         reader.onload = (e) => {
             processBatchCSV(e.target.result, file.name);
@@ -3271,7 +3394,7 @@
             const line = headers.map(h => {
                 let val = String(row[h] !== undefined ? row[h] : '');
                 // Prevent spreadsheet formula execution from cell contents
-                if (/^[=+\-@]/.test(val) && isNaN(Number(val))) val = `'${val}`;
+                if (/^[=+\-@\t\r]/.test(val) && isNaN(Number(val))) val = `'${val}`;
                 if (/[",\r\n]/.test(val)) {
                     val = `"${val.replace(/"/g, '""')}"`;
                 }
@@ -3329,6 +3452,7 @@
             DOM.pipelineSubPills.forEach(pill => {
                 const s = parseInt(pill.dataset.substep, 10);
                 pill.classList.toggle('active', s === substepNum);
+                if (s === substepNum) pill.setAttribute('aria-current', 'step'); else pill.removeAttribute('aria-current');
                 if (s < substepNum) pill.classList.add('completed');
             });
         }
@@ -3382,8 +3506,9 @@
         }
 
         // Read configuration
-        const userSeed = DOM.pipelineSeedInput ? parseInt(DOM.pipelineSeedInput.value, 10) : 42;
-        AppState.pipeline.seed = isNaN(userSeed) ? 42 : userSeed;
+        const userSeed = DOM.pipelineSeedInput ? parseSeed(DOM.pipelineSeedInput.value) : 42;
+        AppState.pipeline.seed = userSeed === null ? 42 : userSeed;
+        if (DOM.pipelineSeedInput) DOM.pipelineSeedInput.value = AppState.pipeline.seed; // show the seed actually used
         AppState.pipeline.evalSeed = AppState.pipeline.seed;
         if (DOM.pipelineEvalSeedInput) DOM.pipelineEvalSeedInput.value = AppState.pipeline.seed;
 
@@ -3400,13 +3525,16 @@
             return;
         }
 
-        // Perform 80/20 Train/Test split (stratified by outcome class for classification)
+        // Train/test split at the selected ratio (default 80/20; stratified by outcome class for classification)
+        const ratioEl = document.getElementById('pipeline-split-ratio');
+        const pipeTrainRatio = ratioEl && !isNaN(parseFloat(ratioEl.value)) ? Math.min(0.9, Math.max(0.6, parseFloat(ratioEl.value))) : 0.8;
+        AppState.pipeline.trainRatio = pipeTrainRatio;
         const targetVals = usableRows.map(r => String(r[targetCol]).trim());
 
         const splitResult = DataEngine.trainTestSplit(
             usableRows,
             targetVals,
-            0.8,
+            pipeTrainRatio,
             isClassification,
             AppState.pipeline.seed
         );
@@ -3566,7 +3694,7 @@
                         <th>Continuous Feature</th>
                         <th>Sample Mean</th>
                         <th>Std Deviation</th>
-                        <th>Skewness (g₁)</th>
+                        <th>Skewness (adjusted Fisher–Pearson G₁)</th>
                         <th>Skewness Screen (rule of thumb)</th>
                         <th>Correlation Method</th>
                     </tr>
@@ -3700,7 +3828,7 @@
                     <td><span class="pill pill-${item.type}">${item.type}</span></td>
                     <td style="font-size: 12px; color: var(--text-secondary);">${item.dummyCount}</td>
                     <td>${item.rSquared}</td>
-                    <td><strong style="color: ${isHigh ? 'var(--accent-rose)' : 'var(--accent-emerald)'}; font-size: 13.5px;">${item.vif}</strong></td>
+                    <td><strong style="color: ${isHigh ? 'var(--accent-rose)' : 'var(--accent-emerald)'}; font-size: 13.5px;">${item.vif >= 999 ? '≥ 999 (≈ perfect collinearity)' : item.vif}</strong></td>
                     <td>
                         <span class="${isHigh ? 'vif-badge-danger' : 'vif-badge-ok'}">
                             ${isHigh ? '⚠️ VIF > 5.0 (High Multicollinearity)' : '✓ VIF ≤ 5.0 (Acceptable)'}
@@ -4125,8 +4253,9 @@
             return;
         }
 
-        const userSeed = DOM.pipelineEvalSeedInput ? parseInt(DOM.pipelineEvalSeedInput.value, 10) : 42;
-        AppState.pipeline.evalSeed = isNaN(userSeed) ? 42 : userSeed;
+        const userSeed = DOM.pipelineEvalSeedInput ? parseSeed(DOM.pipelineEvalSeedInput.value) : 42;
+        AppState.pipeline.evalSeed = userSeed === null ? 42 : userSeed;
+        if (DOM.pipelineEvalSeedInput) DOM.pipelineEvalSeedInput.value = AppState.pipeline.evalSeed;
 
         if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.disabled = true;
         if (DOM.pipelineResultsContainer) DOM.pipelineResultsContainer.style.display = 'none';
@@ -4167,7 +4296,11 @@
 
             const targetCol = AppState.pipeline.targetCol;
             const isClassification = AppState.pipeline.columnConfigs[targetCol]?.type !== 'continuous';
-            const numClasses = isClassification ? Array.from(new Set(AppState.pipeline.balancedTrainRows.map(r => String(r[targetCol])))).length : 1;
+            // Model plan: Naive Bayes is classification-only, so regression runs 4 models, not 5
+            const plannedModels = isClassification ? ['knn', 'nb', 'nn', 'glm', 'ensemble'] : ['knn', 'nn', 'glm', 'ensemble'];
+            const totalModels = plannedModels.length;
+            const stepOf = id => plannedModels.indexOf(id) + 1;
+            if (watchdog) watchdog.totalSteps = totalModels;
 
             // 1. Prepare standard full dataset (for DNN, GLM, Ensemble)
             const fullConfigs = {};
@@ -4180,6 +4313,8 @@
                 activeCols,
                 targetCol
             );
+            // Single source for the class count: the encoder's class list
+            const numClasses = isClassification ? fullPrep.targetClasses.length : 1;
 
             // Transform unaltered Test set using full training metadata
             const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
@@ -4205,7 +4340,7 @@
             const benchmarkList = [];
 
             // A. k-NN Model (Strict constraint: Bottom 30% features dropped)
-            if (watchdog) watchdog.tick(1, "Training Model 1/5: k-NN (Top 70% features only)...");
+            if (watchdog) watchdog.tick(stepOf('knn'), `Training Model ${stepOf('knn')}/${totalModels}: k-NN (Top 70% features only)...`);
             await new Promise(r => setTimeout(r, 60));
             const knn = new KNNModel(isClassification, 5, 'euclidean', 'distance', AppState.pipeline.evalSeed);
             knn.fit(top70Prep.X, top70Prep.y);
@@ -4216,7 +4351,7 @@
 
             // B. Gaussian Naive Bayes (Strict constraint: Bottom 30% features dropped)
             if (isClassification) {
-                if (watchdog) watchdog.tick(2, "Training Model 2/5: Naive Bayes (Top 70% features only)...");
+                if (watchdog) watchdog.tick(stepOf('nb'), `Training Model ${stepOf('nb')}/${totalModels}: Naive Bayes (Top 70% features only)...`);
                 await new Promise(r => setTimeout(r, 60));
                 const nb = new GaussianNaiveBayes(1e-4, 'empirical', AppState.pipeline.evalSeed);
                 nb.fit(top70Prep.X, top70Prep.y);
@@ -4227,7 +4362,7 @@
             }
 
             // C. Deep Neural Network (Strict constraint: L2 Weight Decay + Dropout)
-            if (watchdog) watchdog.tick(3, "Training Model 3/5: Neural Network (MLP; L2 + dropout + early stopping)...");
+            if (watchdog) watchdog.tick(stepOf('nn'), `Training Model ${stepOf('nn')}/${totalModels}: Neural Network (MLP; L2 + dropout + early stopping)...`);
             await new Promise(r => setTimeout(r, 60));
             const dnnParams = {
                 epochs: 25,
@@ -4243,8 +4378,9 @@
             const dnn = new DeepNeuralNetwork(isClassification, numClasses, dnnParams);
             // The test split is never shown to the model: the NN carves its own validation split from the training rows
             await dnn.fit(fullPrep.X, fullPrep.y, null, null, (ep, tot) => {
+                if (watchdog && watchdog.aborted) throw new Error("Training aborted by user."); // stop at this epoch
                 if (watchdog && (ep % 4 === 0 || ep === tot)) {
-                    watchdog.tick(3, `Training Model 3/5: Neural Network (Epoch ${ep}/${tot})...`);
+                    watchdog.tick(stepOf('nn'), `Training Model ${stepOf('nn')}/${totalModels}: Neural Network (Epoch ${ep}/${tot})...`);
                 }
             });
             const dnnEval = ModelEngine.evaluate(dnn, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
@@ -4255,7 +4391,7 @@
             benchmarkList.push({ id: 'nn', name: displayModelName('nn', dnn), model: dnn, prep: fullPrep, eval: dnnEval });
 
             // D. Logistic / Ridge Regression (Strict constraint: L2 penalization against collinearity)
-            if (watchdog) watchdog.tick(4, "Training Model 4/5: Logistic / Ridge Regression (L2 lambda = 0.02)...");
+            if (watchdog) watchdog.tick(stepOf('glm'), `Training Model ${stepOf('glm')}/${totalModels}: Logistic / Ridge Regression (L2 lambda = 0.02)...`);
             await new Promise(r => setTimeout(r, 60));
             const glm = new GeneralizedLinearModel(
                 isClassification,
@@ -4266,25 +4402,26 @@
                 'momentum',
                 AppState.pipeline.evalSeed
             );
-            glm.fit(fullPrep.X, fullPrep.y);
+            await fitWithYields(glm, fullPrep.X, fullPrep.y, watchdog);
             const glmEval = ModelEngine.evaluate(glm, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
             glmEval.featuresUsed = `All Surviving (${activeCols.length} features)`;
             glmEval.constraintNote = "Applied Ridge L2 penalization (λ = 0.02) to stabilize against minor collinearity.";
             benchmarkList.push({ id: 'glm', name: 'Logistic / Ridge Regression', model: glm, prep: fullPrep, eval: glmEval });
 
             // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
-            if (watchdog) watchdog.tick(5, "Training Model 5/5: Voting Ensemble...");
+            if (watchdog) watchdog.tick(stepOf('ensemble'), `Training Model ${stepOf('ensemble')}/${totalModels}: Voting Ensemble...`);
             await new Promise(r => setTimeout(r, 60));
             const ensembleConfig = {
                 voting: 'soft',
-                baseModels: isClassification ? ['nn', 'rf', 'glm'] : ['rf', 'glm', 'knn'],
+                // Same base models for classification and regression (consistent with the Step 4 default)
+                baseModels: ['nn', 'rf', 'glm'],
                 capacity: 'balanced',
                 seed: AppState.pipeline.evalSeed
             };
             const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
             await ensemble.fit(fullPrep.X, fullPrep.y, null, null, (curr, tot, info) => {
                 if (watchdog) {
-                    watchdog.tick(5, `Training Model 5/5: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`);
+                    watchdog.tick(stepOf('ensemble'), `Training Model ${stepOf('ensemble')}/${totalModels}: Ensemble (${info.stage || `Base ${curr}/${tot}`})...`);
                 }
             });
             const ensEval = ModelEngine.evaluate(ensemble, fullTestTrans.X, fullTestTrans.y, isClassification, fullPrep.targetClasses, pipeEvalOptions);
@@ -4323,7 +4460,7 @@
 
         let tableHtml = `
             <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                Ranked by <strong>${escapeHtml(rankingMetricLabel(isClassification))}</strong> on the held-out 20% test split (change the ranking metric above).
+                Ranked by <strong>${escapeHtml(rankingMetricLabel(isClassification))}</strong> on the held-out ${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)}% test split (change the ranking metric above).
                 The top model is selected on these same test cases, so its score is optimistically biased; confirm on an independent cohort.
             </p>`;
         tableHtml += `
@@ -4435,10 +4572,16 @@
                     </div>
                 `;
             } else if (cm && cm.length === 2) {
-                const tn = cm[0][0];
-                const fp = cm[0][1];
-                const fn = cm[1][0];
-                const tp = cm[1][1];
+                // Positive class from the evaluation result (set in Step 2); index lookup keeps TP/FN/FP/TN
+                // correct even if the class order ever differs from [negative, positive]
+                const posLabel = ev.positiveClass !== null && ev.positiveClass !== undefined ? ev.positiveClass : targetClasses[1];
+                const posIdx = targetClasses.indexOf(posLabel) === 0 ? 0 : 1;
+                const negIdx = 1 - posIdx;
+                const negLabel = targetClasses[negIdx];
+                const tn = cm[negIdx][negIdx];
+                const fp = cm[negIdx][posIdx];
+                const fn = cm[posIdx][negIdx];
+                const tp = cm[posIdx][posIdx];
                 // Undefined ratios (zero denominator) are shown as N/A rather than 0%
                 const sens = (tp + fn) > 0 ? ((tp / (tp + fn)) * 100).toFixed(1) + '%' : 'N/A';
                 const spec = (tn + fp) > 0 ? ((tn / (tn + fp)) * 100).toFixed(1) + '%' : 'N/A';
@@ -4455,25 +4598,25 @@
                             ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
                         </div>
                         <div style="font-size: 10.5px; color: var(--text-muted); margin-bottom: 6px;">
-                            "Positive" = <strong>${escapeHtml(targetClasses[1])}</strong> (the positive/event class chosen in Step 2); check this matches your clinical event of interest.
+                            "Positive" = <strong>${escapeHtml(posLabel)}</strong> (the positive/event class chosen in Step 2); check this matches your clinical event of interest.
                         </div>
                         <div class="cm-table-wrapper" style="margin-bottom: 10px;">
                             <table class="cm-table">
                                 <thead>
                                     <tr>
                                         <th>Actual \\ Pred</th>
-                                        <th>Negative (${escapeHtml(targetClasses[0])})</th>
-                                        <th>Positive (${escapeHtml(targetClasses[1])})</th>
+                                        <th>Negative (${escapeHtml(negLabel)})</th>
+                                        <th>Positive (${escapeHtml(posLabel)})</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr>
-                                        <td><strong>Negative (${escapeHtml(targetClasses[0])})</strong></td>
+                                        <td><strong>Negative (${escapeHtml(negLabel)})</strong></td>
                                         <td class="cm-cell-tn">TN: <strong>${tn}</strong></td>
                                         <td class="cm-cell-fp">FP: <strong>${fp}</strong></td>
                                     </tr>
                                     <tr>
-                                        <td><strong>Positive (${escapeHtml(targetClasses[1])})</strong></td>
+                                        <td><strong>Positive (${escapeHtml(posLabel)})</strong></td>
                                         <td class="cm-cell-fn">FN: <strong>${fn}</strong></td>
                                         <td class="cm-cell-tp">TP: <strong>${tp}</strong></td>
                                     </tr>
@@ -4485,6 +4628,42 @@
                             <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">Spec: <strong>${spec}</strong></div>
                             <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">PPV: <strong>${ppv}</strong></div>
                             <div style="background: var(--bg-surface); padding: 4px; border-radius: 4px;">NPV: <strong>${npv}</strong></div>
+                        </div>
+                    </div>
+                `;
+            } else if (cm && cm.length > 2) {
+                // Multiclass outcome: full K×K matrix (rows = actual, columns = predicted)
+                cmHtml += `
+                    <div class="card" style="padding: 16px; background: var(--bg-surface-subtle); border: 1px solid var(--border-color);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                            <strong style="font-size: 13.5px; color: var(--text-primary);">${escapeHtml(item.name)}</strong>
+                            <span class="pill pill-continuous" style="font-size: 10.5px;">Acc: ${(ev.accuracy * 100).toFixed(1)}%</span>
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+                            ${escapeHtml(ev.featuresUsed)} &bull; ${escapeHtml(ev.constraintNote)}
+                        </div>
+                        <div class="cm-table-wrapper" style="margin-bottom: 10px; overflow-x: auto;">
+                            <table class="cm-table" style="font-size: 11.5px;">
+                                <thead>
+                                    <tr>
+                                        <th>Actual \\ Pred</th>
+                                        ${targetClasses.map(c => `<th>${escapeHtml(c)}</th>`).join('')}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${targetClasses.map((actual, r) => `
+                                        <tr>
+                                            <th style="text-align: left;">${escapeHtml(actual)}</th>
+                                            ${targetClasses.map((_, c) => `<td class="${r === c ? 'cm-cell-hit' : 'cm-cell-miss'}">${cm[r] && cm[r][c] !== undefined ? cm[r][c] : 0}</td>`).join('')}
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">
+                            Macro F1: <strong>${(ev.macroF1 * 100).toFixed(1)}%</strong> &bull;
+                            Balanced accuracy: <strong>${typeof ev.balancedAccuracy === 'number' ? (ev.balancedAccuracy * 100).toFixed(1) + '%' : 'N/A'}</strong>
+                            (computed over all ${targetClasses.length} classes; sensitivity/PPV apply per class, not to the whole table)
                         </div>
                     </div>
                 `;
@@ -4528,15 +4707,10 @@
         }
 
         if (showNotice) {
-            alert(`✓ Deployed: "${targetItem.name}" is now the active predictor for Single Patient Prediction (Step 5) and Batch Prediction (Step 6).`);
+            showSeedToast(`✓ Deployed "${targetItem.name}" as the active predictor for Steps 5 & 6`);
         }
     }
     window.deployPipelineModel = deployPipelineModel;
-
-    function autoDeployPipelineModel(item, showNotice = false) {
-        if (!item) return;
-        deployPipelineModel(item.id, showNotice, false);
-    }
 
     function autoDeployBestPipelineModel() {
         if (!AppState.pipeline.benchmarkResults || AppState.pipeline.benchmarkResults.length === 0) return;
@@ -4830,7 +5004,7 @@
             <div style="margin-bottom: 14px; font-size: 13px; color: var(--text-secondary);">
                 Side-by-side results for cohort <strong>${escapeHtml(AppState.fileName || 'Cohort')}</strong>.
                 <span style="color: var(--accent-amber);">This is not a paired comparison:</span> the baseline was scored on a ${baseProtocol},
-                the pipeline on its own 80/20 split (${pipeTestCount} test cases, seed ${AppState.pipeline.seed}). Both "top" models were chosen on their own test sets.
+                the pipeline on its own ${Math.round((AppState.pipeline.trainRatio || 0.8) * 100)}/${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)} split (${pipeTestCount} test cases, seed ${AppState.pipeline.seed}). Both "top" models were chosen on their own test sets.
                 Differences of a few points can arise from split variation alone; no significance test has been applied.
             </div>
 

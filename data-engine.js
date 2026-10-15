@@ -108,6 +108,9 @@
             if (!csvText || typeof csvText !== 'string') {
                 throw new Error("Empty or invalid CSV file content.");
             }
+            // Strip a UTF-8 byte-order mark (added by Excel's "CSV UTF-8" export); otherwise the first
+            // header silently becomes "\uFEFFName" and no longer matches its column name
+            csvText = csvText.replace(/^\uFEFF/, '');
 
             // Detect delimiter: check first 3 lines
             const sampleLines = csvText.split(/\r\n|\n|\r/).filter(l => l.trim().length > 0).slice(0, 3);
@@ -204,8 +207,10 @@
             });
 
             const dataRows = [];
+            let raggedRowCount = 0; // rows with more or fewer cells than the header (padded / truncated)
             for (let r = 1; r < rows.length; r++) {
                 const row = rows[r];
+                if (row.length !== headers.length) raggedRowCount++;
                 const obj = {};
                 for (let c = 0; c < headers.length; c++) {
                     const rawVal = c < row.length ? row[c] : '';
@@ -219,7 +224,8 @@
                 rows: dataRows,
                 delimiter,
                 totalRows: dataRows.length,
-                totalCols: headers.length
+                totalCols: headers.length,
+                raggedRowCount
             };
         },
 

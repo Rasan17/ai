@@ -37,6 +37,9 @@
     --shadow-elevated: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
     --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     --transition-smooth: 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    /* Used throughout the markup but previously undefined (borders/transitions silently dropped) */
+    --border-subtle: rgba(255, 255, 255, 0.05);
+    --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 [data-theme="light"] {
@@ -46,6 +49,7 @@
     --bg-surface-subtle: #f8fafc;
     --border-color: rgba(0, 0, 0, 0.08);
     --border-hover: rgba(14, 165, 233, 0.5);
+    --border-subtle: rgba(0, 0, 0, 0.06);
     
     --text-primary: #0f172a;
     --text-secondary: #475569;
@@ -875,6 +879,31 @@ body {
 .cm-cell-miss {
     background: rgba(244, 63, 94, 0.15);
     color: #fb7185;
+}
+
+/* Pipeline 2×2 cells (TN/TP correct, FP/FN errors) - previously unstyled */
+.cm-cell-tn,
+.cm-cell-tp {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--accent-emerald);
+}
+
+.cm-cell-fp,
+.cm-cell-fn {
+    background: rgba(244, 63, 94, 0.12);
+    color: var(--accent-rose);
+}
+
+/* Top-ranked badge on model cards - previously unstyled */
+.champion-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    font-size: 10.5px;
+    font-weight: 700;
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--accent-amber);
+    border: 1px solid rgba(245, 158, 11, 0.4);
 }
 
 /* Dynamic Prediction Form */

@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en-GB" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=8">
+    <link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
 
@@ -201,7 +201,7 @@
                         </button>
                     </div>
 
-                    <div id="impute-audit-box"></div>
+                    <div id="impute-audit-box" aria-live="polite"></div>
 
                     <div style="display: flex; justify-content: flex-end; gap: 12px;">
                         <button id="to-step-4-btn" class="btn btn-primary" disabled>
@@ -667,7 +667,7 @@
                                                 Loading training cohort details...
                                             </div>
                                         </div>
-                                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 10px; border-top: 1px dashed var(--border-subtle); pt: 8px;">
+                                        <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 10px; border-top: 1px dashed var(--border-subtle); padding-top: 8px;">
                                             💡 Model parameters will be fitted strictly on 100% of this training dataset.
                                         </div>
                                     </div>
@@ -1024,7 +1024,7 @@
                         </div>
 
                         <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
-                            <div id="train-status" style="font-size: 13px; font-weight: 600;"></div>
+                            <div id="train-status" aria-live="polite" style="font-size: 13px; font-weight: 600;"></div>
                             <button id="train-model-btn" class="btn btn-primary">
                                 🚀 Train Selected Model
                             </button>
@@ -1047,11 +1047,11 @@
                             </div>
                             <div class="monitor-body">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <div class="monitor-task-name" id="step4-monitor-task-name">Training Machine Learning Models...</div>
+                                    <div class="monitor-task-name" id="step4-monitor-task-name" aria-live="polite">Training Machine Learning Models...</div>
                                     <div class="monitor-step-counter" id="step4-monitor-step-counter">Stage 1 of 1</div>
                                 </div>
                                 <div class="monitor-progress-bar-wrap">
-                                    <div class="monitor-progress-bar" id="step4-monitor-progress-bar" style="width: 5%;"></div>
+                                    <div class="monitor-progress-bar" id="step4-monitor-progress-bar" role="progressbar" aria-label="Model training progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="5" style="width: 5%;"></div>
                                 </div>
                                 <div class="monitor-subtext">
                                     <span>Thread Status: <strong id="step4-monitor-thread-status" style="color: var(--accent-emerald);">Responsive</strong></span> &bull; 
@@ -1069,7 +1069,7 @@
 
                     <!-- Results Dashboard -->
                     <div id="results-dashboard" class="results-dashboard" style="display: none;">
-                        <div id="retrain-status-banner"></div>
+                        <div id="retrain-status-banner" aria-live="polite"></div>
 
                         <!-- Multi-Model Benchmark Leaderboard Comparison -->
                         <div id="multi-model-leaderboard-container" style="display: none;"></div>
@@ -1120,7 +1120,7 @@
                     </div>
 
                     <!-- Prediction Result Banner -->
-                    <div id="single-result-banner" class="prediction-banner" style="display: none;"></div>
+                    <div id="single-result-banner" class="prediction-banner" aria-live="polite" style="display: none;"></div>
                 </div>
             </section>
 
@@ -1190,7 +1190,7 @@
                                 <span>🔬</span>
                                 <span style="background: linear-gradient(135deg, var(--accent-emerald), var(--accent-cyan)); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Strictly Ordered 7-Step Clinical ML Pipeline</span>
                             </h2>
-                            <p>Clinical ML protocol with training-only preprocessing: 80/20 train/test split (rows with a missing outcome excluded), imputation fitted on the training split only, skewness screen & correlation review (Pearson vs Spearman), VIF multicollinearity review, univariate baselines, SMOTENC balancing of the training split, Random Forest feature scout, and algorithm-constrained final evaluation.</p>
+                            <p>Clinical ML protocol with training-only preprocessing: stratified train/test split (default 80/20; rows with a missing outcome excluded), imputation fitted on the training split only, skewness screen & correlation review (Pearson vs Spearman), VIF multicollinearity review, univariate baselines, SMOTENC balancing of the training split, Random Forest feature scout, and algorithm-constrained final evaluation.</p>
                         </div>
                         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                             <span class="pill pill-target" style="font-size: 11px;">🛡️ Train-Only Preprocessing</span>
@@ -1255,15 +1255,19 @@
                             <div style="font-size: 18px;">ℹ️</div>
                             <div>
                                 <strong>Step 1: Train/Test Split & Strict Imputation</strong><br>
-                                Rows with a missing outcome are excluded (outcomes are never imputed). The remaining rows are split into an 80% Training set and 20% Testing set (stratified by outcome class). An imputer for the predictors is fitted on the Training set only, and both sets are transformed with it, so no Testing-set information enters the imputation.
+                                Rows with a missing outcome are excluded (outcomes are never imputed). The remaining rows are split into Training and Testing sets at the selected ratio (default 80/20; stratified by outcome class). An imputer for the predictors is fitted on the Training set only, and both sets are transformed with it, so no Testing-set information enters the imputation.
                             </div>
                         </div>
 
                         <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px;">
                             <div class="form-group">
                                 <label for="pipeline-split-ratio" class="form-label">Train / Test Split Ratio:</label>
-                                <select id="pipeline-split-ratio" class="form-select" disabled>
+                                <select id="pipeline-split-ratio" class="form-select">
+                                    <option value="0.7">70% Training / 30% Testing</option>
+                                    <option value="0.75">75% Training / 25% Testing</option>
                                     <option value="0.8" selected>80% Training / 20% Testing (Standard Protocol)</option>
+                                    <option value="0.85">85% Training / 15% Testing</option>
+                                    <option value="0.9">90% Training / 10% Testing</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -1332,7 +1336,7 @@
                             <div style="font-size: 18px;">📊</div>
                             <div>
                                 <strong>Step 2: Continuous Variable Correlation Check (Pearson vs. Spearman)</strong><br>
-                                Continuous and ordinal variables in the Training set are screened for skewness using the rule of thumb |g₁| ≤ 1 (approximately symmetric). This is not a formal normality test. Pearson (r) is calculated when both variables pass the screen; Spearman (ρ) is calculated if one or both are skewed. High-collinearity pairs (|r| or |ρ| &ge; 0.8) are presented below to allow dropping one or keeping both.
+                                Continuous and ordinal variables in the Training set are screened for skewness (bias-adjusted Fisher–Pearson coefficient, G₁ = √(n(n−1))/(n−2)·g₁, as in SciPy <code>skew(bias=False)</code>) using the rule of thumb |G₁| ≤ 1 (approximately symmetric). This is not a formal normality test. Pearson (r) is calculated when both variables pass the screen; Spearman (ρ) is calculated if one or both are skewed. High-collinearity pairs (|r| or |ρ| &ge; 0.8) are presented below to allow dropping one or keeping both.
                             </div>
                         </div>
 
@@ -1586,11 +1590,11 @@
                             </div>
                             <div class="monitor-body">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                                    <div class="monitor-task-name" id="pipeline-train-status-text">Training algorithm-constrained clinical models...</div>
+                                    <div class="monitor-task-name" id="pipeline-train-status-text" aria-live="polite">Training algorithm-constrained clinical models...</div>
                                     <div class="monitor-step-counter" id="pipeline-monitor-step-counter">Step 1 of 5</div>
                                 </div>
                                 <div class="monitor-progress-bar-wrap">
-                                    <div class="monitor-progress-bar" id="pipeline-monitor-progress-bar" style="width: 5%;"></div>
+                                    <div class="monitor-progress-bar" id="pipeline-monitor-progress-bar" role="progressbar" aria-label="Pipeline training progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="5" style="width: 5%;"></div>
                                 </div>
                                 <div class="monitor-subtext">
                                     <span>Thread Status: <strong id="pipeline-monitor-thread-status" style="color: var(--accent-emerald);">Responsive</strong></span> &bull; 
@@ -1684,8 +1688,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=13"></script>
-    <script src="models.js?v=13"></script>
-    <script src="app.js?v=13"></script>
+    <script src="data-engine.js?v=15"></script>
+    <script src="models.js?v=15"></script>
+    <script src="app.js?v=15"></script>
 </body>
 </html>

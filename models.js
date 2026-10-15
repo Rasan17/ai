@@ -43,6 +43,21 @@
         return new Promise(resolve => setTimeout(resolve, 0));
     }
 
+    /**
+     * Drives a step generator (one step = one tree / one epoch) asynchronously, yielding to the browser
+     * every `every` steps so the UI can repaint and Force Stop can take effect. `opts.onYield` is called
+     * at each yield; if it throws (e.g. user cancellation), training stops and the error propagates.
+     */
+    async function runStepsAsync(steps, opts = {}, every = 1) {
+        let n = 0;
+        for (const _ of steps) { // eslint-disable-line no-unused-vars
+            if (++n % every === 0) {
+                await yieldToBrowser();
+                if (typeof opts.onYield === 'function') opts.onYield(n);
+            }
+        }
+    }
+
     // ==========================================
     // 1. PURE JS DECISION TREE & RANDOM FOREST
     // ==========================================
@@ -234,6 +249,15 @@
         }
 
         fit(X, y) {
+            for (const _ of this._fitSteps(X, y)) { /* synchronous: run every tree */ } // eslint-disable-line no-unused-vars
+        }
+
+        // Same fit, but yields to the browser after every tree (keeps the UI and Force Stop responsive)
+        async fitAsync(X, y, opts = {}) {
+            await runStepsAsync(this._fitSteps(X, y), opts, 1);
+        }
+
+        *_fitSteps(X, y) {
             const numSamples = X.length;
             const numFeatures = X[0].length;
 
@@ -268,6 +292,7 @@
                 tree.featureImportances.forEach((imp, fIdx) => {
                     aggregatedImportances[fIdx] += imp;
                 });
+                yield t;
             }
 
             const total = aggregatedImportances.reduce((a, b) => a + b, 0);
@@ -319,6 +344,15 @@
         }
 
         fit(X, y) {
+            for (const _ of this._fitSteps(X, y)) { /* synchronous: run every epoch */ } // eslint-disable-line no-unused-vars
+        }
+
+        // Same fit, but yields to the browser every 10 epochs (keeps the UI and Force Stop responsive)
+        async fitAsync(X, y, opts = {}) {
+            await runStepsAsync(this._fitSteps(X, y), opts, 10);
+        }
+
+        *_fitSteps(X, y) {
             const n = X.length;
             const p = X[0].length;
             const momentumBeta = this.solver === 'momentum' ? 0.85 : 0.0;
@@ -374,6 +408,7 @@
                         }
                     }
                     this._checkFinite(epoch);
+                    yield epoch;
                 }
             } else {
                 // Ridge Linear Regression via Gradient Descent with momentum
@@ -409,6 +444,7 @@
                         this.weights[j] -= velW[j];
                     }
                     this._checkFinite(epoch);
+                    yield epoch;
                 }
             }
         }
@@ -1090,11 +1126,16 @@
                     const trees = capacity === 'fast' ? 15 : (capacity === 'deep' ? 50 : (this.userHyperparams.rfTrees || 30));
                     const depth = capacity === 'fast' ? 4 : (capacity === 'deep' ? 8 : (this.userHyperparams.rfDepth || 6));
                     subModel = new RandomForest(this.isClassification, trees, depth, 2, 'sqrt', subSeed);
-                    subModel.fit(trainX, trainY);
+                    await subModel.fitAsync(trainX, trainY, {
+                        // Re-report progress at each yield so a cancelling onProgress can stop training here
+                        onYield: (t) => onProgress && onProgress(idx + 1, totalBases, { stage: `${phaseLabel}Base ${idx + 1}/${totalBases} (RF tree ${t}/${trees})` })
+                    });
                 } else if (mId === 'glm') {
                     const epochs = capacity === 'fast' ? 80 : (capacity === 'deep' ? 250 : 150);
                     subModel = new GeneralizedLinearModel(this.isClassification, this.numClasses, 0.05, epochs, 0.01, 'momentum', subSeed);
-                    subModel.fit(trainX, trainY);
+                    await subModel.fitAsync(trainX, trainY, {
+                        onYield: (ep) => onProgress && onProgress(idx + 1, totalBases, { stage: `${phaseLabel}Base ${idx + 1}/${totalBases} (GLM iteration ${ep}/${epochs})` })
+                    });
                 } else if (mId === 'knn') {
                     const kVal = capacity === 'fast' ? 3 : (capacity === 'deep' ? 7 : (this.userHyperparams.knnK || 5));
                     subModel = new KNNModel(this.isClassification, kVal, 'euclidean', 'distance', subSeed);
