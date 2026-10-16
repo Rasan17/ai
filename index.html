@@ -6,7 +6,7 @@
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=20">
+    <link rel="stylesheet" href="style.css?v=23">
 </head>
 <body>
 
@@ -657,6 +657,24 @@
                                             <button type="button" class="btn btn-secondary btn-sm preset-split-btn" data-train="90">90/10</button>
                                         </div>
                                     </div>
+
+                                    <div class="split-method-box">
+                                        <label for="split-method" class="split-method-label">How should records be divided into Training and Testing sets?</label>
+                                        <select id="split-method" class="control-select split-method-select">
+                                            <option value="random" selected>Randomly, keeping the outcome balance (each row is a different patient)</option>
+                                            <option value="group">Keep each patient's records together (patients with several visits/admissions)</option>
+                                            <option value="time">By date: earlier records for Training, later records for Testing</option>
+                                        </select>
+                                        <div id="split-group-wrap" class="split-col-wrap" style="display: none;">
+                                            <label for="split-group-col">Column that identifies the patient:</label>
+                                            <select id="split-group-col" class="control-select"></select>
+                                        </div>
+                                        <div id="split-date-wrap" class="split-col-wrap" style="display: none;">
+                                            <label for="split-date-col">Date column:</label>
+                                            <select id="split-date-col" class="control-select"></select>
+                                        </div>
+                                        <p class="split-method-hint">If a patient has more than one row, a random split can put the same patient in both sets, which makes the test too easy; keep each patient's records together. Splitting <strong>by date</strong> tests the model on the most recent patients, as it would be used in practice. Cross-validation folds also keep each patient's records together.</p>
+                                    </div>
                                 </div>
 
                                 <!-- Post-Testing Retraining Decision -->
@@ -1052,21 +1070,33 @@
                             </div>
                         </div>
 
-                        <!-- Automatic tuning (k-fold cross-validation inside the Training set) -->
+                        <!-- Model selection and automatic tuning (k-fold cross-validation inside the Training set) -->
                         <div class="autotune-box">
-                            <div class="autotune-row">
+                            <div class="selection-row" role="radiogroup" aria-labelledby="selection-mode-label">
+                                <span id="selection-mode-label" class="selection-label">🏁 When several models are trained, choose the best one by:</span>
+                                <label class="selection-option"><input type="radio" name="selection-mode" id="selection-mode-cv" value="cv" checked> Cross-validation within the Training set <span class="selection-tag">recommended</span></label>
+                                <label class="selection-option"><input type="radio" name="selection-mode" id="selection-mode-test" value="test"> Testing-set results <span class="selection-tag selection-tag-muted">faster, but optimistic</span></label>
+                            </div>
+                            <p class="autotune-hint" style="margin-top: 4px;">With <strong>cross-validation</strong>, each model is scored on parts of the Training set it did not learn from (missing-value filling and scaling are redone inside each part), and the best model is picked on those scores. The Testing set is then used only once, as an honest final check. Picking the winner on the <strong>Testing set</strong> is quicker, but the winner's test score is then too optimistic, because it won on those same patients.</p>
+                            <div class="threshold-row">
+                                <label for="decision-threshold" class="autotune-folds-label">🎚️ Decision threshold (two-outcome predictions):
+                                    <input type="number" id="decision-threshold" class="control-input" value="0.5" min="0.05" max="0.95" step="0.05" style="width: 80px; display: inline-block;">
+                                </label>
+                                <span class="autotune-hint" style="margin: 0;">A patient is classed as the positive outcome when its predicted probability is at or above this value. 0.5 is the usual default; use a lower value if missing a case is worse than a false alarm. Decide it on clinical grounds <strong>before</strong> looking at the results; do not adjust it to improve the Testing-set score.</span>
+                            </div>
+                            <div class="autotune-row" style="margin-top: 10px;">
                                 <label class="autotune-label">
                                     <input type="checkbox" id="autotune-check">
                                     🎯 Automatically tune each selected model's key settings on the Training set
                                 </label>
-                                <label for="autotune-folds" class="autotune-folds-label">Cross-validation:
+                                <label for="autotune-folds" class="autotune-folds-label">Cross-validation folds:
                                     <select id="autotune-folds" class="control-select" style="width: auto; display: inline-block;">
                                         <option value="5" selected>5-fold (recommended)</option>
                                         <option value="3">3-fold (faster)</option>
                                     </select>
                                 </label>
                             </div>
-                            <p class="autotune-hint">The app tries several combinations of each model's main settings (e.g. k for k-NN, tree depth for Random Forest, the ridge penalty for Logistic Regression, dropout and weight decay for the Neural Network) and keeps the one that scores best on the ranking metric. Each combination is judged by <strong>cross-validation inside the Training set</strong>: the Training set is split into 5 (or 3) parts and each part takes a turn as a mini-test while the model learns from the rest. The <strong>Testing set is never used for tuning</strong>, so its final score stays a fair check. Your current settings are always one of the candidates, so they are only changed if another combination does better; the chosen settings are then shown in each model's settings panel. Tuning takes several times longer than normal training (neural networks use at most 3 folds; training sets over 2,000 cases are tuned on a stratified sample). The Ensemble is not tuned.</p>
+                            <p class="autotune-hint">The app tries several combinations of each model's main settings (e.g. k for k-NN, tree depth for Random Forest, the ridge penalty for Logistic Regression, dropout and weight decay for the Neural Network) and keeps the one that scores best on the ranking metric. Each combination is judged by <strong>cross-validation inside the Training set</strong>: the Training set is split into 5 (or 3) parts and each part takes a turn as a mini-test while the model learns from the rest. The <strong>Testing set is never used for tuning</strong>, so its final score stays a fair check. Your current settings are always one of the candidates, so they are only changed if another combination does better; the chosen settings are then shown in each model's settings panel. Missing-value filling, encoding and scaling are redone inside each part, so the mini-tests never influence the preparation. Tuning takes several times longer than normal training (neural networks and the Ensemble use at most 3 folds; training sets over 2,000 cases are tuned on a stratified sample). The Ensemble is not tuned.</p>
                         </div>
 
                         <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
@@ -1115,11 +1145,15 @@
 
                     <!-- Results Dashboard -->
                     <div id="results-dashboard" class="results-dashboard" style="display: none;">
+                        <div style="display: flex; justify-content: flex-end;">
+                            <button type="button" id="standard-download-report-btn" class="btn btn-secondary btn-sm">📄 Download Analysis Report (.JSON)</button>
+                        </div>
                         <div id="retrain-status-banner" aria-live="polite"></div>
                         <div id="tuning-report-container"></div>
 
                         <!-- Multi-Model Benchmark Leaderboard Comparison -->
                         <div id="multi-model-leaderboard-container" style="display: none;"></div>
+                        <div id="calibration-panel-container"></div>
 
                         <!-- Single Model Summary Title & Metrics Row -->
                         <h3 id="dashboard-single-heading" style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation &amp; Accuracy Metrics</h3>
@@ -1316,6 +1350,23 @@
                                     <option value="0.85">85% Training / 15% Testing</option>
                                     <option value="0.9">90% Training / 10% Testing</option>
                                 </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="pipeline-split-method" class="form-label">How to divide records:</label>
+                                <select id="pipeline-split-method" class="form-select">
+                                    <option value="random" selected>Randomly, keeping the outcome balance</option>
+                                    <option value="group">Keep each patient's records together</option>
+                                    <option value="time">By date: earlier → Training, later → Testing</option>
+                                </select>
+                                <div id="pipeline-split-group-wrap" class="split-col-wrap" style="display: none;">
+                                    <label for="pipeline-split-group-col">Column that identifies the patient:</label>
+                                    <select id="pipeline-split-group-col" class="form-select"></select>
+                                </div>
+                                <div id="pipeline-split-date-wrap" class="split-col-wrap" style="display: none;">
+                                    <label for="pipeline-split-date-col">Date column:</label>
+                                    <select id="pipeline-split-date-col" class="form-select"></select>
+                                </div>
+                                <span style="font-size: 11px; color: var(--text-muted);">Use "keep each patient's records together" if a patient can have several rows.</span>
                             </div>
                             <div class="form-group">
                                 <label for="pipeline-impute-strategy" class="form-label">Continuous Imputation Strategy:</label>
@@ -1626,9 +1677,21 @@
                             </button>
                         </div>
 
-                        <!-- Optional automatic tuning (off by default: the protocol uses fixed, prespecified settings) -->
+                        <!-- Model selection and optional automatic tuning (tuning off by default: fixed, prespecified settings) -->
                         <div class="autotune-box" style="margin: -6px 0 20px;">
-                            <div class="autotune-row">
+                            <div class="selection-row" role="radiogroup" aria-labelledby="pipeline-selection-mode-label">
+                                <span id="pipeline-selection-mode-label" class="selection-label">🏁 Choose the best model by:</span>
+                                <label class="selection-option"><input type="radio" name="pipeline-selection-mode" id="pipeline-selection-mode-cv" value="cv" checked> Cross-validation within the Training set <span class="selection-tag">recommended</span></label>
+                                <label class="selection-option"><input type="radio" name="pipeline-selection-mode" id="pipeline-selection-mode-test" value="test"> Testing-set results <span class="selection-tag selection-tag-muted">faster, but optimistic</span></label>
+                            </div>
+                            <p class="autotune-hint" style="margin-top: 4px;">With <strong>cross-validation</strong>, each of the six models is scored on parts of the real Training patients it did not learn from (SMOTENC and scaling are redone inside each part) and the best is picked on those scores; the Testing set is then used only once, as an honest final check. Picking the winner on the Testing set is quicker, but its test score is then too optimistic.</p>
+                            <div class="threshold-row">
+                                <label for="pipeline-decision-threshold" class="autotune-folds-label">🎚️ Decision threshold (two-outcome predictions):
+                                    <input type="number" id="pipeline-decision-threshold" class="form-input" value="0.5" min="0.05" max="0.95" step="0.05" style="width: 80px; display: inline-block;">
+                                </label>
+                                <span class="autotune-hint" style="margin: 0;">Probability of the positive outcome at or above which a patient is classed as positive (default 0.5). Choose it on clinical grounds before seeing the results; never tune it on the Testing set.</span>
+                            </div>
+                            <div class="autotune-row" style="margin-top: 10px;">
                                 <label class="autotune-label">
                                     <input type="checkbox" id="pipeline-autotune-check">
                                     🎯 Auto-tune model settings on the Training set (optional; off = protocol default settings)
@@ -1689,6 +1752,7 @@
                                 </div>
                                 <div id="pipeline-leaderboard-container" class="table-container"></div>
                             </div>
+                            <div id="pipeline-calibration-container"></div>
 
                             <!-- 2x2 Confusion Matrices Grid -->
                             <div class="card" style="background: var(--bg-surface-elevated); padding: 20px;">
@@ -1759,8 +1823,8 @@
     <!-- Scripts: Vendor & Core Engines -->
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
-    <script src="data-engine.js?v=29"></script>
-    <script src="models.js?v=30"></script>
-    <script src="app.js?v=49"></script>
+    <script src="data-engine.js?v=30"></script>
+    <script src="models.js?v=32"></script>
+    <script src="app.js?v=55"></script>
 </body>
 </html>

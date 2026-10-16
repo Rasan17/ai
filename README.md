@@ -94,6 +94,8 @@ The platform provides two rigorous clinical evaluation paradigms selectable in S
     - **Yes &mdash; Two-Phase Retraining Protocol (Recommended):** The algorithm first benchmarks out-of-sample performance on the held-out test partition (e.g., 20%), reporting Test Accuracy, Macro F1, Precision, Recall, ROC-AUC, and Confusion Matrix. Once evaluated, it automatically retrains the final deployed model on **100% of all cohort data** ($N_{total}$) so real-time and batch predictions leverage all available clinical evidence.
     - **No &mdash; Single-Phase Protocol:** Benchmarks accuracy on the held-out test split, but keeps the deployed model strictly trained on the initial training partition only (e.g., 80%), without retraining on the remaining data.
 
+  - **How records are divided:** randomly with the outcome balance kept (default); **by patient** (all records of one patient stay on the same side, for repeated visits or admissions); or **by date** (earlier records train, later records test, mimicking use on future patients). Cross-validation folds keep each patient's records together as well.
+
 - **Option B: Separate Training &amp; Testing Datasets (Independent External Validation)**
   - **Dataset (i) &bull; Training Cohort:** Model parameters are fitted strictly on 100% of the primary training cohort.
   - **Dataset (ii) &bull; Testing Cohort:** Model accuracy is evaluated on an independent external validation dataset provided via dedicated CSV upload or built-in validation cohorts.
@@ -107,7 +109,9 @@ Clinicians and researchers can choose the exact scope of models to train and ben
 3. **Test All Models (Full Tournament):** Benchmark all 6 available algorithms simultaneously in a head-to-head competition with a single click.
 
 #### Multi-Model Diagnostic Results & Confusion Matrices:
-- **Comparative Benchmark Leaderboard:** Ranks all tested models by a user-selected primary metric (default: Macro F1 for classification, $R^2$ for regression; alternatives: balanced accuracy, ROC-AUC, Brier score, accuracy, RMSE, MAE), and reports all metrics including the Wilson 95% CI for accuracy. The same policy applies in Step 4 and the 7-Step Pipeline. The top-ranked model is selected on the same test cases it is scored on, so its score is optimistically biased; a single split does not establish general superiority.
+- **Comparative Benchmark Leaderboard:** Ranks all tested models by a user-selected primary metric (default: Macro F1 for classification, $R^2$ for regression; alternatives: balanced accuracy, ROC-AUC, Brier score, accuracy, RMSE, MAE), and reports all metrics including the Wilson 95% CI for accuracy. The same policy applies in Step 4 and the 7-Step Pipeline. **Model selection:** by default the best model is chosen by **k-fold cross-validation inside the Training set** (missing-value filling, encoding and scaling refitted in every fold; in the 7-Step Pipeline SMOTENC as well), so the Testing set is used only once and the winner's test score is not selection-biased. Choosing by Testing-set results remains available (faster, but optimistic). Optional **automatic tuning** selects each model's key settings by the same leak-free cross-validation. A single split still does not establish general superiority.
+- **Calibration & decision threshold:** for two-outcome predictions, a calibration plot with calibration slope and intercept (checked against statsmodels), a sensitivity/specificity/PPV/NPV table across thresholds, and a user-chosen decision threshold (default 0.5, to be set on clinical grounds, never tuned on the Testing set) that is applied consistently to evaluation and to new-patient predictions.
+- **Reports:** both workflows export a JSON report recording the software version, validation design (split method, model-selection method, tuning, threshold), settings, seeds, exclusions and every model's results, including calibration.
 - **Individual Confusion Matrices & Accuracy Cards:** Renders an individual diagnostic card for **every chosen model**, featuring:
   - **Prominent Test Accuracy** (and ROC-AUC / Macro F1 scores).
   - **Complete Confusion Matrix Table** displaying actual vs. predicted classifications with hit/miss cell coloration.
@@ -162,9 +166,9 @@ The suite includes built-in clinical datasets for instant experimentation:
 
 ## ⚠️ Known Limitations & Statistical Notes
 
-- **Single train/test split.** Performance is estimated on one held-out split (Option A or the 7-Step Pipeline), and the top-ranked model is chosen on that same split, so its score is optimistically biased. Confirm the chosen model on an independent cohort (Option B) or with repeated cross-validation before reporting.
-- **Row-level random splitting.** If patients contribute several rows, or the data are temporal or multicentre, a random row split leaks information between train and test; use a patient-level, temporal or external split instead (patient-grouped splitting is not built in).
-- **Uncalibrated probabilities.** Random Forest and hard voting give vote shares, k-NN gives neighbour shares, and no model is calibrated. The Brier score is reported; a calibration plot is recommended before any clinical interpretation.
+- **Single train/test split.** Final performance is estimated on one held-out split. With cross-validated model selection (default) the winner's test score is not selection-biased, but it is still imprecise for small test sets; if selection by Testing-set results is chosen, the winner's score is optimistic. Confirm the chosen model on an independent cohort (Option B) before reporting.
+- **Splitting design.** Random, patient-grouped and date-based splits are built in; multicentre (site-based) validation needs a separate cohort (Option B). With a date-based split, cross-validation inside the training period uses folds that are not time-ordered.
+- **Probabilities are not recalibrated.** Random Forest and hard voting give vote shares, k-NN gives neighbour shares. Calibration is assessed (plot, slope, intercept, Brier score), but no recalibration (e.g. Platt or isotonic) is applied; calibration estimates are imprecise with fewer than about 100 patients with and without the outcome.
 - **Exploratory 2×2 for continuous outcomes.** Cut at the training-data median, not a clinical threshold; these are not diagnostic accuracy measures.
 - **Feature importance (MDI)** ranks predictors for this model and data; it is not evidence of causal or clinical effect, and it can favour features with many distinct values.
 - **Ensemble** is a voting / performance-weighted ensemble, not a cross-validated stacked Super Learner.
@@ -179,8 +183,9 @@ The suite includes built-in clinical datasets for instant experimentation:
 From the project folder (Node.js; the reference check also needs Python with SciPy, scikit-learn and statsmodels):
 
 ```bash
-node tests/reference_check.js && python3 tests/reference_check.py   # 41 checks against SciPy / scikit-learn / statsmodels
+node tests/reference_check.js && python3 tests/reference_check.py   # 43 checks against SciPy / scikit-learn / statsmodels (incl. calibration slope/intercept)
 node tests/edge_cases.js                                           # robustness: single class, all-missing, constant features, imbalance, zero-variance target
+node tests/end_to_end.js                                           # 12 end-to-end checks: binary/multiclass/regression, missing values, unseen categories, rare outcome, tiny cohort, patient/date splits, calibration, threshold, NN fallback, batch = evaluation preprocessing
 python3 tests/benchmark_vs_python.py                               # app vs scikit-learn / PyTorch / imbalanced-learn (~2 min)
 python3 tests/nn_forward_check.py                                  # exact forward pass of the trained TF.js network, recomputed in NumPy
 ```

@@ -68,6 +68,11 @@ lr=LogisticRegression(C=2/(n*o['logit']['lambda']),tol=1e-12,max_iter=20000).fit
 chk('Logistic probabilities (GD vs L-BFGS)',o['logit']['probs'],lr.predict_proba(X)[:,1],2e-3)
 g=GaussianNB(var_smoothing=1e-12).fit(X,yc); chk('Gaussian NB probabilities',o['nbG'],g.predict_proba(X)[:,1],2e-4)
 XB=np.array(o['XB']); b=BernoulliNB(alpha=1.0,binarize=None).fit(XB,yc); chk('Bernoulli NB probabilities',o['nbB'],b.predict_proba(XB)[:,1],2e-4)
+# Calibration slope (logistic regression of y on logit p) and intercept (logit p as offset) vs statsmodels
+cy=np.array(o['calY']); cp=np.clip(np.array(o['calP']),1e-4,1-1e-4); lp=np.log(cp/(1-cp))
+fs=sm.GLM(cy,sm.add_constant(lp),family=sm.families.Binomial()).fit()
+fi=sm.GLM(cy,np.ones((len(cy),1)),family=sm.families.Binomial(),offset=lp).fit()
+chk('Calibration slope',o['cal']['slope'],fs.params[1],1e-3); chk('Calibration intercept (calibration-in-the-large)',o['cal']['intercept'],fi.params[0],1e-3)
 w=max(len(x[1]) for x in res)
 for st,nm,d,t in res: print(f'{st}  {nm:<{w}}  max|diff|={d:.2e}  (tol {t:.0e})')
 print(f"\n{sum(1 for x in res if x[0]=='PASS')}/{len(res)} checks passed")

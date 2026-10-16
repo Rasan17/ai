@@ -178,6 +178,9 @@
         return (window.CSS && typeof window.CSS.escape === 'function') ? window.CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
     }
 
+    // Software version recorded in exported reports and settings files
+    const APP_VERSION = '2026.10.16';
+
     // Ranking policy (one policy for Step 4 and the 7-step pipeline; selectable by the user so the
     // primary metric can match the prespecified study objective)
     const RANKING_METRICS = {
@@ -209,6 +212,19 @@
     function compareEvalResults(a, b, isClassification) {
         const key = rankingMetricKey(isClassification);
         const def = (isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression)[key];
+        // Model selection by cross-validation inside the Training set: the Testing set is not used to rank
+        if (a && b && a.cv && b.cv) {
+            const cvv = (ev, k) => (typeof ev.cv[k] === 'number' && isFinite(ev.cv[k]) ? ev.cv[k] : null);
+            const order = [key, ...(isClassification ? ['macroF1', 'rocAuc', 'accuracy'] : ['r2', 'rmse'])];
+            for (const k2 of order) {
+                const d2 = (isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression)[k2];
+                const x = cvv(a, k2), y = cvv(b, k2);
+                if (x === null && y !== null) return 1;
+                if (y === null && x !== null) return -1;
+                if (x !== null && y !== null && Math.abs(x - y) > 1e-12) return d2.higherIsBetter ? y - x : x - y;
+            }
+            return 0; // tie: keep the fixed model order (no peeking at the Testing set)
+        }
         const val = ev => (typeof ev[key] === 'number' && isFinite(ev[key]) ? ev[key] : null);
         const va = val(a);
         const vb = val(b);
@@ -697,6 +713,7 @@
         if (DOM.pipelineToStep7Btn) DOM.pipelineToStep7Btn.addEventListener('click', () => goToPipelineSubstep(7));
         if (DOM.pipelineTrainModelsBtn) DOM.pipelineTrainModelsBtn.addEventListener('click', executePipelineStep7);
         if (DOM.pipelineDownloadReportBtn) DOM.pipelineDownloadReportBtn.addEventListener('click', downloadPipelineProtocolReport);
+        document.getElementById('standard-download-report-btn')?.addEventListener('click', downloadStandardAnalysisReport);
         if (DOM.pipelineDirectLaunchBtn) {
             DOM.pipelineDirectLaunchBtn.addEventListener('click', (e) => window.launch7StepPipeline(e));
         }
@@ -729,6 +746,7 @@
             goToStep(2);
         });
         DOM.toStep3Btn.addEventListener('click', () => goToStep(3));
+        ['split-method', 'pipeline-split-method'].forEach(id => document.getElementById(id)?.addEventListener('change', updateSplitMethodVisibility));
         document.getElementById('var-include-all-btn').addEventListener('click', () => { if (AppState.parsedData) setAllVariablesIncluded(true); });
         document.getElementById('var-exclude-all-btn').addEventListener('click', () => { if (AppState.parsedData) setAllVariablesIncluded(false); });
         DOM.toStep4Btn.addEventListener('click', () => goToStep(4));
@@ -1501,7 +1519,8 @@
             DOM.toStep2Btn.disabled = false;
             const saveBtn = document.getElementById('settings-save-btn');
             if (saveBtn) { saveBtn.disabled = false; saveBtn.title = 'Save all choices for this dataset'; }
-            offerStoredSettings(parsed.headers);
+            populateSplitColumnSelects(parsed.headers);
+        offerStoredSettings(parsed.headers);
             if (DOM.pipelineDirectLaunchBtn) {
                 DOM.pipelineDirectLaunchBtn.disabled = false;
             }
@@ -2299,6 +2318,103 @@
     }
 
 
+
+    // =========================================================================
+    // CALIBRATION & DECISION-THRESHOLD PANEL (binary outcomes, Testing set)
+    // =========================================================================
+    const calibrationItems = {};
+
+    function calibrationSvg(cal) {
+        const W = 240, P = 30, S = W - 2 * P;
+        const x = v => P + v * S, y = v => W - P - v * S;
+        const pts = (cal.bins || []).map(b => ({ cx: x(b.meanPred), cy: y(b.observed), r: Math.max(3, Math.min(9, 2 + Math.sqrt(b.n))) }));
+        const path = pts.map((q, i) => `${i ? 'L' : 'M'}${q.cx.toFixed(1)},${q.cy.toFixed(1)}`).join(' ');
+        const ticks = [0, 0.25, 0.5, 0.75, 1];
+        return `<svg viewBox="0 0 ${W} ${W}" width="100%" style="max-width: 260px;" role="img" aria-label="Calibration plot: observed against predicted probability">
+            <rect x="${P}" y="${P}" width="${S}" height="${S}" fill="none" stroke="var(--border-color)"/>
+            ${ticks.map(t => `<line x1="${x(t)}" y1="${y(0)}" x2="${x(t)}" y2="${y(0) + 4}" stroke="var(--text-muted)"/><text x="${x(t)}" y="${y(0) + 14}" font-size="9" text-anchor="middle" fill="var(--text-muted)">${t}</text>
+                <line x1="${x(0) - 4}" y1="${y(t)}" x2="${x(0)}" y2="${y(t)}" stroke="var(--text-muted)"/><text x="${x(0) - 6}" y="${y(t) + 3}" font-size="9" text-anchor="end" fill="var(--text-muted)">${t}</text>`).join('')}
+            <line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="var(--text-muted)" stroke-dasharray="4 4"/>
+            ${path ? `<path d="${path}" fill="none" stroke="var(--accent-cyan)" stroke-width="2"/>` : ''}
+            ${pts.map(q => `<circle cx="${q.cx.toFixed(1)}" cy="${q.cy.toFixed(1)}" r="${q.r.toFixed(1)}" fill="var(--accent-cyan)" fill-opacity="0.75"/>`).join('')}
+            <text x="${W / 2}" y="${W - 4}" font-size="10" text-anchor="middle" fill="var(--text-secondary)">Predicted probability</text>
+            <text x="10" y="${W / 2}" font-size="10" text-anchor="middle" fill="var(--text-secondary)" transform="rotate(-90 10 ${W / 2})">Observed proportion</text>
+        </svg>`;
+    }
+
+    function thresholdTable(ev) {
+        const p = ev.probPositive, yv = ev.actuals;
+        if (!p || !yv) return '';
+        const cur = ev.decisionThreshold || 0.5;
+        const ths = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+        if (!ths.some(t => Math.abs(t - cur) < 1e-9)) ths.push(cur);
+        ths.sort((a, b) => a - b);
+        const pct = (a, b) => (b > 0 ? `${((a / b) * 100).toFixed(0)}%` : '–');
+        const rows = ths.map(t => {
+            let tp = 0, fp = 0, tn = 0, fn = 0;
+            p.forEach((v, i) => { const pos = v >= t; const act = yv[i] === 1; if (pos && act) tp++; else if (pos) fp++; else if (act) fn++; else tn++; });
+            const isCur = Math.abs(t - cur) < 1e-9;
+            return `<tr${isCur ? ' class="thr-current"' : ''}><td>${t.toFixed(2)}${isCur ? ' (current)' : ''}</td><td>${pct(tp, tp + fn)}</td><td>${pct(tn, tn + fp)}</td><td>${pct(tp, tp + fp)}</td><td>${pct(tn, tn + fn)}</td><td>${pct(tp + fp, p.length)}</td></tr>`;
+        }).join('');
+        return `<table class="data-table thr-table"><thead><tr><th>Threshold</th><th>Sensitivity</th><th>Specificity</th><th>PPV</th><th>NPV</th><th>Classed positive</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function calibrationBody(item, positiveLabel) {
+        const ev = item.ev;
+        const cal = ev.calibration || { bins: [], n: 0, events: 0 };
+        const slopeTxt = cal.slope === null || cal.slope === undefined ? 'not estimable'
+            : `${cal.slope.toFixed(2)} &mdash; ${cal.slope < 0.8 ? 'predictions are <strong>too extreme</strong> (too close to 0% and 100%), typical of overfitting' : cal.slope > 1.2 ? 'predictions are <strong>too modest</strong> (bunched towards the middle)' : 'close to the ideal of 1'}`;
+        const intTxt = cal.intercept === null || cal.intercept === undefined ? 'not estimable'
+            : `${cal.intercept.toFixed(2)} &mdash; ${cal.intercept > 0.1 ? 'on average the model <strong>under-predicts</strong> the risk' : cal.intercept < -0.1 ? 'on average the model <strong>over-predicts</strong> the risk' : 'on average the predicted risk is about right'}`;
+        const small = cal.events < 100 || cal.n - cal.events < 100;
+        const probNote = ev.probabilityType && ev.probabilityType !== 'model' ? ' This model\'s "probabilities" are vote or neighbour shares, which are often poorly calibrated.' : '';
+        return `
+            <div class="cal-grid">
+                <div>${cal.bins && cal.bins.length ? calibrationSvg(cal) : '<p class="tune-muted">Too few test patients to draw a calibration plot (at least 10 are needed).</p>'}</div>
+                <div class="cal-stats">
+                    <div><strong>Calibration slope</strong> (ideal 1): ${slopeTxt}</div>
+                    <div><strong>Calibration intercept</strong> (ideal 0): ${intTxt}</div>
+                    <div><strong>Brier score</strong> (lower is better): ${typeof ev.brierScore === 'number' ? ev.brierScore.toFixed(3) : 'N/A'}</div>
+                    <div class="tune-muted">Based on ${cal.n} test patients, ${cal.events} with "${escapeHtml(positiveLabel)}". ${cal.note ? escapeHtml(cal.note) : ''}</div>
+                    <p class="tune-muted" style="margin-top: 6px;"><strong>How to read the plot:</strong> patients are grouped by their predicted probability. Each dot compares the average predicted probability in a group with the proportion who actually had "${escapeHtml(positiveLabel)}". Dots on the dashed diagonal mean that a predicted 30% really corresponds to about 30% of patients. Dots below the line mean the model over-estimates the risk; dots above it mean it under-estimates.</p>
+                </div>
+            </div>
+            ${small ? `<div class="tune-warn">⚠️ Calibration needs many patients: with fewer than about 100 patients with and 100 without the outcome in the Testing set, these values are very imprecise.${probNote}</div>` : (probNote ? `<div class="tune-warn">⚠️${probNote}</div>` : '')}
+            <div class="cal-thr">
+                <div class="cmp-guide-title" style="font-size: 13px;">Sensitivity and specificity at different thresholds (Testing set)</div>
+                ${thresholdTable(ev)}
+                <p class="tune-muted">This table shows the trade-off: a lower threshold catches more true cases (higher sensitivity) at the cost of more false alarms (lower specificity). Use it to understand the trade-off and choose the threshold on <strong>clinical grounds</strong>. Picking the "best" row here and reporting its results would make the Testing-set results optimistic; confirm any chosen threshold on new patients.</p>
+            </div>`;
+    }
+
+    window.renderCalibrationChoice = function (containerId, idx) {
+        const st = calibrationItems[containerId];
+        const body = document.getElementById(`${containerId}-body`);
+        if (st && body && st.items[idx]) body.innerHTML = calibrationBody(st.items[idx], st.positiveLabel);
+    };
+
+    function renderCalibrationPanel(containerId, items, isClassification) {
+        const box = document.getElementById(containerId);
+        if (!box) return;
+        const usable = (items || []).filter(it => it.ev && it.ev.calibration);
+        if (!isClassification || !usable.length) { box.innerHTML = ''; return; }
+        const positiveLabel = usable[0].ev.positiveClass !== null && usable[0].ev.positiveClass !== undefined ? String(usable[0].ev.positiveClass) : 'positive outcome';
+        calibrationItems[containerId] = { items: usable, positiveLabel };
+        box.innerHTML = `
+            <div class="cal-panel">
+                <div class="cal-head">
+                    <div class="tune-title">📈 Calibration &amp; decision threshold (Testing set)</div>
+                    <label class="autotune-folds-label">Model:
+                        <select class="control-select" style="width: auto; display: inline-block;" onchange="window.renderCalibrationChoice('${containerId}', this.selectedIndex)">
+                            ${usable.map((it, i) => `<option${i === 0 ? ' selected' : ''}>${escapeHtml(it.name)}</option>`).join('')}
+                        </select>
+                    </label>
+                </div>
+                <p class="tune-muted">Calibration asks whether the predicted percentages can be taken at face value: if the model says "30% chance", do about 30 in 100 such patients have the outcome? A model can rank patients well (good AUC) and still give percentages that are too high or too low.</p>
+                <div id="${containerId}-body">${calibrationBody(usable[0], positiveLabel)}</div>
+            </div>`;
+    }
+
     // =========================================================================
     // AUTOMATIC TUNING (standard workflow, Step 4): k-fold cross-validation inside the Training set
     // =========================================================================
@@ -2361,39 +2477,59 @@
         return fold;
     }
 
-    function stratifiedSample(X, y, n, isClassification, seed) {
-        if (X.length <= n) return { X, y, sampled: false };
-        const fold = makeFolds(y, Math.ceil(X.length / n), isClassification, seed);
-        const keep = [];
-        for (let i = 0; i < X.length; i++) if (fold[i] === 0) keep.push(i);
-        return { X: keep.map(i => X[i]), y: keep.map(i => y[i]), sampled: true };
+
+    // Fold assignment for rows. With a grouping function (e.g. patient ID), every record of a group goes to
+    // the same fold, so one patient never appears on both sides of a fold
+    function assignRowFolds(rows, k, isClassification, targetCol, seed, groupOf) {
+        if (!groupOf) {
+            return makeFolds(rows.map(r => (isClassification ? String(r[targetCol]).trim() : Number(r[targetCol]))), k, isClassification, seed);
+        }
+        const rng = DataEngine.createPRNG(seed);
+        const keys = [...new Set(rows.map(groupOf))].sort();
+        for (let i = keys.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [keys[i], keys[j]] = [keys[j], keys[i]]; }
+        const foldOfGroup = new Map(keys.map((g, i) => [g, i % k]));
+        return rows.map(r => foldOfGroup.get(groupOf(r)));
     }
 
-    // Matrix folds (standard workflow): encoding/scaling already fitted on the whole Training set
-    function buildMatrixFolds(X, y, k, isClassification, seed, targetClasses) {
-        const sample = stratifiedSample(X, y, TUNE_MAX_ROWS, isClassification, seed);
-        const fold = makeFolds(sample.y, k, isClassification, seed);
+    // Cap very large training sets (stratified, or by whole groups when grouping is used)
+    function capRows(rows, isClassification, targetCol, seed, groupOf) {
+        if (rows.length <= TUNE_MAX_ROWS) return { rows, sampled: false };
+        const pick = assignRowFolds(rows, Math.ceil(rows.length / TUNE_MAX_ROWS), isClassification, targetCol, seed, groupOf);
+        return { rows: rows.filter((_, i) => pick[i] === 0), sampled: true };
+    }
+
+    // Leak-free folds for the standard workflow: imputation, encoding and scaling are fitted on each fold's
+    // learning rows only and then applied to that fold's validation rows (as for the final Testing set)
+    async function buildStandardRowFolds(rawTrainRows, k, isClassification, seed, onFold) {
+        const targetCol = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
+        const groupOf = splitGroupFunction();
+        const cap = capRows(rawTrainRows, isClassification, targetCol, seed, groupOf);
+        const fold = assignRowFolds(cap.rows, k, isClassification, targetCol, seed, groupOf);
         const sets = [];
         for (let f = 0; f < k; f++) {
-            const trI = [], vaI = [];
-            for (let i = 0; i < fold.length; i++) (fold[i] === f ? vaI : trI).push(i);
-            sets.push({ Xtr: trI.map(i => sample.X[i]), ytr: trI.map(i => sample.y[i]), Xva: vaI.map(i => sample.X[i]), yva: vaI.map(i => sample.y[i]), targetClasses });
+            const tr = cap.rows.filter((_, i) => fold[i] !== f);
+            const va = cap.rows.filter((_, i) => fold[i] === f);
+            const trImp = DataEngine.imputeDataset(tr, AppState.columnConfigs, AppState.columnAnalysis);
+            const vaImp = DataEngine.imputeDataset(va, AppState.columnConfigs, AppState.columnAnalysis, trImp.plan);
+            const prep = DataEngine.prepareFeaturesAndTarget(trImp.imputedRows, AppState.columnConfigs);
+            const te = DataEngine.prepareTestingDataset(vaImp.imputedRows, prep);
+            sets.push({ Xtr: prep.X, ytr: prep.y, Xva: te.X, yva: te.y, targetClasses: prep.targetClasses });
+            if (onFold) onFold(f + 1, k);
+            await ModelEngine.yieldToBrowser();
         }
-        return { sets, rowsUsed: sample.X.length, rowsTotal: X.length, sampled: sample.sampled };
-    }
-
-    async function tuneModelHyperparameters(mId, baseHp, X, y, isClassification, numClasses, targetClasses, folds, watchdog, progress) {
-        const k = mId === 'nn' ? Math.min(folds, 3) : folds; // neural networks are slow: at most 3 folds
-        const fd = buildMatrixFolds(X, y, k, isClassification, baseHp.seed, targetClasses);
-        return runTuningOnFolds(mId, baseHp, fd, isClassification, numClasses, watchdog, progress);
+        return { sets, rowsUsed: cap.rows.length, rowsTotal: rawTrainRows.length, sampled: cap.sampled, grouped: Boolean(groupOf), decisionThreshold: readDecisionThreshold('decision-threshold') };
     }
 
     // Core: compare the grid by mean cross-validated ranking metric over pre-built folds
-    async function runTuningOnFolds(mId, baseHp, fd, isClassification, numClasses, watchdog, progress) {
+    async function runTuningOnFolds(mId, baseHp, fd, isClassification, numClasses, watchdog, progress, ownOnly = false) {
         const metricKey = rankingMetricKey(isClassification);
-        const metricDef = (isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression)[metricKey];
+        const metricDefs = isClassification ? RANKING_METRICS.classification : RANKING_METRICS.regression;
+        const metricDef = metricDefs[metricKey];
         const k = fd.sets.length;
-        const { keys, candidates } = tuningGrid(mId, baseHp, Math.min(...fd.sets.map(f => f.Xtr.length)));
+        const grid = (ownOnly || !TUNABLE_MODELS.has(mId))
+            ? { keys: [], candidates: [{ params: {}, isOwn: true }] }
+            : tuningGrid(mId, baseHp, Math.min(...fd.sets.map(f => f.Xtr.length)));
+        const { keys, candidates } = grid;
         const results = [];
         const totalFits = candidates.length * k;
         const t0 = Date.now();
@@ -2408,6 +2544,8 @@
         for (let c = 0; c < candidates.length; c++) {
             const hp = { ...baseHp, ...candidates[c].params };
             const scores = [];
+            const all = {}; // every ranking metric, so the selection can follow a later change of ranking metric
+            Object.keys(metricDefs).forEach(key => { all[key] = []; });
             for (let f = 0; f < k; f++) {
                 if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
                 const { Xtr, ytr, Xva, yva, targetClasses } = fd.sets[f];
@@ -2415,20 +2553,21 @@
                 if (progress) progress(c + 1, candidates.length, f + 1, k, eta());
                 const m = ModelEngine.createModel(mId, isClassification, numClasses, hp);
                 try {
-                    if (mId === 'nn') {
+                    if (mId === 'nn' || mId === 'ensemble') {
                         await m.fit(Xtr, ytr, null, null, (ep, tot) => {
                             if (watchdog && watchdog.aborted) throw new Error("Training aborted by user.");
                             // Heartbeat every few epochs so the monitor never mistakes a long fold for a stall
-                            if (progress && (ep % 3 === 0 || ep === tot)) progress(c + 1, candidates.length, f + 1, k, `${eta()} &middot; epoch ${ep}/${tot}`);
+                            if (progress && (ep % 3 === 0 || ep === tot)) progress(c + 1, candidates.length, f + 1, k, `${eta()} &middot; ${mId === 'nn' ? 'epoch' : 'base model'} ${ep}/${tot}`);
                         });
                     } else {
                         await fitWithYields(m, Xtr, ytr, watchdog);
                     }
                     const ev = await ModelEngine.evaluateAsync(m, Xva, yva, isClassification, targetClasses,
-                        isClassification ? {} : { regressionThreshold: trainingMedian(ytr), thresholdSource: 'median of the fold training outcomes' },
+                        isClassification ? { decisionThreshold: fd.decisionThreshold } : { regressionThreshold: trainingMedian(ytr), thresholdSource: 'median of the fold training outcomes' },
                         evalAbortOpts(watchdog));
                     const v = ev ? ev[metricKey] : null;
                     if (typeof v === 'number' && isFinite(v)) scores.push(v);
+                    if (ev) Object.keys(all).forEach(key => { if (typeof ev[key] === 'number' && isFinite(ev[key])) all[key].push(ev[key]); });
                 } finally {
                     disposeModels([m]);
                 }
@@ -2437,7 +2576,9 @@
             }
             const mean = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
             const sd = scores.length > 1 ? Math.sqrt(scores.reduce((a, b) => a + (b - mean) ** 2, 0) / (scores.length - 1)) : null;
-            results.push({ params: candidates[c].params, isOwn: candidates[c].isOwn, mean, sd, nFolds: scores.length });
+            const allMeans = {};
+            Object.keys(all).forEach(key => { allMeans[key] = all[key].length ? all[key].reduce((a, b) => a + b, 0) / all[key].length : null; });
+            results.push({ params: candidates[c].params, isOwn: candidates[c].isOwn, mean, sd, nFolds: scores.length, allMeans });
         }
 
         // Best mean CV score; ties keep the user's own (or the protocol's) settings, listed first
@@ -2451,8 +2592,133 @@
         return {
             modelId: mId, keys, results, best, own: results.find(r => r.isOwn),
             bestHp: { ...baseHp, ...best.params }, folds: k, rowsUsed: fd.rowsUsed, rowsTotal: fd.rowsTotal,
-            sampled: fd.sampled, metricKey, metricLabel: metricDef.label, higherIsBetter: metricDef.higherIsBetter
+            sampled: fd.sampled, grouped: Boolean(fd.grouped), metricKey, metricLabel: metricDef.label, higherIsBetter: metricDef.higherIsBetter
         };
+    }
+
+    // Raw training rows for Option B (all of Dataset i with a usable outcome)
+    function optionBTrainRawRows(prep) {
+        return AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[prep.targetCol]) &&
+            (prep.isClassification || !isNaN(Number(r[prep.targetCol]))));
+    }
+
+    // Seed for the cross-validation folds: the Step 4 split seed
+    function splitSeedForCV() {
+        const custom = document.querySelector('input[name="split-seed-mode"]:checked')?.value === 'custom';
+        const v = custom ? parseSeed(document.getElementById('split-seed-input')?.value) : null;
+        return v !== null ? v : 42;
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // How records are divided into Training and Testing sets: random (stratified by outcome), by patient
+    // (all records of one patient on the same side) or by date (earlier records train, later records test)
+    // ---------------------------------------------------------------------------------------------
+    function splitSpec(scope) {
+        const pre = scope === 'pipeline' ? 'pipeline-' : '';
+        const method = document.getElementById(`${pre}split-method`)?.value || 'random';
+        return {
+            method,
+            groupCol: method === 'group' ? (document.getElementById(`${pre}split-group-col`)?.value || '') : '',
+            dateCol: method === 'time' ? (document.getElementById(`${pre}split-date-col`)?.value || '') : ''
+        };
+    }
+
+    // Grouping for cross-validation folds (patient-level splitting): null when records are independent
+    function splitGroupFunction() {
+        const sp = splitSpec('standard');
+        return sp.method === 'group' && sp.groupCol ? (r => String(r[sp.groupCol] ?? '').trim()) : null;
+    }
+    function pipelineGroupFunction() {
+        const sp = splitSpec('pipeline');
+        return sp.method === 'group' && sp.groupCol ? (r => String(r[sp.groupCol] ?? '').trim()) : null;
+    }
+
+    function splitRowsForWorkflow(rows, labels, trainRatio, isClassification, seed, scope) {
+        const sp = splitSpec(scope);
+        const target = Object.keys(AppState.columnConfigs).find(c => AppState.columnConfigs[c].role === 'target');
+        if (sp.method === 'group') {
+            if (!sp.groupCol || sp.groupCol === target) throw new Error('Choose the column that identifies each patient for the "keep each patient\'s records together" split.');
+            const res = DataEngine.trainTestSplitGrouped(rows, labels, rows.map(r => r[sp.groupCol]), trainRatio, seed);
+            res.info.column = sp.groupCol;
+            return res;
+        }
+        if (sp.method === 'time') {
+            if (!sp.dateCol || sp.dateCol === target) throw new Error('Choose the date column for the "by date" split.');
+            const res = DataEngine.trainTestSplitTemporal(rows, labels, rows.map(r => r[sp.dateCol]), trainRatio);
+            res.info.column = sp.dateCol;
+            if (!res.testX.length) throw new Error(`No usable dates found in "${sp.dateCol}" for a date-based split.`);
+            return res;
+        }
+        const res = DataEngine.trainTestSplit(rows, labels, trainRatio, isClassification, seed);
+        res.info = { method: 'random' };
+        return res;
+    }
+
+    // Plain description of the split, for results and reports
+    function describeSplit(info) {
+        if (!info || info.method === 'random') return 'random split, balanced by outcome';
+        if (info.method === 'group') return `split by patient ("${info.column}"): ${info.trainGroups} patient(s) in Training, ${info.testGroups} in Testing, none in both`;
+        return `split by date ("${info.column}"): Training up to ${info.trainUntil}, Testing ${info.testFrom} to ${info.testUntil}${info.undated ? ` (${info.undated} record(s) without a usable date kept in Training)` : ''}`;
+    }
+
+    // Fill the patient-ID and date column choices (identifier/date-like columns listed first)
+    function populateSplitColumnSelects(headers) {
+        const analysis = AppState.columnAnalysis || {};
+        const looksDate = h => /date|time|admission|visit|year/i.test(h) || (analysis[h] && /calendar date/i.test(analysis[h].autoMetaReason || ''));
+        const looksId = h => /id|mrn|patient|subject|record|number|no\b/i.test(h) || (analysis[h] && analysis[h].role === 'meta');
+        const fill = (id, prefer) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const ordered = [...headers.filter(prefer), ...headers.filter(h => !prefer(h))];
+            el.innerHTML = '<option value="">— choose a column —</option>' + ordered.map(h => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`).join('');
+            const first = headers.find(prefer);
+            if (first) el.value = first;
+        };
+        fill('split-group-col', looksId); fill('pipeline-split-group-col', looksId);
+        fill('split-date-col', looksDate); fill('pipeline-split-date-col', looksDate);
+        updateSplitMethodVisibility();
+    }
+
+    function updateSplitMethodVisibility() {
+        ['', 'pipeline-'].forEach(pre => {
+            const method = document.getElementById(`${pre}split-method`)?.value || 'random';
+            const g = document.getElementById(`${pre}split-group-wrap`);
+            const d = document.getElementById(`${pre}split-date-wrap`);
+            if (g) g.style.display = method === 'group' ? '' : 'none';
+            if (d) d.style.display = method === 'time' ? '' : 'none';
+        });
+    }
+
+    // Decision threshold for binary outcomes (probability of the positive class at or above which a patient is
+    // classed as positive). Chosen by the user on clinical grounds; never optimised on the Testing set.
+    function readDecisionThreshold(id) {
+        const v = parseFloat(document.getElementById(id)?.value);
+        return isFinite(v) && v > 0 && v < 1 ? v : 0.5;
+    }
+
+    // Prediction for a new patient with the deployed model's decision threshold
+    function thresholdedOutput(o) {
+        const t = AppState.evalResults && AppState.evalResults.decisionThreshold;
+        const prep = AppState.prepMeta;
+        if (!o || !prep || !prep.isClassification || (prep.targetClasses || []).length !== 2 || !t || Math.abs(t - 0.5) < 1e-9) return o;
+        return ModelEngine.applyDecisionThreshold(o, t);
+    }
+
+    // "CV score" cell: cross-validated ranking metric inside the Training set (± SD across folds)
+    function formatCvScore(ev, isClassification) {
+        if (!ev || !ev.cv) return '<span style="color: var(--text-muted);">–</span>';
+        const key = rankingMetricKey(isClassification);
+        const v = ev.cv[key];
+        if (typeof v !== 'number' || !isFinite(v)) return '<span style="color: var(--text-muted);">N/A</span>';
+        const pctKey = ['macroF1', 'balancedAccuracy', 'accuracy'].includes(key);
+        const sdTxt = key === ev.cv.metricKey && typeof ev.cv.sd === 'number' ? ` <span style="font-size: 10.5px; color: var(--text-muted);">± ${pctKey ? (ev.cv.sd * 100).toFixed(1) : ev.cv.sd.toFixed(3)}</span>` : '';
+        return `<strong style="color: var(--accent-cyan);">${pctKey ? (v * 100).toFixed(1) + '%' : v.toFixed(3)}</strong>${sdTxt}`;
+    }
+
+    // Cross-validated performance of a model's final settings, attached to its results for model selection
+    function cvSummaryFrom(tuneResult) {
+        const b = tuneResult.best;
+        return { ...b.allMeans, folds: tuneResult.folds, sd: b.sd, metricKey: tuneResult.metricKey, rowsUsed: tuneResult.rowsUsed, grouped: tuneResult.grouped };
     }
 
     // Row folds (7-step pipeline): each fold re-runs SMOTENC and refits encoding/scaling on its own
@@ -2461,15 +2727,11 @@
         const p = AppState.pipeline;
         const targetCol = p.targetCol;
         const isClassification = p.columnConfigs[targetCol]?.type !== 'continuous';
-        const labels = trainRows.map(r => String(r[targetCol]));
-        let rows = trainRows;
-        let sampled = false;
-        if (rows.length > TUNE_MAX_ROWS) {
-            const pick = makeFolds(isClassification ? labels : rows.map(r => Number(r[targetCol])), Math.ceil(rows.length / TUNE_MAX_ROWS), isClassification, seed);
-            rows = rows.filter((_, i) => pick[i] === 0);
-            sampled = true;
-        }
-        const fold = makeFolds(rows.map(r => (isClassification ? String(r[targetCol]) : Number(r[targetCol]))), k, isClassification, seed);
+        const groupOf = pipelineGroupFunction();
+        const cap = capRows(trainRows, isClassification, targetCol, seed, groupOf);
+        const rows = cap.rows;
+        const sampled = cap.sampled;
+        const fold = assignRowFolds(rows, k, isClassification, targetCol, seed, groupOf);
         const cfg = {};
         cols.forEach(c => { cfg[c] = p.columnConfigs[c]; });
         cfg[targetCol] = p.columnConfigs[targetCol];
@@ -2484,7 +2746,7 @@
             if (onFold) onFold(f + 1, k);
             await ModelEngine.yieldToBrowser(); // keep the page responsive between folds
         }
-        return { sets, rowsUsed: rows.length, rowsTotal: trainRows.length, sampled };
+        return { sets, rowsUsed: rows.length, rowsTotal: trainRows.length, sampled, grouped: Boolean(groupOf), decisionThreshold: readDecisionThreshold('pipeline-decision-threshold') };
     }
 
     // Show the chosen settings in the model's settings panel (so they are visible and saved with Save settings)
@@ -2546,7 +2808,7 @@
                 ${report.smallSampleWarning ? `<div class="tune-warn">⚠️ ${report.smallSampleWarning}</div>` : ''}
                 <p class="tune-muted">Each combination was trained on part of the Training set and scored on the remaining part, in turn, so every training case was used once for scoring. The best combination was then used to train the final model, which was scored once on the untouched Testing set (results below). ${report.pipeline
                     ? `In each fold, SMOTENC balancing and encoding/scaling were re-done using only that fold's learning patients, so no synthetic patient was ever scored against the real patient it was made from. The protocol's default settings were always one of the candidates and are kept unless another combination does better.`
-                    : `The chosen settings are now shown in each model's settings panel.`} Small differences between combinations (within the ± SD) are not meaningful.${report.ensembleSkipped ? ` The Ensemble was not tuned: it uses ${report.pipeline ? 'the protocol\'s fixed base-model settings' : 'its base models\' settings'}.` : ''}</p>
+                    : `In each fold, missing-value filling, encoding and scaling were redone using only that fold's learning patients, so the mini-test patients never influenced the preparation. The chosen settings are now shown in each model's settings panel.`} Small differences between combinations (within the ± SD) are not meaningful.${report.ensembleSkipped ? ` The Ensemble was not tuned: it uses ${report.pipeline ? 'the protocol\'s fixed base-model settings' : 'its base models\' settings'}.` : ''}</p>
                 ${rows}
             </div>`;
     }
@@ -2565,6 +2827,8 @@
 
             // Prepare features and target from training cohort
             const prep = DataEngine.prepareFeaturesAndTarget(AppState.imputedData.imputedRows, AppState.columnConfigs);
+            // New patients' blank predictors are filled with the same fitted imputation as the training data
+            prep.imputation = { configs: JSON.parse(JSON.stringify(AppState.columnConfigs)), plan: AppState.imputedData.plan };
             AppState.prepMeta = prep;
 
             // Determine active validation protocol (Option A vs Option B)
@@ -2599,18 +2863,39 @@
             const autoTune = Boolean(document.getElementById('autotune-check')?.checked);
             const tuneFolds = parseInt(document.getElementById('autotune-folds')?.value, 10) || 5;
             const tuningReport = { folds: tuneFolds, models: [], ensembleSkipped: autoTune && modelsToTest.includes('ensemble') };
-            const tuneIfRequested = async (mId, hyperparams, X, y, numClasses, targetClasses, i) => {
-                if (!autoTune || !TUNABLE_MODELS.has(mId)) return hyperparams;
-                const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase() };
-                const t = await tuneModelHyperparameters(mId, hyperparams, X, y, prep.isClassification, numClasses, targetClasses, tuneFolds, watchdog,
-                    (c, nc, f, nf, eta) => {
-                        const msg = `🎯 [${i + 1}/${modelsToTest.length}] Tuning ${mInfo.name}: combination ${c}/${nc}, fold ${f}/${nf}${(eta || '').replace(/&middot;/g, '·')} (Training set only)...`;
+            // Model selection by cross-validation inside the Training set (recommended), or by Testing-set results
+            const selectByCV = modelsToTest.length > 1 && (document.querySelector('input[name="selection-mode"]:checked')?.value || 'cv') === 'cv';
+            tuningReport.selectByCV = selectByCV;
+            const foldCache = {};
+            const foldsFor = async (rawTrainRows, k, label, i) => {
+                if (!foldCache[k]) {
+                    foldCache[k] = await buildStandardRowFolds(rawTrainRows, k, prep.isClassification, splitSeedForCV(), (f, nf) => {
+                        const msg = `🎯 Preparing ${nf} cross-validation folds (imputation and scaling refitted inside each fold): fold ${f}/${nf}...`;
                         DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${msg}</span>`;
                         if (watchdog) watchdog.tick(i + 1, msg);
                     });
-                tuningReport.models.push(t);
-                applyHyperparamsToForm(mId, t.bestHp);
-                return t.bestHp;
+                }
+                return foldCache[k];
+            };
+            // Returns the settings to train with and, when selecting by CV, the cross-validated scores
+            const tuneIfRequested = async (mId, hyperparams, rawTrainRows, numClasses, i) => {
+                const doTune = autoTune && TUNABLE_MODELS.has(mId);
+                if (!doTune && !selectByCV) return { hp: hyperparams, cv: null };
+                const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase() };
+                const k = (mId === 'nn' || mId === 'ensemble') ? Math.min(tuneFolds, 3) : tuneFolds; // slow models: at most 3 folds
+                const fd = await foldsFor(rawTrainRows, k, mInfo.name, i);
+                const t = await runTuningOnFolds(mId, hyperparams, fd, prep.isClassification, numClasses, watchdog,
+                    (c, nc, f, nf, eta) => {
+                        const what = doTune ? `Tuning ${mInfo.name}: combination ${c}/${nc}, fold ${f}/${nf}` : `Cross-validating ${mInfo.name}: fold ${f}/${nf}`;
+                        const msg = `🎯 [${i + 1}/${modelsToTest.length}] ${what}${(eta || '').replace(/&middot;/g, '·')} (Training set only)...`;
+                        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">${msg}</span>`;
+                        if (watchdog) watchdog.tick(i + 1, msg);
+                    }, !doTune);
+                if (doTune) {
+                    tuningReport.models.push(t);
+                    applyHyperparamsToForm(mId, t.bestHp);
+                }
+                return { hp: t.bestHp, cv: selectByCV ? cvSummaryFrom(t) : null };
             };
 
             if (isOptionA) {
@@ -2638,16 +2923,18 @@
                 const targetCol = prep.targetCol;
                 const rawRows = AppState.parsedData.rows.filter(r => !DataEngine.isMissing(r[targetCol]) &&
                     (prep.isClassification || !isNaN(Number(r[targetCol]))));
-                const rowSplit = DataEngine.trainTestSplit(
+                const rowSplit = splitRowsForWorkflow(
                     rawRows,
                     rawRows.map(r => String(r[targetCol]).trim()),
                     trainRatio,
                     prep.isClassification,
-                    splitSeed
+                    splitSeed,
+                    'standard'
                 );
                 const trainImp = DataEngine.imputeDataset(rowSplit.trainX, AppState.columnConfigs, AppState.columnAnalysis);
                 const testImp = DataEngine.imputeDataset(rowSplit.testX, AppState.columnConfigs, AppState.columnAnalysis, trainImp.plan);
                 const splitPrep = DataEngine.prepareFeaturesAndTarget(trainImp.imputedRows, AppState.columnConfigs);
+                splitPrep.imputation = { configs: JSON.parse(JSON.stringify(AppState.columnConfigs)), plan: trainImp.plan };
                 const testData = DataEngine.prepareTestingDataset(testImp.imputedRows, splitPrep);
                 const split = { trainX: splitPrep.X, trainY: splitPrep.y, testX: testData.X, testY: testData.y };
                 AppState.trainTestData = split;
@@ -2668,8 +2955,8 @@
 
                     const mId = modelsToTest[i];
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
-                    const hyperparams = await tuneIfRequested(mId, getHyperparamsForModel(mId, prep), split.trainX, split.trainY,
-                        splitPrep.targetClasses.length || 2, splitPrep.targetClasses, i);
+                    const tuned = await tuneIfRequested(mId, getHyperparamsForModel(mId, prep), rowSplit.trainX, splitPrep.targetClasses.length || 2, i);
+                    const hyperparams = tuned.hp;
 
                     if (watchdog) {
                         watchdog.tick(i + 1, `Fitting ${mInfo.name} on ${Math.round(trainRatio * 100)}% split (${split.trainX.length} cases)...`);
@@ -2716,9 +3003,12 @@
                     // Benchmark out-of-sample accuracy on held-out test split
                     const evalRes = await ModelEngine.evaluateAsync(valModel, split.testX, split.testY, prep.isClassification, splitPrep.targetClasses, {
                         regressionThreshold: splitThreshold,
+                        decisionThreshold: readDecisionThreshold('decision-threshold'),
                         thresholdSource: 'median of the training-split outcomes'
                     }, evalAbortOpts(watchdog));
                     evalRes.protocol = 'option-a';
+                    evalRes.splitInfo = rowSplit.info;
+                    if (tuned.cv) evalRes.cv = tuned.cv;
                     evalRes.testImputedCells = testImp.audit.filter(a => a.type === 'impute_column').reduce((acc, a) => acc + a.imputedCount, 0);
                     evalRes.testDroppedRows = rowSplit.testX.length - testImp.imputedRows.length;
                     evalRes.unknownClassCount = testData.unknownClassCount;
@@ -2785,6 +3075,7 @@
                         evalRes: evalRes,
                         model: activeModelInstance,
                         retrained: shouldRetrain,
+                        hyperparams,
                         seed: hyperparams.seed,
                         splitSeed: splitSeed
                     });
@@ -2830,8 +3121,8 @@
 
                     const mId = modelsToTest[i];
                     const mInfo = MODEL_INFO[mId] || { name: mId.toUpperCase(), icon: '⚙️' };
-                    const hyperparams = await tuneIfRequested(mId, getHyperparamsForModel(mId, prep), prep.X, prep.y,
-                        prep.targetClasses.length || 2, prep.targetClasses, i);
+                    const tuned = await tuneIfRequested(mId, getHyperparamsForModel(mId, prep), optionBTrainRawRows(prep), prep.targetClasses.length || 2, i);
+                    const hyperparams = tuned.hp;
 
                     if (watchdog) {
                         watchdog.tick(i + 1, `Fitting ${mInfo.name} on 100% of Dataset (i) (${prep.X.length} cases)...`);
@@ -2878,9 +3169,11 @@
                     // Evaluate on independent Dataset (ii)
                     const evalRes = await ModelEngine.evaluateAsync(model, testPrep.X, testPrep.y, prep.isClassification, prep.targetClasses, {
                         regressionThreshold: prep.isClassification ? null : trainingMedian(prep.y),
+                        decisionThreshold: readDecisionThreshold('decision-threshold'),
                         thresholdSource: 'median of the Dataset (i) training outcomes'
                     }, evalAbortOpts(watchdog));
                     evalRes.protocol = 'option-b';
+                    if (tuned.cv) evalRes.cv = tuned.cv;
                     evalRes.retrainOn100 = false;
                     evalRes.trainCount = prep.X.length;
                     evalRes.testCount = testPrep.totalEvaluated;
@@ -2904,6 +3197,7 @@
                         evalRes: evalRes,
                         model: model,
                         retrained: false,
+                        hyperparams,
                         seed: hyperparams.seed
                     });
                 }
@@ -2966,7 +3260,9 @@
                             Top-ranked on ${escapeHtml(rankingMetricLabel(prep.isClassification))}: <strong>${champion.info.name}</strong> [${topAccText} &bull; Seed: <code style="color: var(--accent-purple); font-weight: 700;">🌱 ${champion.evalRes.seed !== null ? champion.evalRes.seed : 'Auto'}</code>] &bull; All model seeds are listed below.
                         </span>
                         <span style="font-size: 11px; color: var(--accent-amber);">
-                            ⚠️ The leader was chosen using the same test cases it is scored on, so its test score is optimistically biased. Confirm the chosen model on an independent cohort (Option B).
+                            ${champion.evalRes.cv
+                                ? '✓ The leader was chosen by cross-validation inside the Training set, so its Testing-set score is an honest estimate. Confirm it on an independent cohort (Option B) before clinical use.'
+                                : '⚠️ The leader was chosen using the same test cases it is scored on, so its test score is optimistically biased. Choose by cross-validation (option above) or confirm the chosen model on an independent cohort (Option B).'}
                         </span>
                     </div>
                 `;
@@ -3253,10 +3549,32 @@
             }
         }
 
+        // Calibration and decision-threshold panel (binary outcomes)
+        renderCalibrationPanel('calibration-panel-container',
+            (allResults.length ? allResults : [{ modelId: AppState.selectedModelId, evalRes }]).map(r => ({
+                name: (MODEL_INFO[r.modelId] || { name: r.modelId || 'Model' }).name, ev: r.evalRes
+            })), Boolean(evalRes && evalRes.isClassification));
+
         // Methodological notes that affect how the metrics should be read
         if (DOM.retrainStatusBanner) {
             const notes = [];
             const resultsForNotes = allResults.length ? allResults.map(r => r.evalRes) : [evalRes];
+            if (evalRes && evalRes.splitInfo && evalRes.splitInfo.method !== 'random') {
+                notes.push(`Training/Testing ${escapeHtml(describeSplit(evalRes.splitInfo))}.${evalRes.splitInfo.method === 'time' ? ' Cross-validation inside the Training period uses folds that are not time-ordered.' : ''}`);
+            }
+            if (evalRes && evalRes.isClassification && prep && Array.isArray(prep.y) && prep.y.length && prep.X && prep.X[0]) {
+                const counts = {};
+                prep.y.forEach(v => { counts[v] = (counts[v] || 0) + 1; });
+                const minority = Math.min(...Object.values(counts));
+                const nPred = prep.X[0].length;
+                const epv = minority / Math.max(1, nPred);
+                if (epv < 10) {
+                    notes.push(`⚠️ <strong>Small sample for the number of predictors:</strong> the smaller outcome group has ${minority} patient(s) for ${nPred} encoded predictor column(s) (${epv.toFixed(1)} per predictor; at least 10–20 is a common rule of thumb). Models may overfit; consider fewer predictors or more patients, and treat the results as exploratory.`);
+                }
+            }
+            if (evalRes && evalRes.cv) {
+                notes.push(`Best model chosen by ${evalRes.cv.folds}-fold cross-validation inside the Training set${evalRes.cv.grouped ? ' (each patient\'s records kept in one fold)' : ''}; missing-value filling, encoding and scaling were refitted inside every fold.`);
+            }
             if (prep && prep.isClassification && prep.positiveClass !== null && prep.positiveClass !== undefined) {
                 notes.push(`Positive (event) class for ROC-AUC, Brier score, sensitivity and TP/FN: <strong>${escapeHtml(prep.positiveClass)}</strong>. Change it in Step 2 (target card) if this is not the outcome of interest.`);
             }
@@ -3272,7 +3590,9 @@
                 notes.push(`Dataset (ii) rows excluded: ${evalRes.missingTargetCount || 0} with a missing outcome, ${evalRes.unknownClassCount || 0} with an outcome class not seen in training.`);
             }
             if (!isOptionB) {
-                notes.push('Option A: records were split first; imputation, category encoding and scaling were fitted on the training split only and applied unchanged to the test split. The split is random at row level: if patients contribute several rows, or the data are temporal or multicentre, use a patient-level, temporal or external split (Option B) instead.');
+                notes.push(`Option A: records were split first; imputation, category encoding and scaling were fitted on the training split only and applied unchanged to the test split.${(!evalRes.splitInfo || evalRes.splitInfo.method === 'random')
+                    ? ' The split is random at row level: if patients contribute several rows, choose "keep each patient\'s records together"; for temporal data choose "by date"; for multicentre data use an external cohort (Option B).'
+                    : ''}`);
                 if (evalRes.testImputedCells > 0) {
                     notes.push(`${evalRes.testImputedCells} missing predictor value(s) in the test split were filled with training-derived values.`);
                 }
@@ -3311,6 +3631,7 @@
             if (DOM.multiModelLeaderboardContainer) {
                 DOM.multiModelLeaderboardContainer.style.display = 'block';
                 let lbRows = '';
+                const anyCV = allResults.some(r => r.evalRes && r.evalRes.cv);
                 allResults.forEach((resItem, idx) => {
                     const mInfo = resItem.info;
                     const rEval = resItem.evalRes;
@@ -3353,6 +3674,7 @@
                     lbRows += `
                         <tr style="${isDeployed ? 'background: rgba(6, 182, 212, 0.05);' : ''}">
                             <td><span class="leaderboard-rank ${isChampion ? 'rank-1' : ''}">${rankBadge}</span></td>
+                            ${anyCV ? `<td>${formatCvScore(rEval, prep.isClassification)}</td>` : ''}
                             <td>
                                 <div style="display: flex; align-items: center; gap: 8px;">
                                     <span style="font-size: 16px;">${mInfo.icon}</span>
@@ -3384,7 +3706,9 @@
                                     <span>🏆</span> Benchmark Leaderboard &mdash; ${allResults.length} Tested Models Ranked by ${escapeHtml(rankingMetricLabel(prep.isClassification))}
                                 </h3>
                                 <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-                                    Comparative performance on ${cohortDesc}, ranked by <strong>${escapeHtml(rankingMetricLabel(prep.isClassification))}</strong> (change the primary metric above). The top-ranked model (${allResults[0].info.name}) is set as the active predictor. A single train/test split does not show that one model is generally superior, and because the leader was selected on these same test cases its score is optimistically biased. Report all metrics, not only the winner. Click any seed pill to copy it.
+                                    ${anyCV
+                                        ? `Models are ranked by <strong>cross-validated ${escapeHtml(rankingMetricLabel(prep.isClassification))} inside the Training set</strong> (CV column); the Testing set (${cohortDesc}) was not used to choose. The top-ranked model (${allResults[0].info.name}) is set as the active predictor, and its Testing-set score is an honest estimate. The other models' test scores are shown for information; picking a different winner from them would reintroduce optimism. Report all metrics, not only the winner. Click any seed pill to copy it.`
+                                        : `Comparative performance on ${cohortDesc}, ranked by <strong>${escapeHtml(rankingMetricLabel(prep.isClassification))}</strong> (change the primary metric above). The top-ranked model (${allResults[0].info.name}) is set as the active predictor. A single train/test split does not show that one model is generally superior, and because the leader was selected on these same test cases its score is optimistically biased. Choosing by cross-validation (option above) avoids this. Report all metrics, not only the winner. Click any seed pill to copy it.`}
                                 </div>
                             </div>
                             <span class="pill pill-target" style="font-size: 12px; font-weight: 700;">
@@ -3396,6 +3720,7 @@
                                 <thead>
                                     <tr>
                                         <th>Rank</th>
+                                        ${anyCV ? `<th title="Score inside the Training set by cross-validation (mean ± SD across folds); used to choose the best model">CV ${escapeHtml(rankingMetricLabel(prep.isClassification))}</th>` : ''}
                                         <th>Model Algorithm</th>
                                         <th>Paradigm</th>
                                         <th>${prep.isClassification ? 'Test Accuracy' : 'Test R²'}</th>
@@ -3735,11 +4060,11 @@
 
         const inputIssues = [];
         const xVector = DataEngine.transformSingleRow(inputRow, AppState.prepMeta, inputIssues);
-        const result = AppState.trainedModel.predictSingle(xVector);
+        const result = thresholdedOutput(AppState.trainedModel.predictSingle(xVector));
         const prep = AppState.prepMeta;
         const inputWarningHtml = inputIssues.length > 0
             ? `<div style="font-size: 11.5px; color: var(--accent-amber); margin-top: 6px; font-weight: 600;">
-                    ⚠️ Blank or unrecognised input(s) replaced with training-cohort values (mean / median rank / most frequent category): ${escapeHtml(inputIssues.map(i => i.column).join(', '))}
+                    ⚠️ Blank input(s) filled as in training (the fitted missing-data method); unrecognised values replaced with the most frequent training category / middle rank: ${escapeHtml(inputIssues.map(i => i.column).join(', '))}
                </div>`
             : '';
 
@@ -3792,7 +4117,7 @@
                     ${ensembleDetailsHtml}
                     ${inputWarningHtml}
                     <div style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
-                        ${probabilityLabel(result.probabilityType).note}: not a calibrated clinical risk or a measure of certainty (check the Brier score in Step 4). For research and educational use only.
+                        ${probabilityLabel(result.probabilityType).note}: not a calibrated clinical risk or a measure of certainty (check the calibration panel and Brier score in Step 4 / Step 7). For research and educational use only.${AppState.evalResults && AppState.evalResults.decisionThreshold && Math.abs(AppState.evalResults.decisionThreshold - 0.5) > 1e-9 ? ` Classed with a decision threshold of ${AppState.evalResults.decisionThreshold.toFixed(2)} for the positive outcome.` : ''}
                     </div>
                 </div>
                 <div class="banner-confidence">
@@ -3907,7 +4232,7 @@
 
         rows.forEach((r, rowIdx) => {
             const rowIssues = rowIssueLists[rowIdx];
-            const predRes = outputs[rowIdx];
+            const predRes = thresholdedOutput(outputs[rowIdx]);
 
             let predictedLabel = predRes.pred;
             let confidence = 'N/A';
@@ -4160,13 +4485,14 @@
         AppState.pipeline.trainRatio = pipeTrainRatio;
         const targetVals = usableRows.map(r => String(r[targetCol]).trim());
 
-        const splitResult = DataEngine.trainTestSplit(
-            usableRows,
-            targetVals,
-            pipeTrainRatio,
-            isClassification,
-            AppState.pipeline.seed
-        );
+        let splitResult;
+        try {
+            splitResult = splitRowsForWorkflow(usableRows, targetVals, pipeTrainRatio, isClassification, AppState.pipeline.seed, 'pipeline');
+        } catch (err) {
+            alert(err.message);
+            return;
+        }
+        AppState.pipeline.splitInfo = splitResult.info;
 
         const trainRaw = splitResult.trainX;
         const testRaw = splitResult.testX;
@@ -4290,6 +4616,9 @@
                 so no predictor values needed imputing (the fitted values above are kept only as a fallback for new cases at prediction time).
             </p>`;
         }
+        tableHtml += `<p style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
+            Split method: <strong>${escapeHtml(describeSplit(AppState.pipeline.splitInfo))}</strong>.
+        </p>`;
         tableHtml += `<p style="font-size: 12px; color: var(--text-secondary); margin-top: 8px;">
             Outcome '<strong>${escapeHtml(AppState.pipeline.targetCol)}</strong>' is never imputed${AppState.pipeline.excludedMissingTarget > 0
                 ? `: ${AppState.pipeline.excludedMissingTarget} row(s) with a missing outcome were excluded before the split.`
@@ -5021,6 +5350,8 @@
                 activeCols,
                 targetCol
             );
+            // New patients' blank predictors are filled with the pipeline's training-only fill values
+            fullPrep.fillValues = { ...(AppState.pipeline.imputer ? AppState.pipeline.imputer.fillValues : {}) };
             // Single source for the class count: the encoder's class list
             const numClasses = isClassification ? fullPrep.targetClasses.length : 1;
 
@@ -5028,6 +5359,7 @@
             const fullTestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, fullPrep);
             // Exploratory 2×2 cutoff for continuous outcomes: median of the (real, non-synthetic) training outcomes
             const pipeEvalOptions = {
+                decisionThreshold: readDecisionThreshold('pipeline-decision-threshold'),
                 regressionThreshold: isClassification ? null : trainingMedian(AppState.pipeline.trainRows.map(r => Number(r[targetCol]))),
                 thresholdSource: 'median of the training-split outcomes'
             };
@@ -5043,6 +5375,7 @@
                 top70Cols,
                 targetCol
             );
+            top70Prep.fillValues = fullPrep.fillValues;
             const top70TestTrans = DataEngine.prepareTestingDataset(AppState.pipeline.testRows, top70Prep);
 
             const benchmarkList = [];
@@ -5059,15 +5392,18 @@
             };
             const pipeTune = Boolean(document.getElementById('pipeline-autotune-check')?.checked);
             const pipeFolds = parseInt(document.getElementById('pipeline-autotune-folds')?.value, 10) || 5;
-            const pipeTuningReport = { folds: pipeFolds, models: [], pipeline: true, ensembleSkipped: pipeTune };
-            if (pipeTune) {
+            const pipeSelectCV = (document.querySelector('input[name="pipeline-selection-mode"]:checked')?.value || 'cv') === 'cv';
+            const pipeTuningReport = { folds: pipeFolds, models: [], pipeline: true, ensembleSkipped: pipeTune, selectByCV: pipeSelectCV };
+            pHp.ensemble = { voting: 'soft', baseModels: ['nn', 'rf', 'glm'], capacity: 'balanced', seed: evalSeed };
+            const cvByModel = {};
+            if (pipeTune || pipeSelectCV) {
                 const nTrainReal = AppState.pipeline.trainRows.length;
-                if (nTrainReal < 100) {
+                if (pipeTune && nTrainReal < 100) {
                     pipeTuningReport.smallSampleWarning = `Only ${nTrainReal} training patients: each fold scores very few patients, so differences between settings are mostly chance. Tuning is unlikely to help much with a cohort this small; the protocol defaults are a sound choice.`;
                 }
                 const foldCache = {};
                 const foldsFor = async (cols, k, label, stepId) => {
-                    const key = `${k}|${cols.join('\u241F')}`;
+                    const key = `${k}|${cols.join('␟')}`;
                     if (!foldCache[key]) {
                         foldCache[key] = await buildPipelineFolds(AppState.pipeline.trainRows, cols, k, evalSeed, (f, nf) => {
                             if (watchdog) watchdog.tick(stepOf(stepId), `🎯 Preparing cross-validation folds for ${label}: fold ${f}/${nf} (SMOTENC + scaling inside each fold)...`);
@@ -5075,19 +5411,22 @@
                     }
                     return foldCache[key];
                 };
-                const plan = plannedModels.filter(id => id !== 'ensemble');
-                if (watchdog) watchdog.tick(1, `🎯 Automatic tuning of ${plan.length} models on ${Math.min(nTrainReal, TUNE_MAX_ROWS).toLocaleString('en-GB')} training patients: this usually takes several times longer than normal training (the neural network is slowest). A time estimate appears once each model's first trial has run.`);
+                const plan = pipeSelectCV ? plannedModels.slice() : plannedModels.filter(id => id !== 'ensemble');
+                if (watchdog) watchdog.tick(1, `🎯 ${pipeTune ? 'Automatic tuning' : 'Cross-validation'} of ${plan.length} models on ${Math.min(nTrainReal, TUNE_MAX_ROWS).toLocaleString('en-GB')} training patients: this takes several times longer than training alone (the neural network is slowest). A time estimate appears once each model's first trial has run.`);
                 await ModelEngine.yieldToBrowser();
                 for (let t = 0; t < plan.length; t++) {
                     const id = plan[t];
                     const cols = (id === 'knn' || id === 'nb') ? top70Cols : activeCols;
-                    const k = id === 'nn' ? Math.min(pipeFolds, 3) : pipeFolds;
-                    const label = { knn: 'k-NN', nb: 'Naive Bayes', rf: 'Random Forest', nn: 'Neural Network', glm: 'Logistic / Ridge Regression' }[id];
+                    const k = (id === 'nn' || id === 'ensemble') ? Math.min(pipeFolds, 3) : pipeFolds;
+                    const label = { knn: 'k-NN', nb: 'Naive Bayes', rf: 'Random Forest', nn: 'Neural Network', glm: 'Logistic / Ridge Regression', ensemble: 'Ensemble' }[id];
+                    const doTune = pipeTune && TUNABLE_MODELS.has(id);
                     const res = await runTuningOnFolds(id, pHp[id], await foldsFor(cols, k, label, id), isClassification, numClasses, watchdog, (c, nc, f, nf, eta) => {
-                        if (watchdog) watchdog.tick(stepOf(id), `🎯 Tuning ${label} (${t + 1}/${plan.length}): combination ${c}/${nc}, fold ${f}/${nf}${(eta || '').replace(/&middot;/g, '·')} (Training set only)...`);
-                    });
+                        const what = doTune ? `Tuning ${label} (${t + 1}/${plan.length}): combination ${c}/${nc}, fold ${f}/${nf}` : `Cross-validating ${label} (${t + 1}/${plan.length}): fold ${f}/${nf}`;
+                        if (watchdog) watchdog.tick(stepOf(id), `🎯 ${what}${(eta || '').replace(/&middot;/g, '·')} (Training set only)...`);
+                    }, !doTune);
                     pHp[id] = res.bestHp;
-                    pipeTuningReport.models.push(res);
+                    if (doTune) pipeTuningReport.models.push(res);
+                    if (pipeSelectCV) cvByModel[id] = cvSummaryFrom(res);
                 }
             }
             const tunedTag = id => (pipeTuningReport.models.some(m => m.modelId === id) ? ' Settings tuned by cross-validation within the Training set.' : '');
@@ -5167,13 +5506,8 @@
             // E. Ensemble Super Learner (Strict constraint: StandardScaler fitted on Train and applied to Test)
             if (watchdog) watchdog.tick(stepOf('ensemble'), `Training Model ${stepOf('ensemble')}/${totalModels}: Voting Ensemble...`);
             await new Promise(r => setTimeout(r, 60));
-            const ensembleConfig = {
-                voting: 'soft',
-                // Same base models for classification and regression (consistent with the Step 4 default)
-                baseModels: ['nn', 'rf', 'glm'],
-                capacity: 'balanced',
-                seed: AppState.pipeline.evalSeed
-            };
+            // Same base models for classification and regression (consistent with the Step 4 default)
+            const ensembleConfig = { ...pHp.ensemble };
             const ensemble = new EnsembleModel(isClassification, numClasses, ensembleConfig);
             await ensemble.fit(fullPrep.X, fullPrep.y, null, null, (curr, tot, info) => {
                 if (watchdog) {
@@ -5186,8 +5520,9 @@
             ensEval.constraintNote = `Equal-weight soft vote of ${ensembleConfig.baseModels.map(b => b.toUpperCase()).join(', ')}; scaling fitted on Train only.`;
             benchmarkList.push({ id: 'ensemble', name: 'Voting / Weighted Ensemble', model: ensemble, prep: fullPrep, eval: ensEval });
 
-            // Store ranked best-first (macro-F1 then AUC for classification; R² for regression),
-            // so benchmarkResults[0] is genuinely the top model everywhere it is used
+            // Cross-validated scores (model selection inside the Training set) when that mode is chosen
+            benchmarkList.forEach(b => { if (cvByModel[b.id]) b.eval.cv = cvByModel[b.id]; });
+            // Store ranked best-first, so benchmarkResults[0] is genuinely the top model everywhere it is used
             benchmarkList.sort((a, b) => compareEvalResults(a.eval, b.eval, isClassification));
             disposeModels((AppState.pipeline.benchmarkResults || []).map(b => b.model));
             AppState.pipeline.benchmarkResults = benchmarkList;
@@ -5220,14 +5555,16 @@
 
         let tableHtml = `
             <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
-                Ranked by <strong>${escapeHtml(rankingMetricLabel(isClassification))}</strong> on the held-out ${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)}% test split (change the ranking metric above).
-                The top model is selected on these same test cases, so its score is optimistically biased; confirm on an independent cohort.
+                ${sorted[0] && sorted[0].eval.cv
+                    ? `Ranked by <strong>cross-validated ${escapeHtml(rankingMetricLabel(isClassification))} inside the Training set</strong> (CV column); the held-out ${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)}% Testing set was not used to choose, so the top model's test score is an honest estimate. The other models' test scores are for information only.`
+                    : `Ranked by <strong>${escapeHtml(rankingMetricLabel(isClassification))}</strong> on the held-out ${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)}% test split (change the ranking metric above). The top model is selected on these same test cases, so its score is optimistically biased; choose by cross-validation or confirm on an independent cohort.`}
             </p>`;
         tableHtml += `
             <table class="data-table">
                 <thead>
                     <tr>
                         <th>Algorithm</th>
+                        ${sorted[0] && sorted[0].eval.cv ? `<th title="Score inside the Training set by cross-validation (mean ± SD); used to choose the best model">CV ${escapeHtml(rankingMetricLabel(isClassification))}</th>` : ''}
                         <th>Features Subset</th>
                         ${isClassification ? '<th title="How close the predicted probabilities are to what happened (0 = perfect; lower is better)">Brier ↓</th><th>Test Accuracy</th>' : ''}
                         <th>${isClassification ? 'F1-Score (Macro)' : 'R²'}</th>
@@ -5258,6 +5595,7 @@
             tableHtml += `
                 <tr style="${isDeployed ? 'background: rgba(16, 185, 129, 0.05);' : ''}">
                     <td><strong>${escapeHtml(item.name)}</strong></td>
+                    ${sorted[0] && sorted[0].eval.cv ? `<td>${formatCvScore(ev, isClassification)}</td>` : ''}
                     <td><span class="pill pill-target" style="font-size: 11px;">${ev.featuresUsed}</span></td>
                     ${isClassification ? `<td><strong>${brier}</strong></td><td><strong>${acc}</strong></td>` : ''}
                     <td><strong style="color: var(--accent-emerald); font-size: 13.5px;">${f1}</strong></td>
@@ -5288,6 +5626,15 @@
             summariseHeldOutSet(item.eval).forEach(n => caveats.add(n));
             if (item.eval.fallbackNote) caveats.add(`⚠️ ${escapeHtml(item.eval.fallbackNote)}`);
         });
+        if (isClassification && AppState.pipeline.trainRows && AppState.pipeline.trainRows.length) {
+            const counts = {};
+            AppState.pipeline.trainRows.forEach(r => { const k = String(r[AppState.pipeline.targetCol]); counts[k] = (counts[k] || 0) + 1; });
+            const minority = Math.min(...Object.values(counts));
+            const nPred = (AppState.pipeline.featureCols || []).filter(c => !AppState.pipeline.droppedFeatures.has(c)).length;
+            if (nPred > 0 && minority / nPred < 10) {
+                caveats.add(`⚠️ Small sample for the number of predictors: the smaller outcome group has ${minority} real training patient(s) for ${nPred} predictor(s) (${(minority / nPred).toFixed(1)} per predictor; at least 10–20 is a common rule of thumb). SMOTENC does not add real information, so treat the results as exploratory.`);
+            }
+        }
         if (isClassification && sorted[0] && sorted[0].eval.positiveClass !== null && sorted[0].eval.positiveClass !== undefined) {
             caveats.add(`Positive (event) class for AUC, Brier, sensitivity and PPV: <strong>${escapeHtml(sorted[0].eval.positiveClass)}</strong> (set in Step 2).`);
         }
@@ -5298,6 +5645,7 @@
         }
         tableHtml += renderTooGoodToBeTrueCheck(sorted, isClassification);
         DOM.pipelineLeaderboardContainer.innerHTML = tableHtml;
+        renderCalibrationPanel('pipeline-calibration-container', sorted.map(it => ({ name: it.name, ev: it.eval })), isClassification);
         syncRankingSelectors(isClassification);
     }
 
@@ -5985,7 +6333,12 @@
         cautions.push(sameTestPatients
             ? `<strong>Same test patients:</strong> both workflows were tested on the same ${pipeTestN} patients, which makes the comparison fairer; the cautions about sample size still apply.`
             : `<strong>Different test patients:</strong> the standard workflow was tested on ${baseProtocol}; the pipeline on its own ${pipeRatio}/${100 - pipeRatio} split (seed ${AppState.pipeline.seed}). Part of any difference may simply be that one set of test patients was easier to predict than the other. Using the same split ratio and seed in both workflows (and no row removal) tests them on the same patients.`);
-        cautions.push('<strong>Best model picked on its own test set:</strong> each workflow\'s "top" model was chosen because it did best on the very test patients it is scored on, so both scores are somewhat optimistic.');
+        // A single trained model involves no selection, so it needs no selection caution
+        const bCV = Boolean(bEv.cv) || (AppState.allTestedResults || []).length <= 1, pCV = Boolean(pEv.cv);
+        if (!bCV || !pCV) {
+            const which = !bCV && !pCV ? 'each workflow\'s "top" model was' : (!bCV ? 'the standard workflow\'s "top" model was' : 'the pipeline\'s "top" model was');
+            cautions.push(`<strong>Best model picked on its own test set:</strong> ${which} chosen because it did best on the very test patients it is scored on, so that score is somewhat optimistic. Choosing by cross-validation avoids this.`);
+        }
         cautions.push('<strong>No statistical test</strong> has been applied, so the difference is not shown to be statistically significant.');
         const nearPerfect = isClassification ? (num(pEv.accuracy) !== null && pEv.accuracy >= 0.98) || (num(bEv.accuracy) !== null && bEv.accuracy >= 0.98)
             : (num(pEv.r2) !== null && pEv.r2 >= 0.98) || (num(bEv.r2) !== null && bEv.r2 >= 0.98);
@@ -6056,6 +6409,63 @@
         DOM.pipelineVsBaselineContent.innerHTML = compHtml;
     }
 
+    // Standard workflow (Step 4) analysis report: validation design, settings and results of every model
+    function downloadStandardAnalysisReport() {
+        const results = AppState.allTestedResults || [];
+        if (!results.length) { alert("No Step 4 results available to download yet."); return; }
+        const top = results[0].evalRes;
+        const cfgs = AppState.columnConfigs || {};
+        const target = Object.keys(cfgs).find(c => cfgs[c].role === 'target');
+        const report = {
+            title: 'Standard Workflow (Step 4) Analysis Report',
+            software: { name: SETTINGS_APP, version: APP_VERSION, url: location.href.split('?')[0] },
+            generated_at: new Date().toISOString(),
+            dataset: { name: AppState.fileName, records: AppState.parsedData ? AppState.parsedData.rows.length : null, columns: AppState.parsedData ? AppState.parsedData.headers.length : null },
+            outcome: target, positive_class: top.positiveClass ?? null,
+            variables: Object.fromEntries(Object.entries(cfgs).map(([k, v]) => [k, { role: v.role, type: v.type, missing_data: v.role === 'feature' ? v.imputationStrategy : undefined }])),
+            exclusions: { complete_case_analysis: Boolean(AppState.completeCase), test_rows_dropped: top.testDroppedRows ?? null },
+            validation_design: {
+                protocol: top.protocol === 'option-b' ? 'separate testing dataset (Dataset ii)' : 'internal train/test split',
+                split: top.protocol === 'option-b' ? null : describeSplit(top.splitInfo),
+                train_percent: top.trainPct ?? null, split_seed: top.splitSeed ?? null,
+                train_cases: top.trainCount, test_cases: top.testCount,
+                model_selection: top.cv ? `${top.cv.folds}-fold cross-validation inside the training set${top.cv.grouped ? ' (patient-grouped folds)' : ''}; preprocessing refitted in each fold` : 'best test-set score (optimistic)',
+                settings_tuning: AppState.tuningReport ? 'automatic (cross-validation inside the training set)' : 'user settings',
+                ranking_metric: rankingMetricLabel(Boolean(top.isClassification)),
+                decision_threshold: top.decisionThreshold ?? null,
+                deployed_model_retrained_on_all_data: Boolean(top.retrainOn100)
+            },
+            deployed_model: AppState.deployedSource === 'standard' ? (MODEL_INFO[AppState.deployedModelId] || {}).name || AppState.deployedModelId : null,
+            models: results.map((r, i) => ({
+                rank: i + 1, model: (MODEL_INFO[r.modelId] || {}).name || r.modelId, seed: r.seed,
+                settings: r.hyperparams || null,
+                cross_validated_training_scores: r.evalRes.cv || null,
+                tuning: r.evalRes.tuning || null,
+                test_metrics: r.evalRes.isClassification ? {
+                    accuracy: r.evalRes.accuracy, accuracy_95ci_wilson: r.evalRes.accuracyCI, balanced_accuracy: r.evalRes.balancedAccuracy,
+                    f1_macro: r.evalRes.macroF1, precision_macro: r.evalRes.macroPrecision, recall_macro: r.evalRes.macroRecall,
+                    auc_roc: r.evalRes.rocAuc, brier_score: r.evalRes.brierScore, probability_type: r.evalRes.probabilityType
+                } : { r2: r.evalRes.r2, rmse: r.evalRes.rmse, mae: r.evalRes.mae, mse: r.evalRes.mse },
+                calibration: r.evalRes.calibration || null,
+                confusion_matrix: r.evalRes.confMatrix || null
+            })),
+            limitations: [
+                'For research and education only; not validated for clinical decision-making.',
+                'Probabilities may be poorly calibrated; see the calibration results before interpreting them as risks.',
+                'A single train/test split gives an imprecise estimate; confirm on an independent (external) cohort.'
+            ]
+        };
+        const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Clinical_ML_Standard_Analysis_Report_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
     function downloadPipelineProtocolReport() {
         if (!AppState.pipeline.benchmarkResults || AppState.pipeline.benchmarkResults.length === 0) {
             alert("No pipeline results available to download.");
@@ -6064,6 +6474,18 @@
 
         const report = {
             title: "Strict 7-Step Clinical Machine Learning Protocol Report",
+            software: { name: SETTINGS_APP, version: APP_VERSION, url: location.href.split('?')[0] },
+            validation_design: {
+                split: describeSplit(AppState.pipeline.splitInfo),
+                train_fraction: AppState.pipeline.trainRatio,
+                split_seed: AppState.pipeline.seed,
+                model_selection: AppState.pipeline.benchmarkResults[0] && AppState.pipeline.benchmarkResults[0].eval.cv
+                    ? `${AppState.pipeline.benchmarkResults[0].eval.cv.folds}-fold cross-validation inside the training set${AppState.pipeline.benchmarkResults[0].eval.cv.grouped ? ' (patient-grouped folds)' : ''}`
+                    : 'best test-set score (optimistic)',
+                settings_tuning: AppState.pipeline.tuningReport ? 'automatic (cross-validation inside the training set)' : 'protocol defaults',
+                decision_threshold: AppState.pipeline.benchmarkResults[0] ? AppState.pipeline.benchmarkResults[0].eval.decisionThreshold : null,
+                test_set_use: 'held-out, never resampled; used once to report performance'
+            },
             conceived_and_directed_by: "Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)",
             generated_at: new Date().toISOString(),
             dataset_name: AppState.fileName,
@@ -6081,6 +6503,7 @@
             } : 'not used (protocol default settings)',
             pipeline_steps: {
                 step_1_split_and_strict_imputation: {
+                    split_method: describeSplit(AppState.pipeline.splitInfo),
                     train_records: AppState.pipeline.trainRows.length,
                     test_records: AppState.pipeline.testRows.length,
                     rows_excluded_missing_outcome: AppState.pipeline.excludedMissingTarget || 0,
@@ -6117,7 +6540,9 @@
                     reinstated_bottom_30_features: Array.from(AppState.pipeline.reinstatedFeatures || [])
                 },
                 step_7_ranking_metric: rankingMetricLabel(AppState.pipeline.columnConfigs[AppState.pipeline.targetCol]?.type !== 'continuous'),
-                step_7_model_selection_note: 'Models are ranked best-first on the held-out test split; the top model is selected on that same split, so its score is optimistically biased. A single split does not establish general superiority.',
+                step_7_model_selection_note: AppState.pipeline.benchmarkResults[0] && AppState.pipeline.benchmarkResults[0].eval.cv
+                    ? 'Models are ranked by cross-validated performance inside the training set (SMOTENC and scaling refitted in each fold); the test split was used only to report performance, so the top model\'s test score is not selection-biased. Other models\' test scores are for information. A single split does not establish general superiority.'
+                    : 'Models are ranked best-first on the held-out test split; the top model is selected on that same split, so its score is optimistically biased. A single split does not establish general superiority.',
                 step_7_constrained_model_benchmark: AppState.pipeline.benchmarkResults.map(b => ({
                     model_id: b.id,
                     model_name: b.name,
@@ -6145,6 +6570,9 @@
                         exploratory_cutoff: b.eval.threshold,
                         exploratory_cutoff_source: b.eval.thresholdSource
                     },
+                    cross_validated_training_scores: b.eval.cv || null,
+                    decision_threshold: b.eval.decisionThreshold,
+                    calibration: b.eval.calibration || null,
                     confusion_matrix: b.eval.confMatrix
                 }))
             }
@@ -6242,6 +6670,7 @@
         });
         return {
             app: SETTINGS_APP,
+            appVersion: APP_VERSION,
             schema: SETTINGS_SCHEMA,
             savedAt: new Date().toISOString(),
             note: 'Analysis choices only; contains no patient data.',

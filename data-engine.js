@@ -907,15 +907,40 @@
                 if (issues) issues.push({ column: col, kind, value: rawVal });
             };
 
+            // Blank predictors are filled exactly as in training: with the fitted imputation plan (standard
+            // workflow: median / mean / most frequent / constant / k-NN as chosen in Step 3) or the fitted
+            // fill values (7-step pipeline). Only without either does the generic fallback below apply.
+            let row = inputRow;
+            const prefilled = new Set();
+            const missingCols = featureCols.filter(c => this.isMissing(inputRow[c]));
+            if (missingCols.length) {
+                let filled = null;
+                if (prepMeta.imputation && prepMeta.imputation.plan) {
+                    try {
+                        filled = this.imputeDataset([{ ...inputRow }], prepMeta.imputation.configs, null, prepMeta.imputation.plan).imputedRows[0] || null;
+                    } catch (e) { filled = null; }
+                } else if (prepMeta.fillValues) {
+                    filled = { ...inputRow };
+                    missingCols.forEach(c => { if (prepMeta.fillValues[c] !== undefined && prepMeta.fillValues[c] !== null) filled[c] = prepMeta.fillValues[c]; });
+                }
+                if (filled) {
+                    row = filled;
+                    missingCols.forEach(c => {
+                        if (!this.isMissing(filled[c])) { prefilled.add(c); note(c, 'missing', inputRow[c]); }
+                    });
+                }
+            }
+
             featureCols.forEach(col => {
                 const meta = featureMetadata[col];
-                const rawVal = inputRow[col];
+                const rawVal = row[col];
                 const missing = this.isMissing(rawVal);
+                const noteOnce = (c, kind, v) => { if (!prefilled.has(c)) note(c, kind, v); };
 
                 if (meta.type === 'nominal') {
                     let catIdx = missing ? -1 : meta.categories.indexOf(String(rawVal).trim());
                     if (catIdx === -1) {
-                        note(col, missing ? 'missing' : 'unseen', rawVal);
+                        noteOnce(col, missing ? 'missing' : 'unseen', rawVal);
                         catIdx = meta.categories.indexOf(meta.mode !== undefined ? meta.mode : meta.categories[0]);
                     }
                     if (catIdx !== -1) {
@@ -927,7 +952,7 @@
                         rankVal = meta.rankMap[String(Number(rawVal))];
                     }
                     if (rankVal === undefined) {
-                        note(col, missing ? 'missing' : 'unseen', rawVal);
+                        noteOnce(col, missing ? 'missing' : 'unseen', rawVal);
                         rankVal = meta.defaultRank !== undefined ? meta.defaultRank : 0;
                     }
                     xRow[meta.startIndex] = this.scaleOrdinalRank(rankVal, meta);
@@ -935,7 +960,7 @@
                     // Note: Number('') === 0, so blanks must be detected explicitly
                     const num = missing ? NaN : Number(rawVal);
                     if (isNaN(num)) {
-                        note(col, missing ? 'missing' : 'non-numeric', rawVal);
+                        noteOnce(col, missing ? 'missing' : 'non-numeric', rawVal);
                         xRow[meta.startIndex] = 0; // training mean (0 after standardisation)
                     } else {
                         const scaled = (num - meta.mean) / meta.std;
@@ -961,6 +986,87 @@
                 let t = Math.imul(s ^ (s >>> 15), 1 | s);
                 t = t + Math.imul(t ^ (t >>> 7), 61 | t) ^ t;
                 return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+        },
+
+        /**
+         * Patient-level split: every record of a group (e.g. one patient's repeated visits) goes to the same
+         * side, so no patient appears in both the Training and the Testing set. Groups are shuffled with the
+         * seed and added to the Testing set until it holds about (1 − trainRatio) of the records.
+         */
+        trainTestSplitGrouped(rows, y, groupKeys, trainRatio = 0.8, seed = null) {
+            const rng = this.createPRNG(seed);
+            const byGroup = new Map();
+            groupKeys.forEach((g, i) => {
+                const key = (g === null || g === undefined || String(g).trim() === '') ? `__row${i}` : String(g).trim();
+                if (!byGroup.has(key)) byGroup.set(key, []);
+                byGroup.get(key).push(i);
+            });
+            const keys = [...byGroup.keys()].sort();
+            for (let i = keys.length - 1; i > 0; i--) {
+                const j = Math.floor(rng() * (i + 1));
+                [keys[i], keys[j]] = [keys[j], keys[i]];
+            }
+            const targetTest = Math.max(1, Math.round(rows.length * (1 - trainRatio)));
+            const testIndices = [];
+            const trainIndices = [];
+            let nTestGroups = 0;
+            keys.forEach(k => {
+                const idx = byGroup.get(k);
+                if (testIndices.length < targetTest && keys.length - nTestGroups > 1) { testIndices.push(...idx); nTestGroups++; }
+                else trainIndices.push(...idx);
+            });
+            return {
+                trainX: trainIndices.map(i => rows[i]), trainY: trainIndices.map(i => y[i]),
+                testX: testIndices.map(i => rows[i]), testY: testIndices.map(i => y[i]),
+                trainIndices, testIndices,
+                info: { method: 'group', groups: keys.length, trainGroups: keys.length - nTestGroups, testGroups: nTestGroups }
+            };
+        },
+
+        /** Parses common date formats (ISO yyyy-mm-dd, dd/mm/yyyy, dd-mm-yyyy, dd.mm.yyyy, "15 Oct 2026"); null if not a date */
+        parseDateValue(v) {
+            if (v === null || v === undefined) return null;
+            const s = String(v).trim();
+            if (!s) return null;
+            let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+            if (m) { const t = Date.UTC(+m[1], +m[2] - 1, +m[3]); return isNaN(t) ? null : t; }
+            m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+            if (m) { const t = Date.UTC(+m[3], +m[2] - 1, +m[1]); return isNaN(t) ? null : t; } // day first (UK)
+            const t = Date.parse(s);
+            return isNaN(t) ? null : t;
+        },
+
+        /**
+         * Temporal split: the earliest records (by the date column) form the Training set and the most recent
+         * ones the Testing set, mimicking use on future patients. Records sharing the cut-off date stay together;
+         * records without a usable date are kept in the Training set and counted.
+         */
+        trainTestSplitTemporal(rows, y, dateValues, trainRatio = 0.8) {
+            const dated = [];
+            const undated = [];
+            dateValues.forEach((v, i) => {
+                const t = this.parseDateValue(v);
+                if (t === null) undated.push(i); else dated.push({ i, t });
+            });
+            dated.sort((a, b) => a.t - b.t || a.i - b.i);
+            let nTrain = Math.round(dated.length * trainRatio);
+            nTrain = Math.min(Math.max(nTrain, 1), Math.max(dated.length - 1, 1));
+            // Do not cut through a single date
+            while (nTrain < dated.length && nTrain > 0 && dated[nTrain].t === dated[nTrain - 1].t) nTrain++;
+            const trainIndices = [...dated.slice(0, nTrain).map(d => d.i), ...undated];
+            const testIndices = dated.slice(nTrain).map(d => d.i);
+            const iso = t => new Date(t).toISOString().slice(0, 10);
+            return {
+                trainX: trainIndices.map(i => rows[i]), trainY: trainIndices.map(i => y[i]),
+                testX: testIndices.map(i => rows[i]), testY: testIndices.map(i => y[i]),
+                trainIndices, testIndices,
+                info: {
+                    method: 'time', undated: undated.length,
+                    trainUntil: nTrain > 0 ? iso(dated[nTrain - 1].t) : null,
+                    testFrom: testIndices.length ? iso(dated[nTrain].t) : null,
+                    testUntil: testIndices.length ? iso(dated[dated.length - 1].t) : null
+                }
             };
         },
 

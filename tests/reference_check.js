@@ -46,5 +46,8 @@ out.nbG=X.map(x=>nbG.predictSingle(x).probabilities[1]);
 const XB=rows.map(r=>[r.g==='A'?1:0,r.g==='B'?1:0,r.grp==='G1'?1:0]);
 const nbB=new window.GaussianNaiveBayes(1e-4,'empirical'); nbB.fit(XB,yc);
 out.XB=XB; out.nbB=XB.map(x=>nbB.predictSingle(x).probabilities[1]);
+// Calibration slope and intercept of moderately miscalibrated probabilities
+const calY=[],calP=[];for(let i=0;i<600;i++){const lp=-1+3*rnd(); const ptrue=1/(1+Math.exp(-lp)); calY.push(rnd()<ptrue?1:0); calP.push(1/(1+Math.exp(-(0.3+1.6*lp))));}
+out.calY=calY; out.calP=calP; out.cal=ME.calibrationSummary(calY,calP);
 fs.writeFileSync(path.join(__dirname,'reference_values.json'),JSON.stringify(out));
 console.log('App values written to tests/reference_values.json; now run: python3 tests/reference_check.py');

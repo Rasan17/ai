@@ -1577,7 +1577,12 @@
                 const numClasses = targetClasses.length || [...new Set(testY)].length;
                 const total = testX.length;
                 // options.outputs: predictions already computed (e.g. asynchronously by evaluateAsync)
-                const outputs = options.outputs || batchOutputs(model, testX);
+                let outputs = options.outputs || batchOutputs(model, testX);
+                // Optional decision threshold for binary outcomes (default: the model's own 0.5 / arg-max rule)
+                const dt = Number(options.decisionThreshold);
+                if (numClasses === 2 && isFinite(dt) && dt > 0 && dt < 1 && Math.abs(dt - 0.5) > 1e-9) {
+                    outputs = outputs.map(o => ModelEngine.applyDecisionThreshold(o, dt));
+                }
                 const preds = outputs.map(o => o.pred);
                 let correct = 0;
 
@@ -1675,6 +1680,8 @@
                 }
 
                 const probabilityType = outputs.length ? (outputs[0].probabilityType || 'model') : 'model';
+                const probPositive = numClasses === 2 ? probVectors.map(v => Number(v[1].toFixed(4))) : null;
+                const calibration = numClasses === 2 ? this.calibrationSummary(testY.map(v => (v === 1 ? 1 : 0)), probVectors.map(v => v[1])) : null;
 
                 return {
                     isClassification: true,
@@ -1688,6 +1695,9 @@
                     rocAuc,
                     brierScore,
                     probabilityType,
+                    calibration,
+                    probPositive,
+                    decisionThreshold: numClasses === 2 && isFinite(dt) && dt > 0 && dt < 1 ? dt : (numClasses === 2 ? 0.5 : null),
                     classesMissingFromTest,
                     // For binary outcomes, class index 1 is the "positive" class for AUC / sensitivity / TP
                     positiveClass: numClasses === 2 && targetClasses.length === 2 ? targetClasses[1] : null,
@@ -1791,6 +1801,81 @@
                 targetClasses = Array.isArray(targetClassesOrStats) ? targetClassesOrStats : [];
             }
             return this.evaluate(model, testX, testY, isClassification, targetClasses);
+        },
+
+        /** Re-labels one binary output with a decision threshold on the positive-class probability */
+        applyDecisionThreshold(o, threshold) {
+            if (!o || !o.probabilities) return o;
+            const p1 = Number(o.probabilities[1]);
+            if (!isFinite(p1)) return o;
+            const pred = p1 >= threshold ? 1 : 0;
+            const p = Number(o.probabilities[pred]);
+            return { ...o, pred, confidence: isFinite(p) ? p : o.confidence };
+        },
+
+        /**
+         * Calibration of binary probabilities on a held-out set: grouped observed-vs-predicted points for a
+         * calibration plot, the calibration slope (logistic regression of the outcome on logit(p); ideal 1) and
+         * the calibration intercept / calibration-in-the-large (logistic regression with logit(p) as an offset;
+         * ideal 0). Slope and intercept are left empty when they cannot be estimated (e.g. perfect separation).
+         */
+        calibrationSummary(y, p) {
+            const n = y.length;
+            const events = y.reduce((a, b) => a + b, 0);
+            const out = { n, events, bins: [], slope: null, intercept: null, note: null };
+            if (n === 0) return out;
+            // Groups of roughly equal size, ordered by predicted probability
+            const nBins = n >= 10 ? Math.max(2, Math.min(10, Math.floor(n / 10))) : 0;
+            if (nBins) {
+                const order = p.map((v, i) => i).sort((a, b) => p[a] - p[b]);
+                for (let b = 0; b < nBins; b++) {
+                    const idx = order.slice(Math.round((b * n) / nBins), Math.round(((b + 1) * n) / nBins));
+                    if (!idx.length) continue;
+                    out.bins.push({
+                        meanPred: Number((idx.reduce((a, i) => a + p[i], 0) / idx.length).toFixed(4)),
+                        observed: Number((idx.reduce((a, i) => a + y[i], 0) / idx.length).toFixed(4)),
+                        n: idx.length
+                    });
+                }
+            }
+            if (events === 0 || events === n || n < 10) {
+                out.note = n < 10 ? 'Too few test cases to estimate calibration (fewer than 10).' : 'Only one outcome present in the test set: calibration cannot be estimated.';
+                return out;
+            }
+            const eps = 1e-4;
+            const lp = p.map(v => { const q = Math.min(1 - eps, Math.max(eps, Number(v) || 0)); return Math.log(q / (1 - q)); });
+            const sig = z => 1 / (1 + Math.exp(-z));
+            // Slope: y ~ a + b·lp (Newton-Raphson)
+            let a = 0, b = 1, ok = false;
+            for (let it = 0; it < 100; it++) {
+                let g0 = 0, g1 = 0, h00 = 0, h01 = 0, h11 = 0;
+                for (let i = 0; i < n; i++) {
+                    const m = sig(a + b * lp[i]);
+                    const w = m * (1 - m);
+                    g0 += y[i] - m; g1 += (y[i] - m) * lp[i];
+                    h00 += w; h01 += w * lp[i]; h11 += w * lp[i] * lp[i];
+                }
+                const det = h00 * h11 - h01 * h01;
+                if (!isFinite(det) || Math.abs(det) < 1e-12) break;
+                const da = (h11 * g0 - h01 * g1) / det, db = (h00 * g1 - h01 * g0) / det;
+                a += da; b += db;
+                if (!isFinite(a) || !isFinite(b) || Math.abs(b) > 100) break;
+                if (Math.abs(da) < 1e-8 && Math.abs(db) < 1e-8) { ok = true; break; }
+            }
+            if (ok) out.slope = Number(b.toFixed(3));
+            // Intercept (calibration-in-the-large): y ~ a + offset(lp)
+            let c = 0, okC = false;
+            for (let it = 0; it < 100; it++) {
+                let g = 0, h = 0;
+                for (let i = 0; i < n; i++) { const m = sig(c + lp[i]); g += y[i] - m; h += m * (1 - m); }
+                if (h < 1e-12) break;
+                const dc = g / h; c += dc;
+                if (!isFinite(c) || Math.abs(c) > 100) break;
+                if (Math.abs(dc) < 1e-10) { okC = true; break; }
+            }
+            if (okC && ok) out.intercept = Number(c.toFixed(3)); // under (near-)separation neither is meaningful
+            if (!ok || !okC) out.note = 'Calibration slope/intercept could not be estimated: the predictions separate the outcomes (almost) perfectly on these test cases, or there are too few events.';
+            return out;
         },
 
         _calculateBinaryAUC(yTrue, yScores) {
