@@ -1779,3 +1779,14 @@ body {
 .tune-table th, .tune-table td { padding: 6px 10px; }
 .tune-table tr.tune-best td { background: rgba(16, 185, 129, 0.08); }
 .tune-warn { margin: 6px 0; padding: 8px 10px; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.12); color: var(--accent-amber); font-size: 12.5px; }
+
+/* Pipeline vs baseline comparison: plain-language guide and cautions */
+.cmp-meaning { font-weight: 400; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; white-space: normal; max-width: 340px; line-height: 1.45; }
+.cmp-table td { white-space: normal; vertical-align: top; }
+.cmp-guide, .cmp-cautions { margin: 12px 0; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 12.5px; line-height: 1.55; color: var(--text-secondary); }
+.cmp-guide { border: 1px solid rgba(56, 189, 248, 0.35); border-left: 4px solid var(--accent-cyan); background: rgba(56, 189, 248, 0.05); }
+.cmp-cautions { border: 1px solid rgba(245, 158, 11, 0.4); border-left: 4px solid var(--accent-amber); background: rgba(245, 158, 11, 0.06); }
+.cmp-guide-title, .cmp-cautions-title { font-weight: 700; font-size: 13.5px; color: var(--text-primary); margin-bottom: 4px; }
+.cmp-guide ul, .cmp-cautions ul { margin: 0; padding-left: 20px; }
+.cmp-guide li, .cmp-cautions li { margin: 3px 0; }
+.cmp-guide strong, .cmp-cautions strong { color: var(--text-primary); }

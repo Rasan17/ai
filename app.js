@@ -2651,6 +2651,7 @@
                 const testData = DataEngine.prepareTestingDataset(testImp.imputedRows, splitPrep);
                 const split = { trainX: splitPrep.X, trainY: splitPrep.y, testX: testData.X, testY: testData.y };
                 AppState.trainTestData = split;
+                AppState.baselineTestRawRows = testImp.imputedRows.length === rowSplit.testX.length ? rowSplit.testX : null; // for the pipeline comparison
 
                 if (split.testX.length === 0) {
                     throw new Error(`The test partition is empty (${rawRows.length} usable rows at a ${Math.round(trainRatio * 100)}/${testPct} split). Use a larger cohort, a smaller training percentage, or Option B.`);
@@ -2976,6 +2977,7 @@
             DOM.toStep6Btn.disabled = false;
 
             renderEvaluationDashboard();
+            return true;
         } catch (e) {
             if (watchdog && !watchdog.aborted) {
                 watchdog.forceAbort(`Training failed: ${e.message}`);
@@ -2985,6 +2987,7 @@
             if (e.message !== "Training aborted by user." && e.message !== "Operation halted by user.") {
                 alert(`Training error: ${e.message}`);
             }
+            return false;
         }
     }
 
@@ -4166,6 +4169,7 @@
 
         const trainRaw = splitResult.trainX;
         const testRaw = splitResult.testX;
+        AppState.pipeline.testRawRows = testRaw; // raw patient records, used to tell whether the comparison is paired
 
         // Fit strict imputer ONLY on the Training set (Zero Data Leakage)
         const imputer = DataEngine.fitStrictImputer(
@@ -5726,34 +5730,50 @@
         }
     }
 
-    window.trainStandardBaselineFromPipeline = function () {
+    // "Train baseline & compare": runs the Step 4 standard workflow with the pipeline's split (so both are
+    // tested on the same patients where possible), then returns to Step 7 and shows the comparison
+    window.trainStandardBaselineFromPipeline = async function () {
         if (!AppState.parsedData || !AppState.parsedData.rows || AppState.parsedData.rows.length === 0) {
             alert("No dataset loaded yet. Please select a sample cohort or upload a CSV first.");
             return;
         }
 
-        // If Step 3 imputation has not been run yet, run standard imputation automatically
+        // Match the pipeline's train/test split: Option A, same ratio and seed
+        const valA = document.getElementById('val-mode-a');
+        if (valA && !valA.checked) { valA.checked = true; valA.dispatchEvent(new Event('change', { bubbles: true })); }
+        const pct = Math.round((AppState.pipeline.trainRatio || 0.8) * 100);
+        const pctInput = document.getElementById('train-pct-input');
+        if (pctInput) { pctInput.value = pct; pctInput.dispatchEvent(new Event('input', { bubbles: true })); pctInput.dispatchEvent(new Event('change', { bubbles: true })); }
+        const seed = AppState.pipeline.seed;
+        const seedMode = document.getElementById(seed === 42 ? 'split-seed-mode-default' : 'split-seed-mode-custom');
+        if (seedMode) { seedMode.checked = true; seedMode.dispatchEvent(new Event('change', { bubbles: true })); }
+        const seedInput = document.getElementById('split-seed-input');
+        if (seedInput) seedInput.value = seed;
+
+        // Step 3 (data imputation) with the current choices, if it has not been run yet
         if (!AppState.imputedData) {
-            try {
-                executeImputation();
-            } catch (err) {
-                console.warn("Auto-imputation error:", err);
-            }
+            try { executeImputation(); } catch (err) { console.warn("Auto-imputation error:", err); }
+            if (!AppState.imputedData) { goToStep(3); return; }
         }
 
-        // Navigate directly to Step 4
+        // Remember the deployed pipeline model so it stays active after the baseline run
+        const keepPipelineDeployment = AppState.deployedSource === '7step' ? AppState.deployedModelId : null;
         goToStep(4);
         window.scrollTo({ top: 0, behavior: 'smooth' });
+        DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">⚖️ Training the standard baseline for the comparison (same ${pct}/${100 - pct} split and seed ${seed} as the pipeline). You will be returned to the comparison when it finishes...</span>`;
 
-        // Scroll to train button with visual highlight
-        setTimeout(() => {
-            const trainBtn = document.getElementById('train-model-btn');
-            if (trainBtn) {
-                trainBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                trainBtn.style.boxShadow = '0 0 0 3px var(--accent-emerald)';
-                setTimeout(() => { if (trainBtn) trainBtn.style.boxShadow = ''; }, 2500);
-            }
-        }, 150);
+        const ok = await startModelTraining();
+        if (!ok) return; // training failed or was stopped: stay on Step 4 so the message is visible
+
+        if (keepPipelineDeployment && AppState.pipeline.benchmarkResults.some(b => b.id === keepPipelineDeployment)) {
+            deployPipelineModel(keepPipelineDeployment, false);
+        }
+        goToStep('pipeline');
+        goToPipelineSubstep(7);
+        if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.style.display = 'block';
+        renderPipelineVsBaselineComparison();
+        setTimeout(() => { if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 200);
+        showSeedToast(`✓ Standard baseline trained; comparison updated.${keepPipelineDeployment ? ' The pipeline model remains the active predictor.' : ''}`);
     };
 
     function renderPipelineVsBaselineComparison() {
@@ -5787,11 +5807,12 @@
                     <div>
                         <strong>Baseline Benchmark Not Run Yet:</strong><br>
                         You have successfully completed the 7-Step Pipeline with <strong>${escapeHtml(pipeBest.name)}</strong> (${metricSummary}).<br>
-                        To see if the 7-Step Pipeline improved predictions compared to the standard pre-existing workflow on this exact cohort, run Step 4 (Model Training) or click below to launch the standard baseline:
+                        To see whether the 7-Step Pipeline predicts better than the standard workflow on this cohort, click below:
                         <div style="margin-top: 10px;">
                             <button class="btn btn-primary btn-sm" onclick="window.trainStandardBaselineFromPipeline && window.trainStandardBaselineFromPipeline()">
-                                🏃 Train Standard Baseline in Step 4
+                                ⚖️ Train Standard Baseline &amp; Compare
                             </button>
+                            <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 6px;">Uses your Step 4 model choices and the same train/test split as the pipeline, then brings you straight back here with the comparison.</div>
                         </div>
                     </div>
                 </div>
@@ -5813,100 +5834,150 @@
             return;
         }
 
-        const fmtDelta = (d, digits, unit) => {
-            if (d === null || isNaN(d)) return '—';
-            const sign = d > 0 ? '+' : '';
-            return `<strong style="color: ${d > 0 ? 'var(--accent-emerald)' : (d < 0 ? 'var(--accent-rose)' : 'var(--text-secondary)')};">${sign}${d.toFixed(digits)}${unit}</strong>`;
+        // Plain-language difference: says which way the change goes and whether that is better or worse
+        const fmtChange = (base, pipe, higherIsBetter, digits, unit = '') => {
+            if (base === null || pipe === null || isNaN(base) || isNaN(pipe)) return '—';
+            const d = pipe - base;
+            if (Math.abs(d) < Math.pow(10, -digits) / 2) return '<span style="color: var(--text-secondary);">No difference</span>';
+            const better = higherIsBetter ? d > 0 : d < 0;
+            return `<strong style="color: ${better ? 'var(--accent-emerald)' : 'var(--accent-rose)'};">${Math.abs(d).toFixed(digits)}${unit} ${d > 0 ? 'higher' : 'lower'}</strong> <span style="color: var(--text-secondary);">(pipeline ${better ? 'better' : 'worse'})</span>`;
         };
-        const row = (label, bVal, pVal, delta) => `
+        const row = (label, meaning, bVal, pVal, change) => `
             <tr>
-                <td><strong>${label}</strong></td>
+                <td><strong>${label}</strong>${meaning ? `<div class="cmp-meaning">${meaning}</div>` : ''}</td>
                 <td>${bVal}</td>
                 <td><strong>${pVal}</strong></td>
-                <td>${delta}</td>
+                <td>${change}</td>
             </tr>`;
+        const num = v => (typeof v === 'number' && isFinite(v) ? v : null);
+        const pct = v => (num(v) !== null ? v * 100 : null);
+        const showPct = v => (v !== null ? `${v.toFixed(1)}%` : 'N/A');
+        const show3 = v => (v !== null ? v.toFixed(3) : 'N/A');
+        const targetName = escapeHtml(AppState.pipeline.targetCol || 'the outcome');
 
         let metricRows = '';
-        let headlineDelta = null;
-        let headlineLabel = '';
+        let guide = [];
+        let headline;
         if (isClassification) {
-            const pct = v => (typeof v === 'number' && !isNaN(v) ? v * 100 : null);
-            const bF1 = pct(bEv.macroF1), pF1 = pct(pEv.macroF1);
+            const bBr = num(bEv.brierScore), pBr = num(pEv.brierScore);
             const bAcc = pct(bEv.accuracy), pAcc = pct(pEv.accuracy);
-            const bAuc = typeof bEv.rocAuc === 'number' ? bEv.rocAuc : null;
-            const pAuc = typeof pEv.rocAuc === 'number' ? pEv.rocAuc : null;
-            const dF1 = (bF1 !== null && pF1 !== null) ? pF1 - bF1 : null;
-            headlineDelta = dF1;
-            headlineLabel = 'macro F1';
-            metricRows += row('Macro F1-Score', bF1 !== null ? `${bF1.toFixed(1)}%` : 'N/A', pF1 !== null ? `${pF1.toFixed(1)}%` : 'N/A', fmtDelta(dF1, 1, ' pp'));
-            metricRows += row('Test Accuracy', bAcc !== null ? `${bAcc.toFixed(1)}%` : 'N/A', pAcc !== null ? `${pAcc.toFixed(1)}%` : 'N/A',
-                fmtDelta((bAcc !== null && pAcc !== null) ? pAcc - bAcc : null, 1, ' pp'));
+            const bF1 = pct(bEv.macroF1), pF1 = pct(pEv.macroF1);
+            const bAuc = num(bEv.rocAuc), pAuc = num(pEv.rocAuc);
+            const bBal = pct(bEv.balancedAccuracy), pBal = pct(pEv.balancedAccuracy);
+            metricRows += row('Brier score ↓', 'How close the predicted probabilities were to what happened. 0 = perfect; lower is better.', show3(bBr), show3(pBr), fmtChange(bBr, pBr, false, 3));
+            metricRows += row('Test accuracy', 'Percentage of test patients whose outcome was predicted correctly. Higher is better.', showPct(bAcc), showPct(pAcc), fmtChange(bAcc, pAcc, true, 1, ' percentage points'));
+            metricRows += row('Macro F1-score', 'Balance of precision and recall, averaged over the outcome groups. Higher is better.', showPct(bF1), showPct(pF1), fmtChange(bF1, pF1, true, 1, ' percentage points'));
             if (bAuc !== null && pAuc !== null) {
-                metricRows += row('ROC-AUC (binary)', bAuc.toFixed(3), pAuc.toFixed(3), fmtDelta(pAuc - bAuc, 3, ''));
+                metricRows += row('ROC-AUC', 'How well the model ranks higher-risk above lower-risk patients. 0.5 = chance, 1 = perfect.', show3(bAuc), show3(pAuc), fmtChange(bAuc, pAuc, true, 3));
             }
+            metricRows += row('Balanced accuracy', 'Average of the accuracy within each outcome group; fairer than accuracy when one outcome is rare.', showPct(bBal), showPct(pBal), fmtChange(bBal, pBal, true, 1, ' percentage points'));
+            guide = [
+                '<strong>Test accuracy</strong> is the simplest measure: the share of test patients predicted correctly. If one outcome is uncommon, look at <strong>balanced accuracy</strong> as well.',
+                '<strong>Brier score</strong> matters if you will quote the predicted percentage to a patient (e.g. "70% chance of improving"): the lower it is, the more trustworthy those percentages are.',
+                '<strong>ROC-AUC</strong> shows how well the model separates patients who will and will not have the outcome, regardless of the cut-off used.',
+                '<strong>Macro F1</strong> combines how many predicted cases were right (precision) and how many real cases were found (recall).'
+            ];
+            headline = (bAcc !== null && pAcc !== null)
+                ? `On the test patients, the pipeline's best model (${escapeHtml(pipeBest.name)}) predicted ${pAcc.toFixed(1)}% correctly and the standard workflow's best model (${escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId)}) ${bAcc.toFixed(1)}%${bBr !== null && pBr !== null ? `; their Brier scores were ${pBr.toFixed(3)} and ${bBr.toFixed(3)} (lower is better)` : ''}.`
+                : 'The accuracy of the two workflows could not be compared.';
         } else {
-            const num = v => (typeof v === 'number' && !isNaN(v) ? v : null);
             const bR2 = num(bEv.r2), pR2 = num(pEv.r2);
             const bRmse = num(bEv.rmse), pRmse = num(pEv.rmse);
             const bMae = num(bEv.mae), pMae = num(pEv.mae);
-            headlineDelta = (bR2 !== null && pR2 !== null) ? pR2 - bR2 : null;
-            headlineLabel = 'R²';
-            metricRows += row('R²', bR2 !== null ? bR2.toFixed(3) : 'N/A', pR2 !== null ? pR2.toFixed(3) : 'N/A', fmtDelta(headlineDelta, 3, ''));
-            // Lower error is better: show (baseline − pipeline) so positive means the pipeline is better
-            metricRows += row('RMSE (lower is better)', bRmse !== null ? bRmse.toFixed(3) : 'N/A', pRmse !== null ? pRmse.toFixed(3) : 'N/A',
-                fmtDelta((bRmse !== null && pRmse !== null) ? bRmse - pRmse : null, 3, ' reduction'));
-            metricRows += row('MAE (lower is better)', bMae !== null ? bMae.toFixed(3) : 'N/A', pMae !== null ? pMae.toFixed(3) : 'N/A',
-                fmtDelta((bMae !== null && pMae !== null) ? bMae - pMae : null, 3, ' reduction'));
+            metricRows += row('R²', `Share of the differences in ${targetName} between patients that the model explains. 0 = no better than predicting the average, 1 = perfect. Higher is better.`, show3(bR2), show3(pR2), fmtChange(bR2, pR2, true, 3));
+            metricRows += row('MAE ↓', `Average size of a prediction error, in ${targetName} units. Lower is better.`, show3(bMae), show3(pMae), fmtChange(bMae, pMae, false, 3));
+            metricRows += row('RMSE ↓', `Typical size of a prediction error, in ${targetName} units, giving extra weight to large misses. Lower is better.`, show3(bRmse), show3(pRmse), fmtChange(bRmse, pRmse, false, 3));
+            guide = [
+                `For a numerical outcome there is no "accuracy" in the yes/no sense. <strong>R²</strong> is the closest equivalent: it says how much of the variation in ${targetName} the model explains (e.g. 0.60 = 60%).`,
+                `<strong>MAE</strong> is the easiest to explain to colleagues: "on average, the prediction was off by this many ${targetName} units". Judge it against what counts as a clinically important difference on that scale.`,
+                '<strong>RMSE</strong> is similar to MAE but punishes large misses more. If RMSE is much larger than MAE, a few patients were predicted badly.'
+            ];
+            headline = (bR2 !== null && pR2 !== null)
+                ? `On the test patients, the pipeline's best model (${escapeHtml(pipeBest.name)}) explained ${(pR2 * 100).toFixed(0)}% of the variation in ${targetName} (R² ${pR2.toFixed(3)}) and the standard workflow's best model (${escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId)}) ${(bR2 * 100).toFixed(0)}% (R² ${bR2.toFixed(3)})${bMae !== null && pMae !== null ? `; predictions were off by ${pMae.toFixed(2)} and ${bMae.toFixed(2)} units on average` : ''}.`
+                : 'R² could not be compared.';
         }
 
         const sm = AppState.pipeline.smotencResult;
         const baseProtocol = bEv.protocol === 'option-b'
-            ? `external Dataset (ii) (${bEv.testCount} cases)`
-            : `${bEv.testPct || 20}% random split (${bEv.testCount} cases, split seed ${bEv.splitSeed})`;
-        const pipeTestCount = AppState.pipeline.testRows ? AppState.pipeline.testRows.length : '?';
+            ? `a separate test file (Dataset ii)`
+            : `a ${bEv.testPct || 20}% random test split (split seed ${bEv.splitSeed})`;
+        const baseTestN = bEv.testCount || bEv.totalSamples || 0;
+        const pipeTestN = AppState.pipeline.testRows ? AppState.pipeline.testRows.length : 0;
+        const pipeRatio = Math.round((AppState.pipeline.trainRatio || 0.8) * 100);
+        const ciText = ev => (Array.isArray(ev.accuracyCI) && ev.accuracyCI.length === 2 ? ` (accuracy 95% CI ${(ev.accuracyCI[0] * 100).toFixed(0)}–${(ev.accuracyCI[1] * 100).toFixed(0)}%)` : '');
 
-        let headline;
-        if (headlineDelta === null) {
-            headline = 'The headline metric could not be compared.';
-        } else if (Math.abs(headlineDelta) < 1e-9) {
-            headline = `Both workflows obtained the same ${headlineLabel}.`;
-        } else {
-            const unit = isClassification ? ' percentage points' : '';
-            headline = `The 7-Step Pipeline's top model scored ${Math.abs(headlineDelta).toFixed(isClassification ? 1 : 3)}${unit} ${headlineDelta > 0 ? 'higher' : 'lower'} ${headlineLabel} than the Step 4 baseline.`;
+        // Cautions, worded for the actual analysis
+        const cautions = [];
+        // Same test patients? (same raw records, e.g. same split ratio and seed, no rows dropped)
+        const baseRaw = bEv.protocol === 'option-b' ? null : AppState.baselineTestRawRows;
+        const pipeRaw = AppState.pipeline.testRawRows;
+        const sameTestPatients = Boolean(baseRaw && pipeRaw && baseRaw.length === pipeRaw.length && pipeTestN === pipeRaw.length &&
+            (() => { const set = new Set(baseRaw); return pipeRaw.every(r => set.has(r)); })());
+        const smallest = Math.min(baseTestN || Infinity, pipeTestN || Infinity);
+        if (smallest < 30) {
+            cautions.push(`<strong>Very small test sets:</strong> ${baseTestN} test patients for the standard workflow${isClassification ? ciText(bEv) : ''} and ${pipeTestN} for the pipeline${isClassification ? ciText(pEv) : ''}. With so few patients, one or two well- or badly-predicted cases can change the results a lot, so these numbers are rough indications only.`);
+        } else if (smallest < 100) {
+            cautions.push(`<strong>Modest test sets</strong> (${baseTestN} and ${pipeTestN} patients): differences of a few points may be due to chance.`);
         }
+        cautions.push(sameTestPatients
+            ? `<strong>Same test patients:</strong> both workflows were tested on the same ${pipeTestN} patients, which makes the comparison fairer; the cautions about sample size still apply.`
+            : `<strong>Different test patients:</strong> the standard workflow was tested on ${baseProtocol}; the pipeline on its own ${pipeRatio}/${100 - pipeRatio} split (seed ${AppState.pipeline.seed}). Part of any difference may simply be that one set of test patients was easier to predict than the other. Using the same split ratio and seed in both workflows (and no row removal) tests them on the same patients.`);
+        cautions.push('<strong>Best model picked on its own test set:</strong> each workflow\'s "top" model was chosen because it did best on the very test patients it is scored on, so both scores are somewhat optimistic.');
+        cautions.push('<strong>No statistical test</strong> has been applied, so the difference is not shown to be statistically significant.');
+        const nearPerfect = isClassification ? (num(pEv.accuracy) !== null && pEv.accuracy >= 0.98) || (num(bEv.accuracy) !== null && bEv.accuracy >= 0.98)
+            : (num(pEv.r2) !== null && pEv.r2 >= 0.98) || (num(bEv.r2) !== null && bEv.r2 >= 0.98);
+        if (nearPerfect) {
+            cautions.push('<strong>Near-perfect results</strong> are uncommon with real clinical data; see the "Too good to be true?" check under the pipeline results before relying on them.');
+        }
+        if ((AppState.pipeline.droppedFeatures && AppState.pipeline.droppedFeatures.size > 0) || (sm && sm.applied) || AppState.pipeline.tuningReport || AppState.tuningReport) {
+            cautions.push('<strong>Different preparation:</strong> the workflows differ in which predictors were used, balancing and/or settings tuning (see the rows above), so a difference reflects the whole approach, not one step.');
+        }
+
+        const tuned = r => (r ? 'Automatically tuned (cross-validation in the Training set)' : '<span style="color: var(--text-muted);">Default / user settings</span>');
 
         const compHtml = `
             <div style="margin-bottom: 14px; font-size: 13px; color: var(--text-secondary);">
-                Side-by-side results for cohort <strong>${escapeHtml(AppState.fileName || 'Cohort')}</strong>.
-                <span style="color: var(--accent-amber);">This is not a paired comparison:</span> the baseline was scored on a ${baseProtocol},
-                the pipeline on its own ${Math.round((AppState.pipeline.trainRatio || 0.8) * 100)}/${Math.round((1 - (AppState.pipeline.trainRatio || 0.8)) * 100)} split (${pipeTestCount} test cases, seed ${AppState.pipeline.seed}). Both "top" models were chosen on their own test sets.
-                Differences of a few points can arise from split variation alone; no significance test has been applied.
+                Results of each workflow's best model for <strong>${escapeHtml(AppState.fileName || 'Cohort')}</strong>, ${sameTestPatients ? 'both scored on the <strong>same</strong> test patients' : 'each scored on its <strong>own</strong> test patients'}.
             </div>
 
-            <table class="data-table" style="margin-bottom: 16px;">
+            <div class="table-container"><table class="data-table cmp-table" style="margin-bottom: 16px;">
                 <thead>
                     <tr>
-                        <th>Metric</th>
+                        <th>Measure &amp; what it means</th>
                         <th style="color: var(--accent-cyan);">Step 4 Standard Workflow</th>
                         <th style="color: var(--accent-emerald);">🔬 7-Step Pipeline</th>
-                        <th>Difference (Pipeline − Baseline)</th>
+                        <th>Difference (pipeline vs standard)</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${row('Top-ranked model', escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()), escapeHtml(pipeBest.name), '')}
+                    ${row('Best model', '', escapeHtml(MODEL_INFO[baseBest.modelId]?.name || baseBest.modelId.toUpperCase()), escapeHtml(pipeBest.name), '')}
+                    ${row('Test patients', 'Number of patients each result is based on. More patients = more reliable.', String(baseTestN || '?'), String(pipeTestN || '?'), '')}
                     ${metricRows}
-                    ${row('Imputation / scaling', bEv.protocol === 'option-b' ? 'Fitted on Dataset (i) only' : 'Fitted on the training split only (split first)', AppState.pipeline.completeCase ? `Complete-case (${AppState.pipeline.excludedIncomplete} incomplete row(s) removed); scaling fitted on the training split only` : 'Fitted on the training split only', '')}
-                    ${row('Collinearity handling', '<span style="color: var(--text-muted);">None (all features kept)</span>', `Correlation & VIF review; ${AppState.pipeline.droppedFeatures.size} feature(s) excluded overall`, '')}
-                    ${row('Class imbalance', '<span style="color: var(--text-muted);">Original distribution</span>',
-                        isClassification ? (sm && sm.applied ? `SMOTENC on training split (+${sm.syntheticCountGenerated} synthetic rows)` : 'SMOTENC not applied (not imbalanced)') : 'Not applicable (regression)', '')}
-                    ${row('Feature pruning', '<span style="color: var(--text-muted);">All features</span>', 'Bottom 30% RF-importance features removed for k-NN & Naive Bayes only', '')}
+                    ${row('Missing data / scaling', '', bEv.protocol === 'option-b' ? 'Fitted on Dataset (i) only' : 'Fitted on the training split only (split first)', AppState.pipeline.completeCase ? `Complete-case (${AppState.pipeline.excludedIncomplete} incomplete row(s) removed); scaling fitted on the training split only` : 'Fitted on the training split only', '')}
+                    ${row('Overlapping predictors', 'Predictors that measure nearly the same thing (collinearity).', '<span style="color: var(--text-muted);">None removed (all kept)</span>', `Correlation &amp; VIF review; ${AppState.pipeline.droppedFeatures.size} predictor(s) excluded overall`, '')}
+                    ${row('Class imbalance', 'Whether a rare outcome was topped up with synthetic patients in training.', '<span style="color: var(--text-muted);">Original distribution</span>',
+                        isClassification ? (sm && sm.applied ? `SMOTENC on training split (+${sm.syntheticCountGenerated} synthetic patients)` : 'SMOTENC not needed (not imbalanced)') : 'Not applicable (numerical outcome)', '')}
+                    ${row('Predictor pruning', '', '<span style="color: var(--text-muted);">All predictors</span>', 'Weakest 30% (by Random Forest importance) removed for k-NN &amp; Naive Bayes only', '')}
+                    ${row('Model settings', '', tuned(AppState.tuningReport), tuned(AppState.pipeline.tuningReport), '')}
                 </tbody>
-            </table>
+            </table></div>
+
+            <div class="cmp-guide">
+                <div class="cmp-guide-title">📖 How to read this comparison</div>
+                <ul>${guide.map(g => `<li>${g}</li>`).join('')}
+                    <li>In the <strong>Difference</strong> column, green means the pipeline did better on that measure and red means it did worse.</li>
+                </ul>
+            </div>
+
+            <div class="cmp-cautions">
+                <div class="cmp-cautions-title">⚠️ Cautions before drawing conclusions</div>
+                <ul>${cautions.map(c => `<li>${c}</li>`).join('')}</ul>
+            </div>
 
             <div class="pipeline-alert pipeline-alert-info" style="margin-top: 10px;">
                 <div style="font-size: 20px;">🔬</div>
                 <div>
-                    <strong>Summary:</strong> ${headline} To establish a genuine difference, compare both workflows on the same independent validation cohort or with repeated cross-validation.
+                    <strong>Summary:</strong> ${headline} Because of the cautions above, this is <strong>not proof</strong> that one workflow is better. To establish a genuine difference, test both on the <strong>same, larger group of patients</strong>, ideally an independent validation cohort.
                 </div>
             </div>
         `;
