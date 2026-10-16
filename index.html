@@ -3,10 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
+    <!-- Content-Security-Policy: the page may load and contact only its own files, so patient data cannot be sent anywhere
+         (connect-src 'self'). Inline handlers/styles are permitted because the interface uses them, and
+         'unsafe-eval' because TensorFlow.js evaluates one small built-in snippet at start-up. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'none'">
+    <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Neural Networks</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=23">
+    <link rel="stylesheet" href="style.css?v=25">
 </head>
 <body>
 
@@ -84,6 +88,10 @@
                     <button type="button" id="settings-save-btn" class="btn btn-secondary btn-sm" disabled title="Load a dataset first">💾 Save settings</button>
                     <button type="button" id="settings-load-btn" class="btn btn-secondary btn-sm">📂 Load settings</button>
                     <input type="file" id="settings-file-input" accept=".json,application/json" style="display: none;" aria-label="Settings file">
+                    <span class="settings-bar-sep" aria-hidden="true"></span>
+                    <button type="button" id="model-export-btn" class="btn btn-secondary btn-sm" disabled title="Train or deploy a model first">📦 Export trained model</button>
+                    <button type="button" id="model-import-btn" class="btn btn-secondary btn-sm" title="Load a model exported from this app, to make predictions or validate it on new patients">📥 Import trained model</button>
+                    <input type="file" id="model-file-input" accept=".json,application/json" style="display: none;" aria-label="Trained model file">
                 </div>
             </div>
             <div id="settings-banner" aria-live="polite"></div>
@@ -110,6 +118,9 @@
                             </button>
                             <button id="sample-regression-btn" class="dataset-pill">
                                 📈 Functional Recovery Score (Continuous)
+                            </button>
+                            <button id="sample-breast-btn" class="dataset-pill" title="Public Breast Cancer Wisconsin (Diagnostic) data, UCI Machine Learning Repository (CC BY 4.0): large enough for stable results and meaningful calibration">
+                                🎗️ Breast Cancer Diagnosis (569 patients, public data)
                             </button>
                         </div>
                     </div>
@@ -1154,6 +1165,8 @@
                         <!-- Multi-Model Benchmark Leaderboard Comparison -->
                         <div id="multi-model-leaderboard-container" style="display: none;"></div>
                         <div id="calibration-panel-container"></div>
+                        <div id="explain-panel-container"></div>
+                        <div id="odds-ratio-container"></div>
 
                         <!-- Single Model Summary Title & Metrics Row -->
                         <h3 id="dashboard-single-heading" style="font-size: 16px; font-weight: 700; color: var(--text-primary);">Model Validation &amp; Accuracy Metrics</h3>
@@ -1187,6 +1200,7 @@
                         </div>
                     </div>
 
+                    <div class="research-use-note" role="note">⚠️ <strong>Research and education only.</strong> These predictions have not been validated for decisions about an individual patient's care. Software used to guide individual care may be regulated as a medical device (e.g. UK MDR / MHRA Software as a Medical Device).</div>
                     <!-- Model Provenance & Switcher Banner -->
                     <div id="single-predict-provenance-bar" class="pipeline-alert" style="display: none; margin-bottom: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;"></div>
 
@@ -1220,6 +1234,7 @@
                         </button>
                     </div>
 
+                    <div class="research-use-note" role="note">⚠️ <strong>Research and education only.</strong> These predictions have not been validated for decisions about an individual patient's care. Software used to guide individual care may be regulated as a medical device (e.g. UK MDR / MHRA Software as a Medical Device).</div>
                     <!-- Batch Model Provenance & Switcher Banner -->
                     <div id="batch-predict-provenance-bar" class="pipeline-alert" style="display: none; margin-bottom: 18px; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;"></div>
 
@@ -1753,6 +1768,7 @@
                                 <div id="pipeline-leaderboard-container" class="table-container"></div>
                             </div>
                             <div id="pipeline-calibration-container"></div>
+                            <div id="pipeline-explain-container"></div>
 
                             <!-- 2x2 Confusion Matrices Grid -->
                             <div class="card" style="background: var(--bg-surface-elevated); padding: 20px;">
@@ -1824,7 +1840,7 @@
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
     <script src="data-engine.js?v=30"></script>
-    <script src="models.js?v=32"></script>
-    <script src="app.js?v=55"></script>
+    <script src="models.js?v=34"></script>
+    <script src="app.js?v=57"></script>
 </body>
 </html>

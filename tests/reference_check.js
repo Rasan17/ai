@@ -49,5 +49,10 @@ out.XB=XB; out.nbB=XB.map(x=>nbB.predictSingle(x).probabilities[1]);
 // Calibration slope and intercept of moderately miscalibrated probabilities
 const calY=[],calP=[];for(let i=0;i<600;i++){const lp=-1+3*rnd(); const ptrue=1/(1+Math.exp(-lp)); calY.push(rnd()<ptrue?1:0); calP.push(1/(1+Math.exp(-(0.3+1.6*lp))));}
 out.calY=calY; out.calP=calP; out.cal=ME.calibrationSummary(calY,calP);
+// DeLong paired AUC test, average precision, decision curve, and logistic regression by IRLS (odds ratios)
+const dlY=[],dlA=[],dlB=[];for(let i=0;i<300;i++){const y=rnd()<0.35?1:0; dlY.push(y); const z=rnd(); dlA.push(Math.round((0.6*y+z)*20)/20); dlB.push(0.3*y+rnd());}
+out.dlY=dlY; out.dlA=dlA; out.dlB=dlB; out.delong=ME.delongTest(dlY,dlA,dlB); out.pr=ME.prCurve(dlY,dlA).averagePrecision;
+out.dca=ME.decisionCurve(dlY,dlA,[0.1,0.2,0.3]);
+const irX=rows.map(r=>[r.x1,r.x2,r.g==='B'?1:0,r.g==='C'?1:0]); out.irX=irX; out.irls=ME.logisticIRLS(irX,yc);
 fs.writeFileSync(path.join(__dirname,'reference_values.json'),JSON.stringify(out));
 console.log('App values written to tests/reference_values.json; now run: python3 tests/reference_check.py');

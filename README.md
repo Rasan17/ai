@@ -27,6 +27,7 @@ The **Universal Medical ML/NeuralNet Predictor** provides clinical researchers, 
 ### 1. Complete Client-Side Data Privacy (supports GDPR/HIPAA-aligned use)
 - Runs locally in modern browsers via HTML5, Vanilla JavaScript, and TensorFlow.js.
 - Patient health records and uploaded CSVs are processed solely in client memory—**zero data is transmitted to external servers**.
+- A Content-Security-Policy in the page lets the browser contact only the app's own files (`connect-src 'self'`), so data cannot be sent to any other server.
 - Keeping data in the browser supports GDPR/HIPAA-aligned workflows, but software alone cannot make a study compliant: lawful basis, de-identification, device security and governance remain the user's and institution's responsibility.
 
 ### 2. Flexible Variable Role & Scale Configuration
@@ -111,6 +112,11 @@ Clinicians and researchers can choose the exact scope of models to train and ben
 #### Multi-Model Diagnostic Results & Confusion Matrices:
 - **Comparative Benchmark Leaderboard:** Ranks all tested models by a user-selected primary metric (default: Macro F1 for classification, $R^2$ for regression; alternatives: balanced accuracy, ROC-AUC, Brier score, accuracy, RMSE, MAE), and reports all metrics including the Wilson 95% CI for accuracy. The same policy applies in Step 4 and the 7-Step Pipeline. **Model selection:** by default the best model is chosen by **k-fold cross-validation inside the Training set** (missing-value filling, encoding and scaling refitted in every fold; in the 7-Step Pipeline SMOTENC as well), so the Testing set is used only once and the winner's test score is not selection-biased. Choosing by Testing-set results remains available (faster, but optimistic). Optional **automatic tuning** selects each model's key settings by the same leak-free cross-validation. A single split still does not establish general superiority.
 - **Calibration & decision threshold:** for two-outcome predictions, a calibration plot with calibration slope and intercept (checked against statsmodels), a sensitivity/specificity/PPV/NPV table across thresholds, and a user-chosen decision threshold (default 0.5, to be set on clinical grounds, never tuned on the Testing set) that is applied consistently to evaluation and to new-patient predictions.
+- **Uncertainty:** every test metric has a 95% confidence interval (percentile bootstrap of the test patients; Wilson interval for accuracy), and ROC-AUCs are compared with the top model by the DeLong test.
+- **Curves:** ROC and precision-recall curves for all models, decision curve analysis (net benefit against "treat all" and "treat none"), calibration plots, and residual-versus-fitted plots for numerical outcomes.
+- **Explainability:** permutation importance on the Testing set (model-agnostic), a per-patient "why this prediction?" explanation in Single Prediction, and odds ratios with 95% CIs and p-values from a logistic regression fitted to convergence (IRLS; checked against statsmodels).
+- **Feature selection inside cross-validation:** in the 7-Step Pipeline the Step 6 top-70% selection for k-NN and Naive Bayes is repeated inside every fold, with a selection-stability summary; exclusions made in Steps 2–4 are flagged as post-selection.
+- **Export / import of trained models:** the active model, with its fitted preprocessing, decision threshold, evaluation summary, seeds and software version, is saved as one JSON file and can be re-loaded (even without the training data) for predictions or external validation. Files contain no patient data, except where the method needs it (k-NN models, k-NN imputation), which is flagged before export.
 - **Reports:** both workflows export a JSON report recording the software version, validation design (split method, model-selection method, tuning, threshold), settings, seeds, exclusions and every model's results, including calibration.
 - **Individual Confusion Matrices & Accuracy Cards:** Renders an individual diagnostic card for **every chosen model**, featuring:
   - **Prominent Test Accuracy** (and ROC-AUC / Macro F1 scores).
@@ -122,7 +128,7 @@ Clinicians and researchers can choose the exact scope of models to train and ben
 Reproducibility is a fundamental prerequisite in scientific and clinical research. The platform provides full deterministic random seed control and provenance tracking:
 
 - **Per-Model Seed Input & Randomization:**
-  - Every machine learning and deep learning model includes a **Random Seed (Reproducibility)** input control equipped with a 🎲 dice randomizer button.
+  - Every machine learning and neural network model includes a **Random Seed (Reproducibility)** input control equipped with a 🎲 dice randomizer button.
   - Researchers can enter a custom integer seed (e.g. `42`, `1007`) or click the 🎲 dice button to generate a random seed.
   - If left blank, the system automatically generates a high-entropy seed and immediately populates the input field so the user always has a visible reference.
 - **Option A Data Split Seed:**
@@ -161,6 +167,7 @@ The suite includes built-in clinical datasets for instant experimentation:
 2. **🧠 Neurosurgical Shunt Response Cohort (`medical_shunt_cohort.csv`):** Hakim-Adams triad, Evans' Index, Callosal Angle, DESH, CSF dynamics ($R_{out}$, PVI), predicting surgical response.
 3. **📈 Functional Recovery Score Cohort (`medical_recovery_score.csv`):** Continuous regression dataset predicting post-operative clinical improvement points.
 4. **📂 Unseen Batch Cases (`medical_batch_unseen_cases.csv`):** 10 patient cases ready for immediate batch prediction.
+5. **🎗️ Breast Cancer Wisconsin Diagnostic (`breast_cancer_wisconsin.csv`):** the public UCI dataset (569 patients, 30 continuous predictors, benign vs malignant). Large enough to show stable performance estimates and meaningful calibration; the sample cohorts above are small demonstrations (20–40 patients) on which models can look unrealistically good.
 
 ---
 
@@ -168,6 +175,7 @@ The suite includes built-in clinical datasets for instant experimentation:
 
 - **Single train/test split.** Final performance is estimated on one held-out split. With cross-validated model selection (default) the winner's test score is not selection-biased, but it is still imprecise for small test sets; if selection by Testing-set results is chosen, the winner's score is optimistic. Confirm the chosen model on an independent cohort (Option B) before reporting.
 - **Splitting design.** Random, patient-grouped and date-based splits are built in; multicentre (site-based) validation needs a separate cohort (Option B). With a date-based split, cross-validation inside the training period uses folds that are not time-ordered.
+- **Remaining gaps:** no recalibration (Platt/isotonic), no bootstrap optimism-corrected internal validation, single (not multiple) imputation, no survival (time-to-event) or gradient-boosted models, and all computation runs on the browser's main thread.
 - **Probabilities are not recalibrated.** Random Forest and hard voting give vote shares, k-NN gives neighbour shares. Calibration is assessed (plot, slope, intercept, Brier score), but no recalibration (e.g. Platt or isotonic) is applied; calibration estimates are imprecise with fewer than about 100 patients with and without the outcome.
 - **Exploratory 2×2 for continuous outcomes.** Cut at the training-data median, not a clinical threshold; these are not diagnostic accuracy measures.
 - **Feature importance (MDI)** ranks predictors for this model and data; it is not evidence of causal or clinical effect, and it can favour features with many distinct values.
@@ -183,12 +191,14 @@ The suite includes built-in clinical datasets for instant experimentation:
 From the project folder (Node.js; the reference check also needs Python with SciPy, scikit-learn and statsmodels):
 
 ```bash
-node tests/reference_check.js && python3 tests/reference_check.py   # 43 checks against SciPy / scikit-learn / statsmodels (incl. calibration slope/intercept)
+node tests/reference_check.js && python3 tests/reference_check.py   # 50 checks against SciPy / scikit-learn / statsmodels (incl. calibration, DeLong, average precision, decision curve, IRLS odds ratios)
 node tests/edge_cases.js                                           # robustness: single class, all-missing, constant features, imbalance, zero-variance target
-node tests/end_to_end.js                                           # 12 end-to-end checks: binary/multiclass/regression, missing values, unseen categories, rare outcome, tiny cohort, patient/date splits, calibration, threshold, NN fallback, batch = evaluation preprocessing
+node tests/end_to_end.js                                           # 13 end-to-end checks (incl. export/import of all six model types): binary/multiclass/regression, missing values, unseen categories, rare outcome, tiny cohort, patient/date splits, calibration, threshold, NN fallback, batch = evaluation preprocessing
 python3 tests/benchmark_vs_python.py                               # app vs scikit-learn / PyTorch / imbalanced-learn (~2 min)
 python3 tests/nn_forward_check.py                                  # exact forward pass of the trained TF.js network, recomputed in NumPy
 ```
+
+These checks also run automatically on every push (GitHub Actions, `.github/workflows/tests.yml`).
 
 `tests/gpu_cpu_check.html` checks, in the browser itself, that the GPU (WebGL) backend users get gives the same neural-network predictions as the CPU backend used by the automated tests. Serve the project folder (`python3 -m http.server`) and open `http://localhost:8000/tests/gpu_cpu_check.html`; it also reports whether the GPU computes in full float32 precision on that machine.
 

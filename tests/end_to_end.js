@@ -269,6 +269,27 @@ async function trainEval(id, w, isClassification) {
         }
     });
 
+    await check('Exported models reload with identical predictions (all six model types, via JSON)', async () => {
+        const rows = cohort(200, 15, 'binary', { missing: true });
+        const cfg = configs('binary');
+        const split = DE.trainTestSplit(rows, rows.map(r => r.Outcome), 0.8, true, 4);
+        const w = prepareWorkflow(rows, cfg, true, split);
+        const done = [];
+        for (const id of MODELS) {
+            const { m } = await trainEval(id, w, true);
+            const json = JSON.stringify(await ME.serializeModel(m));
+            const back = await ME.deserializeModel(JSON.parse(json));
+            const a = w.test.X.map(x => m.predictSingle(x)), b = w.test.X.map(x => back.predictSingle(x));
+            const p1 = o => (o.probabilities ? Number(o.probabilities[1] || 0) : o.pred); // k-NN lists only classes among the neighbours
+            const maxDiff = Math.max(...a.map((o, i) => Math.abs(p1(o) - p1(b[i]))));
+            assert(a.every((o, i) => o.pred === b[i].pred) && maxDiff < 1e-6, `${id}: predictions changed (max diff ${maxDiff})`);
+            done.push(id);
+            if (m.dispose) m.dispose();
+            if (back.dispose) back.dispose();
+        }
+        return done.join(', ');
+    });
+
     console.log = realLog;
     console.log(lines.join('\n'));
     console.log(`\n${passed}/${passed + failed} end-to-end checks passed`);

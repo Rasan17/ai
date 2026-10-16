@@ -73,6 +73,27 @@ cy=np.array(o['calY']); cp=np.clip(np.array(o['calP']),1e-4,1-1e-4); lp=np.log(c
 fs=sm.GLM(cy,sm.add_constant(lp),family=sm.families.Binomial()).fit()
 fi=sm.GLM(cy,np.ones((len(cy),1)),family=sm.families.Binomial(),offset=lp).fit()
 chk('Calibration slope',o['cal']['slope'],fs.params[1],1e-3); chk('Calibration intercept (calibration-in-the-large)',o['cal']['intercept'],fi.params[0],1e-3)
+# DeLong test: independent NumPy implementation of DeLong et al. (1988) structural components
+def delong(y,a,b):
+    y=np.array(y); pos=np.where(y==1)[0]; neg=np.where(y==0)[0]; m,n=len(pos),len(neg)
+    def comps(s):
+        s=np.array(s); psi=(s[pos][:,None]>s[neg][None,:]).astype(float)+0.5*(s[pos][:,None]==s[neg][None,:])
+        return psi.mean(1),psi.mean(0),psi.mean()
+    a10,a01,A=comps(a); b10,b01,Bv=comps(b)
+    S10=np.cov(np.vstack([a10,b10])); S01=np.cov(np.vstack([a01,b01])); L=np.array([1,-1])
+    var=L@S10@L/m+L@S01@L/n; z=(A-Bv)/np.sqrt(var); return A,Bv,z,2*stats.norm.sf(abs(z))
+A,Bv,z,pv=delong(o['dlY'],o['dlA'],o['dlB']); d=o['delong']
+chk('DeLong AUC A / AUC B',[d['aucA'],d['aucB']],[metrics.roc_auc_score(o['dlY'],o['dlA']),metrics.roc_auc_score(o['dlY'],o['dlB'])],1e-9)
+chk('DeLong z and p (paired AUC difference)',[d['z'],d['p']],[z,pv],1e-6)
+chk('Average precision (PR curve)',o['pr'],metrics.average_precision_score(o['dlY'],o['dlA']),1e-9)
+yy=np.array(o['dlY']); pa=np.array(o['dlA']); nb=[]
+for t in [0.1,0.2,0.3]:
+    tp=np.sum((pa>=t)&(yy==1)); fp=np.sum((pa>=t)&(yy==0)); nb.append(tp/len(yy)-fp/len(yy)*t/(1-t))
+chk('Decision curve net benefit',[x['model'] for x in o['dca']],nb,1e-12)
+irX=np.array(o['irX']); lg=sm.Logit(yc,sm.add_constant(irX)).fit(disp=0); ir=o['irls']['rows']
+chk('Logistic IRLS coefficients (vs statsmodels Logit)',[r['coef'] for r in ir],lg.params,1e-6)
+chk('Logistic IRLS standard errors',[r['se'] for r in ir],lg.bse,1e-6)
+chk('Logistic IRLS p-values',[r['p'] for r in ir],lg.pvalues,1e-6)
 w=max(len(x[1]) for x in res)
 for st,nm,d,t in res: print(f'{st}  {nm:<{w}}  max|diff|={d:.2e}  (tol {t:.0e})')
 print(f"\n{sum(1 for x in res if x[0]=='PASS')}/{len(res)} checks passed")

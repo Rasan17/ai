@@ -27,6 +27,43 @@
         };
     }
 
+    // Standard normal CDF (Abramowitz & Stegun 7.1.26 via erf; |error| < 1.5e-7)
+    function normalCdf(z) {
+        const t = 1 / (1 + 0.3275911 * Math.abs(z) / Math.SQRT2);
+        const erf = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-(z * z) / 2);
+        return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2;
+    }
+
+    // Gaussian elimination with partial pivoting; returns null if singular
+    function solveLinear(A, b) {
+        const n = A.length;
+        const M = A.map((r, i) => [...r, b[i]]);
+        for (let c = 0; c < n; c++) {
+            let piv = c;
+            for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+            if (Math.abs(M[piv][c]) < 1e-12) return null;
+            [M[c], M[piv]] = [M[piv], M[c]];
+            for (let r = 0; r < n; r++) {
+                if (r === c) continue;
+                const f = M[r][c] / M[c][c];
+                if (f) for (let k = c; k <= n; k++) M[r][k] -= f * M[c][k];
+            }
+        }
+        return M.map((r, i) => r[n] / r[i]);
+    }
+
+    function invertMatrix(A) {
+        const n = A.length;
+        const inv = [];
+        for (let j = 0; j < n; j++) {
+            const e = new Array(n).fill(0); e[j] = 1;
+            const col = solveLinear(A, e);
+            if (!col) return null;
+            inv.push(col);
+        }
+        return inv[0].map((_, i) => inv.map(r => r[i])); // columns -> rows
+    }
+
     /**
      * Yields control back to the browser between training epochs. TF.js's default yielding uses
      * requestAnimationFrame, which never fires in a background tab (training would freeze); here a
@@ -1681,6 +1718,7 @@
 
                 const probabilityType = outputs.length ? (outputs[0].probabilityType || 'model') : 'model';
                 const probPositive = numClasses === 2 ? probVectors.map(v => Number(v[1].toFixed(4))) : null;
+                const probMatrix = numClasses > 2 ? probVectors.map(v => v.map(q => Number(q.toFixed(4)))) : null;
                 const calibration = numClasses === 2 ? this.calibrationSummary(testY.map(v => (v === 1 ? 1 : 0)), probVectors.map(v => v[1])) : null;
 
                 return {
@@ -1697,6 +1735,8 @@
                     probabilityType,
                     calibration,
                     probPositive,
+                    probMatrix,
+                    numClasses,
                     decisionThreshold: numClasses === 2 && isFinite(dt) && dt > 0 && dt < 1 ? dt : (numClasses === 2 ? 0.5 : null),
                     classesMissingFromTest,
                     // For binary outcomes, class index 1 is the "positive" class for AUC / sensitivity / TP
@@ -1801,6 +1841,266 @@
                 targetClasses = Array.isArray(targetClassesOrStats) ? targetClassesOrStats : [];
             }
             return this.evaluate(model, testX, testY, isClassification, targetClasses);
+        },
+
+        // ---------------------------------------------------------------------------------------------
+        // Uncertainty, model comparison and clinical-utility statistics (computed on held-out predictions)
+        // ---------------------------------------------------------------------------------------------
+
+        /** ROC curve points (FPR, TPR) from binary labels (1 = positive) and scores; ties handled as one step */
+        rocCurve(y, p) {
+            const order = p.map((v, i) => i).sort((a, b) => p[b] - p[a]);
+            const P = y.reduce((a, b) => a + b, 0), N = y.length - P;
+            const pts = [{ fpr: 0, tpr: 0 }];
+            let tp = 0, fp = 0;
+            for (let k = 0; k < order.length; k++) {
+                const i = order[k];
+                if (y[i] === 1) tp++; else fp++;
+                if (k === order.length - 1 || p[order[k + 1]] !== p[i]) pts.push({ fpr: N ? fp / N : 0, tpr: P ? tp / P : 0 });
+            }
+            return pts;
+        },
+
+        /** Precision-recall curve points and average precision (step-wise, as in scikit-learn) */
+        prCurve(y, p) {
+            const order = p.map((v, i) => i).sort((a, b) => p[b] - p[a]);
+            const P = y.reduce((a, b) => a + b, 0);
+            const pts = [];
+            let tp = 0, fp = 0, ap = 0, prevRecall = 0;
+            for (let k = 0; k < order.length; k++) {
+                const i = order[k];
+                if (y[i] === 1) tp++; else fp++;
+                if (k === order.length - 1 || p[order[k + 1]] !== p[i]) {
+                    const recall = P ? tp / P : 0, precision = tp / (tp + fp);
+                    ap += (recall - prevRecall) * precision;
+                    prevRecall = recall;
+                    pts.push({ recall, precision });
+                }
+            }
+            return { points: pts, averagePrecision: P ? ap : null, prevalence: y.length ? P / y.length : null };
+        },
+
+        /**
+         * DeLong test for the difference between two correlated ROC AUCs measured on the same patients
+         * (DeLong, DeLong & Clarke-Pearson 1988). Returns both AUCs, the difference, its SE, z and two-sided p.
+         */
+        delongTest(y, pA, pB) {
+            const pos = [], neg = [];
+            y.forEach((v, i) => (v === 1 ? pos : neg).push(i));
+            const m = pos.length, n = neg.length;
+            if (m < 2 || n < 2) return null;
+            const psi = (a, b) => (a > b ? 1 : a === b ? 0.5 : 0);
+            const comps = [pA, pB].map(sc => {
+                const V10 = pos.map(i => neg.reduce((s, j) => s + psi(sc[i], sc[j]), 0) / n);
+                const V01 = neg.map(j => pos.reduce((s, i) => s + psi(sc[i], sc[j]), 0) / m);
+                const auc = V10.reduce((a, b) => a + b, 0) / m;
+                return { V10, V01, auc };
+            });
+            const cov = (a, b, len) => {
+                const ma = a.reduce((s, v) => s + v, 0) / len, mb = b.reduce((s, v) => s + v, 0) / len;
+                return a.reduce((s, v, k) => s + (v - ma) * (b[k] - mb), 0) / (len - 1);
+            };
+            const [A, B] = comps;
+            const varDiff = (cov(A.V10, A.V10, m) + cov(B.V10, B.V10, m) - 2 * cov(A.V10, B.V10, m)) / m
+                + (cov(A.V01, A.V01, n) + cov(B.V01, B.V01, n) - 2 * cov(A.V01, B.V01, n)) / n;
+            const diff = A.auc - B.auc;
+            if (!(varDiff > 0)) return { aucA: A.auc, aucB: B.auc, diff, se: 0, z: null, p: diff === 0 ? 1 : null };
+            const se = Math.sqrt(varDiff), z = diff / se;
+            return { aucA: A.auc, aucB: B.auc, diff, se, z, p: 2 * (1 - normalCdf(Math.abs(z))) };
+        },
+
+        /** Decision curve analysis: net benefit of the model, "treat all" and "treat none" across thresholds */
+        decisionCurve(y, p, thresholds = null) {
+            const n = y.length;
+            const prev = n ? y.reduce((a, b) => a + b, 0) / n : 0;
+            const ths = thresholds || Array.from({ length: 19 }, (_, i) => Number(((i + 1) * 0.05).toFixed(2)));
+            return ths.map(t => {
+                let tp = 0, fp = 0;
+                p.forEach((v, i) => { if (v >= t) { if (y[i] === 1) tp++; else fp++; } });
+                const w = t / (1 - t);
+                return { threshold: t, model: n ? tp / n - (fp / n) * w : 0, treatAll: prev - (1 - prev) * w, treatNone: 0 };
+            });
+        },
+
+        /**
+         * Percentile bootstrap 95% confidence intervals for the held-out metrics in an evaluation result,
+         * resampling test patients with replacement (seeded, reproducible).
+         */
+        bootstrapCIs(ev, B = 1000, seed = 2024) {
+            if (!ev || !Array.isArray(ev.actuals) || ev.actuals.length < 5) return null;
+            const rng = createPRNG(seed);
+            const n = ev.actuals.length;
+            const y = ev.actuals, yhat = ev.predictions;
+            const stats = {};
+            const add = (k, v) => { if (typeof v === 'number' && isFinite(v)) (stats[k] = stats[k] || []).push(v); };
+            const slopeB = Math.min(B, n > 3000 ? 0 : 300); // calibration slope needs an iterative fit: fewer resamples
+            for (let b = 0; b < B; b++) {
+                const idx = Array.from({ length: n }, () => Math.floor(rng() * n));
+                if (ev.isClassification) {
+                    const yy = idx.map(i => y[i]), pp = idx.map(i => yhat[i]);
+                    const k = ev.numClasses || Math.max(...y) + 1;
+                    let correct = 0; const tp = new Array(k).fill(0), sup = new Array(k).fill(0), prd = new Array(k).fill(0);
+                    yy.forEach((v, i) => { sup[v]++; prd[pp[i]]++; if (v === pp[i]) { correct++; tp[v]++; } });
+                    add('accuracy', correct / n);
+                    const present = sup.map((s, c) => c).filter(c => sup[c] > 0);
+                    add('balancedAccuracy', present.reduce((a, c) => a + tp[c] / sup[c], 0) / present.length);
+                    add('macroF1', sup.reduce((a, s, c) => { const pr = prd[c] ? tp[c] / prd[c] : 0, rc = s ? tp[c] / s : 0; return a + (pr + rc ? 2 * pr * rc / (pr + rc) : 0); }, 0) / k);
+                    if (ev.probPositive) {
+                        const yb = yy.map(v => (v === 1 ? 1 : 0)), pr = idx.map(i => ev.probPositive[i]);
+                        add('brierScore', pr.reduce((a, q, i) => a + (q - yb[i]) ** 2, 0) / n);
+                        if (yb.some(v => v === 1) && yb.some(v => v === 0)) add('rocAuc', this._calculateBinaryAUC(yb, pr));
+                        if (b < slopeB) { const c = this.calibrationSummary(yb, pr); add('calibrationSlope', c.slope); add('calibrationIntercept', c.intercept); }
+                    } else if (ev.probMatrix) {
+                        add('brierScore', idx.reduce((a, i) => a + ev.probMatrix[i].reduce((s, q, c) => s + (q - (y[i] === c ? 1 : 0)) ** 2, 0), 0) / n);
+                    }
+                } else {
+                    const yy = idx.map(i => y[i]), pp = idx.map(i => yhat[i]);
+                    const mean = yy.reduce((a, v) => a + v, 0) / n;
+                    const sse = yy.reduce((a, v, i) => a + (v - pp[i]) ** 2, 0), sst = yy.reduce((a, v) => a + (v - mean) ** 2, 0);
+                    if (sst > 0) add('r2', 1 - sse / sst);
+                    add('rmse', Math.sqrt(sse / n));
+                    add('mae', yy.reduce((a, v, i) => a + Math.abs(v - pp[i]), 0) / n);
+                }
+            }
+            const out = { B, method: 'percentile bootstrap of test patients' };
+            Object.keys(stats).forEach(k => {
+                const v = stats[k].sort((a, b) => a - b);
+                const q = f => v[Math.min(v.length - 1, Math.max(0, Math.floor(f * (v.length - 1))))];
+                if (v.length >= 20) out[k] = [Number(q(0.025).toFixed(4)), Number(q(0.975).toFixed(4))];
+            });
+            return out;
+        },
+
+        /**
+         * Logistic regression fitted to convergence by iteratively reweighted least squares (Newton), for
+         * explanation: coefficients, standard errors, Wald 95% CIs, p-values and odds ratios. Binary outcomes.
+         * X should not contain a constant column; an intercept is added. Returns null (with a note) when the
+         * fit does not converge (e.g. complete separation) or the design is singular.
+         */
+        logisticIRLS(X, y, names = null, maxIter = 100) {
+            const n = X.length;
+            if (!n) return null;
+            const p = X[0].length + 1;
+            const Z = X.map(r => [1, ...r]);
+            let beta = new Array(p).fill(0);
+            let converged = false, info = null;
+            for (let it = 0; it < maxIter; it++) {
+                const H = Array.from({ length: p }, () => new Array(p).fill(0));
+                const g = new Array(p).fill(0);
+                for (let i = 0; i < n; i++) {
+                    const eta = Z[i].reduce((a, v, j) => a + v * beta[j], 0);
+                    const mu = 1 / (1 + Math.exp(-eta));
+                    const w = Math.max(mu * (1 - mu), 1e-12);
+                    for (let j = 0; j < p; j++) {
+                        g[j] += (y[i] - mu) * Z[i][j];
+                        for (let k = j; k < p; k++) H[j][k] += w * Z[i][j] * Z[i][k];
+                    }
+                }
+                for (let j = 0; j < p; j++) for (let k = 0; k < j; k++) H[j][k] = H[k][j];
+                info = H;
+                const step = solveLinear(H, g);
+                if (!step) return { converged: false, note: 'The predictors are collinear (singular design), so odds ratios cannot be estimated.' };
+                beta = beta.map((b, j) => b + step[j]);
+                if (beta.some(b => !isFinite(b) || Math.abs(b) > 50)) return { converged: false, note: 'The model did not converge: some predictors separate the outcomes (almost) perfectly, so odds ratios are not estimable.' };
+                if (Math.max(...step.map(Math.abs)) < 1e-9) { converged = true; break; }
+            }
+            if (!converged) return { converged: false, note: 'The model did not converge within the iteration limit.' };
+            const inv = invertMatrix(info);
+            if (!inv) return { converged: false, note: 'The information matrix is singular, so standard errors cannot be estimated.' };
+            const rows = beta.map((b, j) => {
+                const se = Math.sqrt(Math.max(inv[j][j], 0));
+                const z = se > 0 ? b / se : null;
+                return {
+                    name: j === 0 ? '(Intercept)' : (names ? names[j - 1] : `x${j}`),
+                    coef: b, se, z, p: z === null ? null : 2 * (1 - normalCdf(Math.abs(z))),
+                    or: Math.exp(b), orLow: Math.exp(b - 1.959964 * se), orHigh: Math.exp(b + 1.959964 * se)
+                };
+            });
+            return { converged: true, n, events: y.reduce((a, v) => a + v, 0), rows };
+        },
+
+        // ---------------------------------------------------------------------------------------------
+        // Saving and loading trained models (JSON). Arrays only; TF.js networks are stored as topology +
+        // base64 weights. k-NN models keep their (scaled) training cases, which is flagged on export.
+        // ---------------------------------------------------------------------------------------------
+        async serializeModel(model) {
+            if (!model) return null;
+            const plain = (obj, skip = []) => {
+                const o = {};
+                Object.keys(obj).forEach(k => {
+                    if (skip.includes(k) || k === 'rng' || typeof obj[k] === 'function') return;
+                    const v = obj[k];
+                    o[k] = ArrayBuffer.isView(v) ? { __typed: v.constructor.name, data: Array.from(v) } : v;
+                });
+                return o;
+            };
+            if (model instanceof RandomForest) {
+                return { type: 'rf', state: plain(model, ['trees']), trees: model.trees.map(t => ({ state: plain(t, ['root']), root: t.root })) };
+            }
+            if (model instanceof GeneralizedLinearModel) return { type: 'glm', state: plain(model) };
+            if (model instanceof KNNModel) return { type: 'knn', state: plain(model) };
+            if (model instanceof GaussianNaiveBayes) return { type: 'nb', state: plain(model) };
+            if (model instanceof DeepNeuralNetwork) {
+                const out = { type: 'nn', state: plain(model, ['tfModel', 'fallbackGLM', 'history']) };
+                if (model.fallbackGLM) out.fallbackGLM = await this.serializeModel(model.fallbackGLM);
+                if (model.tfModel) {
+                    let artifacts = null;
+                    await model.tfModel.save(tf.io.withSaveHandler(async a => { artifacts = a; return { modelArtifactsInfo: { dateSaved: new Date(), modelTopologyType: 'JSON' } }; }));
+                    const bytes = new Uint8Array(artifacts.weightData);
+                    let bin = '';
+                    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+                    out.tf = { modelTopology: artifacts.modelTopology, weightSpecs: artifacts.weightSpecs, weightData: btoa(bin) };
+                }
+                return out;
+            }
+            if (model instanceof EnsembleModel) {
+                const items = [];
+                for (const it of model.models) items.push({ ...it, model: await this.serializeModel(it.model) });
+                return { type: 'ensemble', state: plain(model, ['models']), models: items };
+            }
+            throw new Error('This model type cannot be exported.');
+        },
+
+        async deserializeModel(obj) {
+            if (!obj) return null;
+            const restore = (proto, state) => {
+                const m = Object.create(proto);
+                Object.keys(state || {}).forEach(k => {
+                    const v = state[k];
+                    m[k] = v && v.__typed ? new globalThis[v.__typed](v.data) : v;
+                });
+                m.rng = createPRNG(m.seed);
+                return m;
+            };
+            if (obj.type === 'rf') {
+                const m = restore(RandomForest.prototype, obj.state);
+                m.trees = obj.trees.map(t => { const tr = restore(DecisionTree.prototype, t.state); tr.root = t.root; return tr; });
+                return m;
+            }
+            if (obj.type === 'glm') return restore(GeneralizedLinearModel.prototype, obj.state);
+            if (obj.type === 'knn') return restore(KNNModel.prototype, obj.state);
+            if (obj.type === 'nb') return restore(GaussianNaiveBayes.prototype, obj.state);
+            if (obj.type === 'nn') {
+                const m = restore(DeepNeuralNetwork.prototype, obj.state);
+                m.history = { loss: [], valLoss: [], accuracy: [], valAccuracy: [] };
+                m.fallbackGLM = obj.fallbackGLM ? await this.deserializeModel(obj.fallbackGLM) : null;
+                m.tfModel = null;
+                if (obj.tf) {
+                    if (typeof tf === 'undefined') throw new Error('TensorFlow.js is needed to load this neural network.');
+                    const bin = atob(obj.tf.weightData);
+                    const bytes = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                    m.tfModel = await tf.loadLayersModel(tf.io.fromMemory({ modelTopology: obj.tf.modelTopology, weightSpecs: obj.tf.weightSpecs, weightData: bytes.buffer }));
+                }
+                return m;
+            }
+            if (obj.type === 'ensemble') {
+                const m = restore(EnsembleModel.prototype, obj.state);
+                m.models = [];
+                for (const it of obj.models) m.models.push({ ...it, model: await this.deserializeModel(it.model) });
+                return m;
+            }
+            throw new Error(`Unknown model type in file: ${obj.type}`);
         },
 
         /** Re-labels one binary output with a decision threshold on the positive-class probability */

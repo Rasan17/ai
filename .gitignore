@@ -2,3 +2,6 @@
 *.log
 tests/reference_values.json
 tests/bench_work/
+
+__MACOSX/
+*.zip
