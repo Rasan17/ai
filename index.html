@@ -6,7 +6,7 @@
     <title>Universal Medical ML/NeuralNet Predictor | Clinical Machine Learning & Deep Learning</title>
     <meta name="description" content="Universal in-browser client-side Machine Learning and Neural Network Predictor for Clinical Medicine. Features automated variable typing, multi-strategy missing data imputation, neural networks, random forests, single & batch inference.">
     <meta name="author" content="Dr G Narenthiran MB ChB BSc(MedSci)(Hons) FEBNS FRCS(SN)">
-    <link rel="stylesheet" href="style.css?v=12">
+    <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
 
@@ -132,8 +132,9 @@
 
                     <!-- Preview Table -->
                     <div class="card" style="padding: 16px; background: var(--bg-surface-subtle);">
-                        <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 10px;">Dataset Preview (Initial Records)</h3>
-                        <div id="data-preview-container" class="table-container">
+                        <h3 style="font-size: 14px; font-weight: 700; margin-bottom: 4px;">Dataset Preview (Initial Records)</h3>
+                        <p id="data-preview-note" style="font-size: 12px; color: var(--text-muted); margin-bottom: 10px;"></p>
+                        <div id="data-preview-container" class="table-container preview-scroll" tabindex="0" aria-label="Dataset preview table (scrollable)">
                             <p style="padding: 20px; color: var(--text-muted); text-align: center;">No dataset loaded yet. Upload a CSV file or click a sample cohort above.</p>
                         </div>
                     </div>
@@ -1051,6 +1052,23 @@
                             </div>
                         </div>
 
+                        <!-- Automatic tuning (k-fold cross-validation inside the Training set) -->
+                        <div class="autotune-box">
+                            <div class="autotune-row">
+                                <label class="autotune-label">
+                                    <input type="checkbox" id="autotune-check">
+                                    🎯 Automatically tune each selected model's key settings on the Training set
+                                </label>
+                                <label for="autotune-folds" class="autotune-folds-label">Cross-validation:
+                                    <select id="autotune-folds" class="control-select" style="width: auto; display: inline-block;">
+                                        <option value="5" selected>5-fold (recommended)</option>
+                                        <option value="3">3-fold (faster)</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <p class="autotune-hint">The app tries several combinations of each model's main settings (e.g. k for k-NN, tree depth for Random Forest, the ridge penalty for Logistic Regression, dropout and weight decay for the Neural Network) and keeps the one that scores best on the ranking metric. Each combination is judged by <strong>cross-validation inside the Training set</strong>: the Training set is split into 5 (or 3) parts and each part takes a turn as a mini-test while the model learns from the rest. The <strong>Testing set is never used for tuning</strong>, so its final score stays a fair check. Your current settings are always one of the candidates, so they are only changed if another combination does better; the chosen settings are then shown in each model's settings panel. Tuning takes several times longer than normal training (neural networks use at most 3 folds; training sets over 2,000 cases are tuned on a stratified sample). The Ensemble is not tuned.</p>
+                        </div>
+
                         <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
                             <div id="train-status" aria-live="polite" style="font-size: 13px; font-weight: 600;"></div>
                             <button id="train-model-btn" class="btn btn-primary">
@@ -1098,6 +1116,7 @@
                     <!-- Results Dashboard -->
                     <div id="results-dashboard" class="results-dashboard" style="display: none;">
                         <div id="retrain-status-banner" aria-live="polite"></div>
+                        <div id="tuning-report-container"></div>
 
                         <!-- Multi-Model Benchmark Leaderboard Comparison -->
                         <div id="multi-model-leaderboard-container" style="display: none;"></div>
@@ -1283,7 +1302,7 @@
                             <div style="font-size: 18px;">ℹ️</div>
                             <div>
                                 <strong>Step 1: Train/Test Split & Strict Imputation</strong><br>
-                                Rows with a missing outcome are excluded (outcomes are never imputed). The remaining rows are split into Training and Testing sets at the selected ratio (default 80/20; stratified by outcome class). An imputer for the predictors is fitted on the Training set only, and both sets are transformed with it, so no Testing-set information enters the imputation.
+                                Rows with a missing outcome are excluded (outcomes are never imputed). The remaining rows are split into Training and Testing sets at the selected ratio (default 80/20; stratified by outcome class). Missing predictor values are filled in using values (e.g. medians) calculated from the Training set only. The same values are used to fill gaps in both the Training and Testing sets, so the Testing set does not influence how missing data are handled.
                             </div>
                         </div>
 
@@ -1505,7 +1524,7 @@
                             <div style="font-size: 18px;">⚖️</div>
                             <div>
                                 <strong>Step 5: Imbalance Handling (SMOTENC)</strong><br>
-                                Evaluates target variable distribution strictly in the Training set. If the minority class represents &lt; 30% of the training cohort, SMOTENC is applied to synthesize minority samples while preserving categorical feature indices. The Testing set is strictly NEVER resampled or altered.
+                                Counts how many Training-set patients have each outcome. If the rarer outcome makes up less than 30% of the Training set (or, for outcomes with more than two groups, the smallest group is less than about 43% the size of the largest), SMOTENC creates synthetic (made-up but realistic) patients for that outcome, each blended from similar real patients, until the outcome groups are equal in size. Measurements such as age are blended to in-between values; categories such as sex take the most common value among the similar patients. The Testing set is never changed: it contains only real patients, so the results reflect real-world performance.
                             </div>
                         </div>
 
@@ -1533,7 +1552,7 @@
                             <div style="font-size: 18px;">🌲</div>
                             <div>
                                 <strong>Step 6: Model-Driven Feature Ranking (Random Forest Scout)</strong><br>
-                                Trains a Random Forest scout on the SMOTENC-balanced Training set. Mean Decrease in Impurity (MDI) importance scores are extracted for all surviving features. A 30% cutoff threshold is identified to prune features for dimensionality-sensitive algorithms (k-NN & Naive Bayes) in Step 7.
+                                Ranks the predictors by how useful they are. A quick "scout" Random Forest is trained on the balanced Training set from Step 5 (it is used only for this ranking, not as one of the final models). Each predictor is scored by how much it helps the trees separate the outcome groups (Mean Decrease in Impurity). The weakest 30% of predictors are then left out for k-Nearest Neighbours and Naive Bayes in Step 7, because weak predictors add noise that easily misleads these two models. The other four models use all remaining predictors. The ranking uses the Training set only, and it is a practical filter rather than a definitive clinical ranking: it tends to favour continuous measurements over simple yes/no predictors.
                             </div>
                         </div>
 
@@ -1554,7 +1573,7 @@
 
                         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
                             <div style="font-size: 12.5px; color: var(--text-secondary);">
-                                💡 k-NN & Naive Bayes will automatically train only on the Top 70% features.
+                                💡 k-NN &amp; Naive Bayes will train only on the Top 70% features, plus any you reinstate.
                             </div>
                             <button id="pipeline-to-step7-btn" class="btn btn-emerald" disabled>
                                 Proceed to Step 7: Train Constrained Models &rarr;
@@ -1607,6 +1626,23 @@
                             </button>
                         </div>
 
+                        <!-- Optional automatic tuning (off by default: the protocol uses fixed, prespecified settings) -->
+                        <div class="autotune-box" style="margin: -6px 0 20px;">
+                            <div class="autotune-row">
+                                <label class="autotune-label">
+                                    <input type="checkbox" id="pipeline-autotune-check">
+                                    🎯 Auto-tune model settings on the Training set (optional; off = protocol default settings)
+                                </label>
+                                <label for="pipeline-autotune-folds" class="autotune-folds-label">Cross-validation:
+                                    <select id="pipeline-autotune-folds" class="form-select" style="width: auto; display: inline-block;">
+                                        <option value="5" selected>5-fold (recommended)</option>
+                                        <option value="3">3-fold (faster)</option>
+                                    </select>
+                                </label>
+                            </div>
+                            <p class="autotune-hint">By default the pipeline uses fixed, prespecified settings (e.g. k = 5, tree depth 6, ridge λ = 0.02), which keeps it a standard, easily reported protocol. If ticked, each model's main settings are chosen by <strong>cross-validation inside the Training set</strong>: the real training patients are split into 5 (or 3) parts, each taking a turn as a mini-test. SMOTENC balancing and scaling are redone inside each part, so no synthetic patient is scored against the real patient it was made from, and the <strong>Testing set is never used for tuning</strong>. The protocol defaults are always a candidate and are kept unless another combination does better. Tuning mainly helps with larger cohorts (roughly 200+ patients); with fewer than 100 training patients the results are mostly chance and a warning is shown. It takes several times longer; the Ensemble is not tuned.</p>
+                        </div>
+
                         <!-- Execution Watchdog & Loop / Stall Diagnostic Monitor -->
                         <div id="pipeline-train-status" class="execution-monitor-card" style="display: none; margin-bottom: 24px;">
                             <div class="monitor-header">
@@ -1640,6 +1676,7 @@
 
                         <!-- Results Dashboard -->
                         <div id="pipeline-results-container" style="display: none;">
+                            <div id="pipeline-tuning-report-container"></div>
                             <!-- Leaderboard Table -->
                             <div class="card" style="background: var(--bg-surface-elevated); padding: 20px; margin-bottom: 20px;">
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 10px;">
@@ -1723,7 +1760,7 @@
     <script src="chart.umd.min.js"></script>
     <script src="tf.min.js"></script>
     <script src="data-engine.js?v=29"></script>
-    <script src="models.js?v=29"></script>
-    <script src="app.js?v=31"></script>
+    <script src="models.js?v=30"></script>
+    <script src="app.js?v=43"></script>
 </body>
 </html>

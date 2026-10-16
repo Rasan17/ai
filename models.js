@@ -1827,6 +1827,8 @@
         }
     };
 
+    // Background-tab-safe yield, shared with app.js (e.g. automatic tuning loops)
+    ModelEngine.yieldToBrowser = yieldToBrowser;
     window.ModelEngine = ModelEngine;
     window.ModelFactory = ModelEngine;
     window.RandomForest = RandomForest;
