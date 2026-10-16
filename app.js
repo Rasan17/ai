@@ -2977,6 +2977,7 @@
             DOM.toStep6Btn.disabled = false;
 
             renderEvaluationDashboard();
+            AppState.baselineTrainedAt = new Date();
             return true;
         } catch (e) {
             if (watchdog && !watchdog.aborted) {
@@ -5809,9 +5810,17 @@
         DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">⚖️ Training the standard baseline for the comparison (same ${pct}/${100 - pct} split and seed ${seed} as the pipeline). You will be returned to the comparison when it finishes...</span>`;
 
         showComparisonOverlay();
+        const shownAt = Date.now();
         let ok = false;
         try {
             ok = await startModelTraining();
+            // Keep the message up briefly even when training is very fast, so the user sees what happened
+            const remaining = 1500 - (Date.now() - shownAt);
+            if (ok && remaining > 0) {
+                const progress = document.getElementById('comparison-overlay-progress');
+                if (progress) progress.textContent = '✓ Baseline trained. Opening the comparison...';
+                await new Promise(r => setTimeout(r, remaining));
+            }
         } finally {
             hideComparisonOverlay();
         }
@@ -5823,7 +5832,9 @@
         goToStep('pipeline');
         goToPipelineSubstep(7);
         if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.style.display = 'block';
+        AppState.baselineJustTrained = true;
         renderPipelineVsBaselineComparison();
+        AppState.baselineJustTrained = false;
         setTimeout(() => { if (DOM.pipelineVsBaselinePanel) DOM.pipelineVsBaselinePanel.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 200);
         showSeedToast(`✓ Standard baseline trained; comparison updated.${keepPipelineDeployment ? ' The pipeline model remains the active predictor.' : ''}`);
     };
@@ -5987,7 +5998,15 @@
 
         const tuned = r => (r ? 'Automatically tuned (cross-validation in the Training set)' : '<span style="color: var(--text-muted);">Default / user settings</span>');
 
+        const trainedAt = AppState.baselineTrainedAt instanceof Date
+            ? AppState.baselineTrainedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : null;
         const compHtml = `
+            <div class="cmp-baseline-note">
+                <span>${AppState.baselineJustTrained
+                    ? `✓ Standard baseline trained just now${trainedAt ? ` (${trainedAt})` : ''} with the same train/test split as the pipeline.`
+                    : `ℹ️ This comparison uses the standard-workflow (Step 4) results already trained${trainedAt ? ` at ${trainedAt}` : ''}, so no new training was needed. If you have since changed settings, re-run it to compare like with like.`}</span>
+                <button type="button" class="btn btn-outline btn-sm" onclick="window.trainStandardBaselineFromPipeline && window.trainStandardBaselineFromPipeline()">↻ Re-run baseline &amp; compare</button>
+            </div>
             <div style="margin-bottom: 14px; font-size: 13px; color: var(--text-secondary);">
                 Results of each workflow's best model for <strong>${escapeHtml(AppState.fileName || 'Cohort')}</strong>, ${sameTestPatients ? 'both scored on the <strong>same</strong> test patients' : 'each scored on its <strong>own</strong> test patients'}.
             </div>

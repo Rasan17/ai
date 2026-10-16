@@ -1827,3 +1827,9 @@ body {
 @keyframes comparison-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .comparison-overlay-spinner { animation: none; } }
 body.comparison-running { overflow: hidden; }
+.cmp-baseline-note {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px;
+    margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-color); background: var(--bg-surface-subtle);
+    font-size: 12.5px; color: var(--text-secondary);
+}
