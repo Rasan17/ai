@@ -1790,3 +1790,40 @@ body {
 .cmp-guide ul, .cmp-cautions ul { margin: 0; padding-left: 20px; }
 .cmp-guide li, .cmp-cautions li { margin: 3px 0; }
 .cmp-guide strong, .cmp-cautions strong { color: var(--text-primary); }
+
+/* "Comparison is underway" overlay (blocks other buttons during Train Standard Baseline & Compare) */
+.comparison-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(2px);
+}
+.comparison-overlay-card {
+    max-width: 520px;
+    width: 100%;
+    padding: 24px;
+    border-radius: var(--radius-md);
+    border: 1px solid rgba(16, 185, 129, 0.5);
+    background: var(--bg-surface-elevated);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+    text-align: center;
+    color: var(--text-primary);
+}
+.comparison-overlay-title { font-size: 18px; font-weight: 700; margin: 12px 0 8px; }
+.comparison-overlay-text { font-size: 13px; line-height: 1.55; color: var(--text-secondary); margin: 0 0 12px; }
+.comparison-overlay-progress { font-size: 12px; color: var(--accent-cyan); min-height: 18px; margin-bottom: 14px; word-break: break-word; }
+.comparison-overlay-spinner {
+    width: 36px; height: 36px; margin: 0 auto;
+    border: 3px solid rgba(16, 185, 129, 0.25);
+    border-top-color: var(--accent-emerald);
+    border-radius: 50%;
+    animation: comparison-spin 0.9s linear infinite;
+}
+@keyframes comparison-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .comparison-overlay-spinner { animation: none; } }
+body.comparison-running { overflow: hidden; }

@@ -5730,6 +5730,52 @@
         }
     }
 
+    // Full-screen "Comparison is underway" message that blocks other buttons until the comparison finishes.
+    // It mirrors the training progress and offers a Stop button (the Step 4 Force Stop is hidden behind it).
+    function showComparisonOverlay() {
+        let overlay = document.getElementById('comparison-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'comparison-overlay';
+            overlay.className = 'comparison-overlay';
+            overlay.setAttribute('role', 'alertdialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.setAttribute('aria-labelledby', 'comparison-overlay-title');
+            overlay.innerHTML = `
+                <div class="comparison-overlay-card">
+                    <div class="comparison-overlay-spinner" aria-hidden="true"></div>
+                    <div id="comparison-overlay-title" class="comparison-overlay-title">⚖️ Comparison is underway</div>
+                    <p class="comparison-overlay-text">The standard baseline is being trained so it can be compared with the 7-step pipeline. Please do not click other buttons until it finishes; you will be taken to the comparison automatically.</p>
+                    <div id="comparison-overlay-progress" class="comparison-overlay-progress" aria-live="polite"></div>
+                    <button type="button" id="comparison-overlay-stop" class="btn btn-secondary btn-sm" style="color: var(--accent-rose); border-color: rgba(244,63,94,0.4);">🛑 Stop comparison</button>
+                </div>`;
+            document.body.appendChild(overlay);
+            overlay.querySelector('#comparison-overlay-stop').addEventListener('click', () => {
+                const wd = AppState.watchdogs ? AppState.watchdogs.step4 : null;
+                if (wd) wd.forceAbort('Comparison stopped by user.');
+            });
+            // Keep keyboard focus inside the dialog
+            overlay.addEventListener('keydown', e => { if (e.key === 'Tab') { e.preventDefault(); overlay.querySelector('#comparison-overlay-stop').focus(); } });
+        }
+        overlay.style.display = 'flex';
+        document.body.classList.add('comparison-running');
+        overlay.querySelector('#comparison-overlay-stop').focus();
+        const progress = overlay.querySelector('#comparison-overlay-progress');
+        clearInterval(overlay._timer);
+        overlay._timer = setInterval(() => {
+            const txt = DOM.trainStatus ? DOM.trainStatus.innerText.trim() : '';
+            if (progress.textContent !== txt) progress.textContent = txt;
+        }, 400);
+    }
+
+    function hideComparisonOverlay() {
+        const overlay = document.getElementById('comparison-overlay');
+        if (!overlay) return;
+        clearInterval(overlay._timer);
+        overlay.style.display = 'none';
+        document.body.classList.remove('comparison-running');
+    }
+
     // "Train baseline & compare": runs the Step 4 standard workflow with the pipeline's split (so both are
     // tested on the same patients where possible), then returns to Step 7 and shows the comparison
     window.trainStandardBaselineFromPipeline = async function () {
@@ -5762,7 +5808,13 @@
         window.scrollTo({ top: 0, behavior: 'smooth' });
         DOM.trainStatus.innerHTML = `<span style="color: var(--accent-cyan);">⚖️ Training the standard baseline for the comparison (same ${pct}/${100 - pct} split and seed ${seed} as the pipeline). You will be returned to the comparison when it finishes...</span>`;
 
-        const ok = await startModelTraining();
+        showComparisonOverlay();
+        let ok = false;
+        try {
+            ok = await startModelTraining();
+        } finally {
+            hideComparisonOverlay();
+        }
         if (!ok) return; // training failed or was stopped: stay on Step 4 so the message is visible
 
         if (keepPipelineDeployment && AppState.pipeline.benchmarkResults.some(b => b.id === keepPipelineDeployment)) {
